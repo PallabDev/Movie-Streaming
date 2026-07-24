@@ -1,17 +1,17 @@
-version: '3.8'
-
 services:
   movie-streaming:
     build: .
     container_name: movie-streaming
     restart: always
+    env_file:
+      - .env
     environment:
-      - NODE_ENV=production
-      - PORT=5992
-      - APP_URL=https://watch.pallabdev.in
+      - NODE_ENV=${NODE_ENV:-production}
+      - PORT=${PORT:-5992}
+      - APP_URL=${APP_URL:-https://watch.pallabdev.in}
     labels:
-      caddy: watch.pallabdev.in
-      caddy.reverse_proxy: "{{upstreams 5992}}"
+      caddy: ${DOMAIN:-watch.pallabdev.in}
+      caddy.reverse_proxy: "{{upstreams ${PORT:-5992}}}"
     networks:
       - caddy_net
 
