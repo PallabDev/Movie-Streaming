@@ -347,7 +347,7 @@ async function startFfmpegLive() {
         '[v1080in]copy[v1080out];' +
         '[v720in]scale=1280:720[v720out];' +
         '[v480in]scale=854:480[v480out];' +
-        '[0:a?][1:a]amix=inputs=2:duration=first:dropout_transition=0,aresample=async=1000:first_pts=0,asplit=3[a1080][a720][a480]',
+        '[0:a][1:a]amix=inputs=2:duration=first:dropout_transition=0,aresample=async=1000:first_pts=0,asplit=3[a1080][a720][a480]',
 
         // 1080p Rendition (6.0 Mbps High Quality)
         '-map', '[v1080out]',
