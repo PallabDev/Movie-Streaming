@@ -50,58 +50,6 @@ html, body {
   background: #000000;
 }
 
-.sh-settings-list::-webkit-scrollbar {
-  width: 6px;
-}
-.sh-settings-list::-webkit-scrollbar-track {
-  background: rgba(255, 255, 255, 0.05);
-  border-radius: 3px;
-}
-.sh-settings-list::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.2);
-  border-radius: 3px;
-}
-.sh-settings-list::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.3);
-}
-
-.sh-volume-slider {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.sh-volume-range {
-  -webkit-appearance: none;
-  appearance: none;
-  writing-mode: vertical-lr; direction: rtl;
-  width: 12px;
-  height: 100%;
-  padding: 0;
-  background: transparent;
-  cursor: pointer;
-}
-
-.sh-volume-range::-webkit-slider-runnable-track {
-  width: 12px;
-  height: 100%;
-  background: #1e1b4b;
-  border-radius: 9999px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-}
-
-.sh-volume-range::-webkit-slider-thumb {
-  -webkit-appearance: none;
-  appearance: none;
-  width: 18px;
-  height: 18px;
-  border-radius: 50%;
-  background: #ffffff;
-  border: 1px solid #111;
-  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.4);
-  margin-top: -3px;
-}
-
 .sh-progress-bar {
   background: linear-gradient(90deg, #6366f1, #4f46e5);
 }
@@ -138,6 +86,49 @@ html, body {
 
 #sh-controls {
   padding-bottom: calc(env(safe-area-inset-bottom) + 1.25rem) !important;
+}
+
+.sh-quality-menu {
+  display: none;
+  position: absolute;
+  bottom: 4rem;
+  right: 1.5rem;
+  background: rgba(15, 23, 42, 0.95);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 12px;
+  padding: 0.5rem;
+  z-index: 40;
+  box-shadow: 0 10px 25px rgba(0,0,0,0.5);
+  min-width: 150px;
+}
+
+.sh-quality-menu.active {
+  display: block;
+}
+
+.sh-quality-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: #cbd5e1;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.sh-quality-item:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #ffffff;
+}
+
+.sh-quality-item.selected {
+  background: rgba(99, 102, 241, 0.25);
+  color: #818cf8;
+  font-weight: 600;
 }
 
 @media (max-width: 600px) {
@@ -206,6 +197,27 @@ html, body {
         ></div>
       </div>
 
+      <!-- Quality Settings Popup Menu -->
+      <div class="sh-quality-menu" id="sh-quality-menu">
+        <div class="text-xs font-semibold text-slate-400 px-2 py-1 mb-1 uppercase tracking-wider">Quality</div>
+        <div class="sh-quality-item selected" id="quality-auto" onclick="setQuality(-1)">
+          <span>Auto</span>
+          <i class="fas fa-check text-xs hidden" id="check-auto"></i>
+        </div>
+        <div class="sh-quality-item" id="quality-1080" onclick="setQuality(1080)">
+          <span>1080p (30fps)</span>
+          <i class="fas fa-check text-xs hidden" id="check-1080"></i>
+        </div>
+        <div class="sh-quality-item" id="quality-720" onclick="setQuality(720)">
+          <span>720p (30fps)</span>
+          <i class="fas fa-check text-xs hidden" id="check-720"></i>
+        </div>
+        <div class="sh-quality-item" id="quality-480" onclick="setQuality(480)">
+          <span>480p (30fps)</span>
+          <i class="fas fa-check text-xs hidden" id="check-480"></i>
+        </div>
+      </div>
+
       <!-- Controls -->
       <div
         class="absolute left-0 right-0 bottom-0 p-4 sm:p-6 bg-gradient-to-t from-black/95 via-black/70 to-transparent flex flex-col gap-3 transition-all duration-150 z-10"
@@ -259,11 +271,20 @@ html, body {
 
           <!-- Right Action Controls -->
           <div class="sh-controls-right flex items-center gap-1.5 sm:gap-2">
-            <!-- Latency Badge -->
-            <div id="latencyBadge" class="text-xs font-semibold px-2.5 py-1 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 flex items-center gap-1.5">
-              <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping"></span>
-              <span>LIVE (&lt; 100ms)</span>
+            <!-- Live Badge -->
+            <div id="liveBadge" class="text-xs font-semibold px-2.5 py-1 rounded-full bg-red-500/20 text-red-400 border border-red-500/30 flex items-center gap-1.5">
+              <span class="w-1.5 h-1.5 rounded-full bg-red-400 animate-ping"></span>
+              <span>LIVE</span>
             </div>
+
+            <!-- Quality Selector Toggle Button -->
+            <button
+              class="sh-btn w-8 h-8 sm:w-10 sm:h-10 bg-transparent text-[#aaaaaa] flex items-center justify-center text-sm p-2 rounded-lg transition-all duration-150 hover:text-white hover:bg-white/10"
+              id="sh-quality-btn"
+              title="Quality Settings"
+            >
+              <i class="fas fa-cog" id="sh-quality-icon"></i>
+            </button>
 
             <!-- Volume Button -->
             <button
@@ -304,25 +325,23 @@ html, body {
   const volumeIcon = document.getElementById('sh-volume-icon');
 
   const fullBtn = document.getElementById('sh-full-btn');
-  const fullscreenIcon = document.getElementById('sh-fullscreen-icon');
   const loadingSpinner = document.getElementById('sh-loading');
   const controls = document.getElementById('sh-controls');
   const offlineScreen = document.getElementById('offline-screen');
+  const qualityBtn = document.getElementById('sh-quality-btn');
+  const qualityMenu = document.getElementById('sh-quality-menu');
 
-  let mediaSource = null;
-  let sourceBuffer = null;
-  let chunkQueue = [];
-  let ws = null;
+  let hls = null;
   let scrubbing = false;
   let controlsTimeout = null;
+  let pollInterval = null;
 
   function showOffline() {
     offlineScreen.style.display = 'flex';
     hideLoading();
-    if (ws) {
-      ws.onclose = null;
-      ws.close();
-      ws = null;
+    if (hls) {
+      hls.destroy();
+      hls = null;
     }
     video.pause();
     updatePlayIcon();
@@ -345,7 +364,7 @@ html, body {
       .then(res => res.json())
       .then(data => {
         if (data.live) {
-          initZeroLatencyPlayer();
+          initHlsPlayer();
         } else {
           showOffline();
         }
@@ -356,101 +375,138 @@ html, body {
       });
   };
 
-  function initZeroLatencyPlayer() {
-    if ('MediaSource' in window) {
-      mediaSource = new MediaSource();
-      video.src = URL.createObjectURL(mediaSource);
-
-      mediaSource.addEventListener('sourceopen', () => {
-        try {
-          const vp9Mime = 'video/webm;codecs=vp9,opus';
-          const vp8Mime = 'video/webm;codecs=vp8,opus';
-          const mime = MediaSource.isTypeSupported(vp9Mime) ? vp9Mime : vp8Mime;
-
-          sourceBuffer = mediaSource.addSourceBuffer(mime);
-          sourceBuffer.mode = 'sequence';
-
-          sourceBuffer.addEventListener('updateend', () => {
-            if (chunkQueue.length > 0 && !sourceBuffer.updating) {
-              try {
-                sourceBuffer.appendBuffer(chunkQueue.shift());
-              } catch (e) {
-                console.warn('Buffer append error:', e);
-              }
-            }
-
-            // Zero-latency live edge catchup
-            if (video.buffered.length > 0) {
-              const liveEdge = video.buffered.end(video.buffered.length - 1);
-              if (liveEdge - video.currentTime > 0.4) {
-                video.currentTime = liveEdge - 0.05;
-              }
-            }
-          });
-
-          connectWebSocketStream();
-        } catch (err) {
-          console.error("MediaSource error:", err);
-          fallbackHlsPlayer();
-        }
-      });
-    } else {
-      fallbackHlsPlayer();
-    }
-  }
-
-  function connectWebSocketStream() {
+  // Connect to Status WebSocket channel for instant real-time live status travel
+  function connectStatusWebSocket() {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${protocol}//${window.location.host}/live-ws`;
-
-    ws = new WebSocket(wsUrl);
-    ws.binaryType = 'arraybuffer';
-
-    ws.onopen = () => {
-      hideOffline();
-      hideLoading();
-    };
+    const wsUrl = `${protocol}//${window.location.host}/status-ws`;
+    
+    const ws = new WebSocket(wsUrl);
 
     ws.onmessage = (event) => {
-      const buffer = event.data;
-      if (sourceBuffer && !sourceBuffer.updating) {
-        try {
-          sourceBuffer.appendBuffer(buffer);
-          if (video.paused) {
-            video.play().catch(e => console.warn("Autoplay prevented:", e));
+      try {
+        const data = JSON.parse(event.data);
+        if (data.type === 'STATUS') {
+          if (data.live) {
+            initHlsPlayer();
+          } else {
+            showOffline();
           }
-        } catch (e) {
-          console.warn("Append error:", e);
         }
-      } else {
-        chunkQueue.push(buffer);
+      } catch (err) {
+        console.warn('Status WebSocket message parse error:', err);
       }
     };
 
     ws.onclose = () => {
-      console.warn("Live WebSocket connection closed.");
-      showOffline();
+      setTimeout(connectStatusWebSocket, 3000);
     };
 
     ws.onerror = (err) => {
-      console.error("WebSocket error:", err);
-      showOffline();
+      console.warn('Status WebSocket error:', err);
     };
   }
 
-  function fallbackHlsPlayer() {
-    const streamUrl = '/live/stream.m3u8';
+  function initHlsPlayer() {
+    const streamUrl = '/live/master.m3u8';
+    
     if (Hls.isSupported()) {
-      const hls = new Hls({ lowLatencyMode: true, liveSyncDurationCount: 1 });
+      if (hls) {
+        hls.destroy();
+      }
+
+      hls = new Hls({
+        liveSyncDurationCount: 1,
+        liveMaxLatencyDurationCount: 3,
+        maxLiveSyncPlaybackRate: 1.5,
+        enableWorker: true,
+        lowLatencyMode: true,
+        backBufferLength: 0
+      });
+
       hls.loadSource(streamUrl);
       hls.attachMedia(video);
+
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
         hideOffline();
         hideLoading();
+        video.play().then(() => {
+          updatePlayIcon();
+        }).catch(err => {
+          console.warn('Autoplay prevented:', err);
+          updatePlayIcon();
+        });
+      });
+
+      hls.on(Hls.Events.ERROR, (event, data) => {
+        if (data.fatal) {
+          console.warn('HLS Fatal Error:', data.type, data.details);
+          if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+            setTimeout(() => hls.startLoad(), 1000);
+          } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
+            hls.recoverMediaError();
+          } else {
+            setTimeout(checkStreamStatus, 2000);
+          }
+        }
+      });
+    } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+      video.src = streamUrl;
+      video.addEventListener('loadedmetadata', () => {
+        hideOffline();
+        hideLoading();
         video.play();
+        updatePlayIcon();
       });
     }
   }
+
+  // Quality Selection Handler
+  window.setQuality = function (targetHeight) {
+    if (hls && hls.levels && hls.levels.length > 0) {
+      if (targetHeight === -1) {
+        hls.currentLevel = -1; // Auto mode
+      } else {
+        // Match level index by height (1080, 720, 480) or level name attribute
+        let index = hls.levels.findIndex(lvl => lvl.height === targetHeight);
+        if (index === -1) {
+          index = hls.levels.findIndex(lvl => lvl.attrs && lvl.attrs.NAME && lvl.attrs.NAME.includes(targetHeight + 'p'));
+        }
+        if (index !== -1) {
+          hls.currentLevel = index;
+        } else {
+          // Fallback based on bitrate sorting (lowest bitrate = index 0, highest bitrate = last index)
+          if (targetHeight === 1080) hls.currentLevel = hls.levels.length - 1;
+          else if (targetHeight === 720) hls.currentLevel = Math.min(1, hls.levels.length - 1);
+          else if (targetHeight === 480) hls.currentLevel = 0;
+        }
+      }
+    }
+    
+    // Update UI highlights
+    const items = document.querySelectorAll('.sh-quality-item');
+    items.forEach(item => item.classList.remove('selected'));
+
+    if (targetHeight === -1) {
+      document.getElementById('quality-auto').classList.add('selected');
+    } else if (targetHeight === 1080) {
+      document.getElementById('quality-1080').classList.add('selected');
+    } else if (targetHeight === 720) {
+      document.getElementById('quality-720').classList.add('selected');
+    } else if (targetHeight === 480) {
+      document.getElementById('quality-480').classList.add('selected');
+    }
+
+    qualityMenu.classList.remove('active');
+  };
+
+  qualityBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    qualityMenu.classList.toggle('active');
+  });
+
+  document.addEventListener('click', () => {
+    qualityMenu.classList.remove('active');
+  });
 
   function formatTime(sec) {
     if (!sec || !isFinite(sec)) return '00:00';
@@ -501,68 +557,6 @@ html, body {
 
   video.addEventListener('waiting', showLoading);
   video.addEventListener('playing', hideLoading);
-
-  function updateBufferProgress() {
-    if (video.buffered && video.buffered.length > 0 && video.duration > 0) {
-      const bufferedEnd = video.buffered.end(video.buffered.length - 1);
-      const percent = (bufferedEnd / video.duration) * 100;
-      progressBuffer.style.width = percent + '%';
-    }
-  }
-  video.addEventListener('progress', updateBufferProgress);
-
-  progress.addEventListener('mouseenter', () => {
-    progressHandle.style.width = '14px';
-    progressHandle.style.height = '14px';
-    progressHandle.style.boxShadow = '0 0 0 3px rgba(0, 0, 0, 0.5)';
-  });
-  progress.addEventListener('mouseleave', () => {
-    progressHandle.style.width = '0';
-    progressHandle.style.height = '0';
-    progressHandle.style.boxShadow = 'none';
-  });
-
-  function seekByClientX(clientX) {
-    const rect = progress.getBoundingClientRect();
-    const ratio =
-      Math.min(Math.max(0, clientX - rect.left), rect.width) / rect.width;
-    if (video.duration) {
-      video.currentTime = ratio * video.duration;
-    }
-  }
-
-  progress.addEventListener('mousedown', (e) => {
-    scrubbing = true;
-    seekByClientX(e.clientX);
-    resetControlsTimer();
-  });
-
-  window.addEventListener('mousemove', (e) => {
-    if (scrubbing) {
-      seekByClientX(e.clientX);
-      resetControlsTimer();
-    }
-  });
-
-  window.addEventListener('mouseup', () => {
-    scrubbing = false;
-    resetControlsTimer();
-  });
-
-  progress.addEventListener('click', (e) => {
-    seekByClientX(e.clientX);
-    resetControlsTimer();
-  });
-
-  volumeBtn.addEventListener('click', () => {
-    video.muted = !video.muted;
-    if (video.muted) {
-      volumeIcon.className = 'fas fa-volume-mute';
-    } else {
-      volumeIcon.className = 'fas fa-volume-up';
-    }
-    resetControlsTimer();
-  });
 
   function toggleFullscreen() {
     if (
@@ -630,8 +624,14 @@ html, body {
     resetControlsTimer();
   });
 
-  // Start zero latency player
+  // Start status WebSocket and check stream status
+  connectStatusWebSocket();
   checkStreamStatus();
+  pollInterval = setInterval(() => {
+    if (offlineScreen.style.display !== 'none') {
+      checkStreamStatus();
+    }
+  }, 2000);
 })();
 </script>
 </body>

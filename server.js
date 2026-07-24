@@ -4,7 +4,7 @@ import http from 'http';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
-import { exec, spawn } from 'child_process';
+import { spawn } from 'child_process';
 import { WebSocketServer } from 'ws';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -18,12 +18,8 @@ const NODE_ENV = process.env.NODE_ENV || 'development';
 const APP_URL = process.env.APP_URL || `http://localhost:${PORT}`;
 
 // Directories setup
-const mediaDir = path.join(__dirname, 'media');
 const liveDir = path.join(__dirname, 'public', 'live');
 
-if (!fs.existsSync(mediaDir)) {
-    fs.mkdirSync(mediaDir, { recursive: true });
-}
 if (!fs.existsSync(liveDir)) {
     fs.mkdirSync(liveDir, { recursive: true });
 }
@@ -34,60 +30,38 @@ app.set('views', path.join(__dirname, 'views'));
 
 // Static folder setup
 app.use(express.static(path.join(__dirname, 'public')));
-app.use('/media', express.static(mediaDir));
+app.use('/live', express.static(liveDir));
 
 // Middleware for parsing raw video/binary stream data up to 100MB per chunk
 app.use('/stream', express.raw({ type: '*/*', limit: '100mb' }));
 app.use(express.json());
 
-// WebSocket Live Server setup for Sub-Second Zero Latency
-const wss = new WebSocketServer({ server, path: '/live-ws' });
-let headerChunks = []; // Stored EBML header chunks for instant late-joiner connection
+// Live Status & Cleanups
+let isLiveStreamActive = false;
+let cleanupTimer = null;
+const CLEANUP_DELAY_MS = 10 * 60 * 1000; // 10 minutes after stream ends
+
+// WebSocket Server for Real-Time Status Travel between Host & Viewers
+const wss = new WebSocketServer({ server, path: '/status-ws' });
 
 wss.on('connection', (ws) => {
-    console.log('[Live WS] New viewer connected!');
-    
-    // Send stored initial header chunks so late-joining viewers can decode stream instantly
-    for (const header of headerChunks) {
-        if (ws.readyState === 1) {
-            ws.send(header);
-        }
-    }
-    
-    ws.on('error', (err) => console.warn('[Live WS Error]:', err.message));
+    // Send current status immediately upon connection
+    ws.send(JSON.stringify({ type: 'STATUS', live: isLiveStreamActive }));
+    ws.on('error', (err) => console.warn('[Status WS Error]:', err.message));
 });
 
-function broadcastLiveChunk(chunkBuffer, isHeader = false) {
-    if (isHeader) {
-        headerChunks = [chunkBuffer];
-    } else if (headerChunks.length < 2 && isHeader) {
-        headerChunks.push(chunkBuffer);
-    }
-
+function broadcastStatus(liveState) {
+    isLiveStreamActive = liveState;
+    const msg = JSON.stringify({ type: 'STATUS', live: isLiveStreamActive });
     for (const client of wss.clients) {
         if (client.readyState === 1) {
-            client.send(chunkBuffer);
+            client.send(msg);
         }
     }
 }
 
-// Active FFmpeg process & compilation locks
+// Active FFmpeg process
 let ffmpegLiveProcess = null;
-let activeCompilePromise = null;
-
-// Helper function to safely clean media folder
-function clearMediaFolder() {
-    if (fs.existsSync(mediaDir)) {
-        const files = fs.readdirSync(mediaDir);
-        for (const file of files) {
-            try {
-                fs.unlinkSync(path.join(mediaDir, file));
-            } catch (err) {
-                console.warn(`Could not delete media file ${file}:`, err.message);
-            }
-        }
-    }
-}
 
 // Helper function to clean live HLS folder
 function clearLiveFolder() {
@@ -120,35 +94,53 @@ function stopFfmpegLive() {
     }
 }
 
-// Start FFmpeg process for Low-Latency HLS fallback
+// Start Multi-Quality ABR HLS Generator
 function startFfmpegLive() {
+    if (cleanupTimer) {
+        clearTimeout(cleanupTimer);
+        cleanupTimer = null;
+    }
+    
     stopFfmpegLive();
     clearLiveFolder();
 
-    const hlsPath = path.join(liveDir, 'stream.m3u8');
+    const masterPath = path.join(liveDir, 'master.m3u8');
     
     const args = [
         '-y',
-        '-f', 'matroska',
-        '-probesize', '32k',
+        '-probesize', '64k',
         '-analyzeduration', '0',
         '-i', 'pipe:0',
-        '-c:v', 'libx264',
-        '-preset', 'ultrafast',
-        '-tune', 'zerolatency',
-        '-g', '30',
-        '-sc_threshold', '0',
-        '-c:a', 'aac',
-        '-b:a', '192k',
+        
+        '-filter_complex',
+        '[0:v]split=3[v1080][v720][v480];' +
+        '[v1080]fps=30,scale=1920:-2[v1080out];' +
+        '[v720]fps=30,scale=1280:-2[v720out];' +
+        '[v480]fps=30,scale=854:-2[v480out]',
+
+        // Rendition 0: Pristine 1080p 30fps
+        '-map', '[v1080out]', '-c:v:0', 'libx264', '-preset', 'superfast', '-tune', 'zerolatency', '-profile:v:0', 'high', '-level:v:0', '4.1', '-crf:v:0', '19', '-maxrate:v:0', '12000k', '-bufsize:v:0', '20000k', '-g:v:0', '30', '-sc_threshold:v:0', '0',
+        '-map', '0:a?', '-c:a:0', 'aac', '-b:a:0', '192k',
+        
+        // Rendition 1: Clean 720p 30fps
+        '-map', '[v720out]', '-c:v:1', 'libx264', '-preset', 'superfast', '-tune', 'zerolatency', '-profile:v:1', 'main', '-crf:v:1', '22', '-maxrate:v:1', '4000k', '-bufsize:v:1', '7000k', '-g:v:1', '30', '-sc_threshold:v:1', '0',
+        '-map', '0:a?', '-c:a:1', 'aac', '-b:a:1', '128k',
+
+        // Rendition 2: Fast 480p 30fps
+        '-map', '[v480out]', '-c:v:2', 'libx264', '-preset', 'superfast', '-tune', 'zerolatency', '-crf:v:2', '25', '-maxrate:v:2', '1500k', '-bufsize:v:2', '3000k', '-g:v:2', '30', '-sc_threshold:v:2', '0',
+        '-map', '0:a?', '-c:a:2', 'aac', '-b:a:2', '96k',
+
         '-f', 'hls',
         '-hls_time', '1',
         '-hls_list_size', '5',
         '-hls_flags', 'delete_segments+omit_endlist+independent_segments',
         '-hls_segment_type', 'mpegts',
-        hlsPath
+        '-master_pl_name', 'master.m3u8',
+        '-var_stream_map', 'v:0,a:0,name:1080p v:1,a:1,name:720p v:2,a:2,name:480p',
+        path.join(liveDir, 'stream_%v.m3u8')
     ];
 
-    console.log('Spawning FFmpeg Live HLS generator...');
+    console.log('Spawning Multi-Quality ABR FFmpeg Live Generator...');
     ffmpegLiveProcess = spawn('ffmpeg', args);
 
     if (ffmpegLiveProcess.stdin) {
@@ -187,63 +179,6 @@ function startFfmpegLive() {
     });
 }
 
-function compileStream() {
-    if (activeCompilePromise) {
-        console.log('Reusing active FFmpeg compilation task...');
-        return activeCompilePromise;
-    }
-
-    activeCompilePromise = new Promise((resolve, reject) => {
-        try {
-            const files = fs.readdirSync(mediaDir)
-                .filter(f => f.startsWith('chunk_') && f.endsWith('.webm'))
-                .sort((a, b) => a.localeCompare(b));
-
-            if (files.length === 0) {
-                activeCompilePromise = null;
-                return reject(new Error('No stream chunks found to compile.'));
-            }
-
-            const rawCombinedPath = path.join(mediaDir, 'raw_combined.webm');
-            const outputFilePath = path.join(mediaDir, `recompiled_recording_${Date.now()}.mp4`);
-
-            const writeStream = fs.createWriteStream(rawCombinedPath);
-            for (const file of files) {
-                const chunkData = fs.readFileSync(path.join(mediaDir, file));
-                writeStream.write(chunkData);
-            }
-            writeStream.end();
-
-            writeStream.on('finish', () => {
-                const ffmpegCmd = `ffmpeg -y -i "${rawCombinedPath}" -c:v libx264 -preset ultrafast -c:a aac -b:a 256k "${outputFilePath}"`;
-                console.log('Running FFmpeg:', ffmpegCmd);
-
-                exec(ffmpegCmd, (error, stdout, stderr) => {
-                    if (error) {
-                        console.error('FFmpeg execution error:', error, stderr);
-                        activeCompilePromise = null;
-                        return resolve(rawCombinedPath);
-                    }
-
-                    console.log('FFmpeg compilation completed successfully!');
-                    activeCompilePromise = null;
-                    resolve(outputFilePath);
-                });
-            });
-
-            writeStream.on('error', (err) => {
-                activeCompilePromise = null;
-                reject(err);
-            });
-        } catch (err) {
-            activeCompilePromise = null;
-            reject(err);
-        }
-    });
-
-    return activeCompilePromise;
-}
-
 // Routes
 app.get('/', (req, res) => {
     res.render('index', {
@@ -263,42 +198,49 @@ app.get(['/live', '/live/'], (req, res) => {
 
 // Endpoint to check live stream status
 app.get('/live/status', (req, res) => {
-    const isLive = headerChunks.length > 0 || (ffmpegLiveProcess !== null);
-    res.json({ live: isLive, viewers: wss.clients.size });
+    res.json({ live: isLiveStreamActive });
 });
 
-// Endpoint to reset media & live folders when a new stream starts
+// Endpoint called when host starts sharing screen
 app.post('/reset-stream', (req, res) => {
     try {
-        activeCompilePromise = null;
-        headerChunks = [];
-        clearMediaFolder();
         startFfmpegLive();
-        res.json({ success: true, message: 'Stream reset and live WebSocket/FFmpeg started' });
+        broadcastStatus(true);
+        res.json({ success: true, message: 'Live stream started' });
     } catch (err) {
-        console.error('Error resetting stream:', err);
+        console.error('Error starting stream:', err);
         res.status(500).json({ success: false, error: err.message });
     }
 });
 
-// Endpoint to receive video chunks
+// Endpoint called when host stops sharing screen (Schedules 10-minute HLS segment cleanup)
+app.post('/stop-stream', (req, res) => {
+    try {
+        broadcastStatus(false);
+        console.log(`Stream stopped by host. Scheduling HLS segment cleanup in ${CLEANUP_DELAY_MS / 60000} minutes...`);
+
+        if (cleanupTimer) clearTimeout(cleanupTimer);
+        cleanupTimer = setTimeout(() => {
+            console.log('10 minutes elapsed. Cleaning up live HLS segment files...');
+            stopFfmpegLive();
+            clearLiveFolder();
+        }, CLEANUP_DELAY_MS);
+
+        res.json({ success: true, message: 'Stream stopped. Deletion scheduled in 10 minutes.' });
+    } catch (err) {
+        console.error('Error stopping stream:', err);
+        res.status(500).json({ success: false, error: err.message });
+    }
+});
+
+// Endpoint to receive video chunks and pipe DIRECTLY to FFmpeg stdin (No disk storage!)
 app.post('/stream', (req, res) => {
     try {
         const chunkIndexRaw = req.headers['x-chunk-index'] || '0';
         const chunkIndex = parseInt(chunkIndexRaw);
-        const paddedIndex = String(chunkIndex).padStart(6, '0');
-        const chunkPath = path.join(mediaDir, `chunk_${paddedIndex}.webm`);
-
         const startTime = Date.now();
 
-        // 1. Save chunk to media directory
-        fs.writeFileSync(chunkPath, req.body);
-
-        // 2. Broadcast raw WebM chunk over WebSocket for ZERO-LATENCY streaming (< 100ms)
-        const isHeader = (chunkIndex === 0);
-        broadcastLiveChunk(req.body, isHeader);
-
-        // 3. Pipe chunk to FFmpeg Live stdin for HLS fallback
+        // Direct memory pipe to FFmpeg stdin - NO CHUNK WRITTEN TO DISK!
         if (ffmpegLiveProcess && ffmpegLiveProcess.stdin && ffmpegLiveProcess.stdin.writable) {
             try {
                 ffmpegLiveProcess.stdin.write(req.body, (err) => {
@@ -312,31 +254,11 @@ app.post('/stream', (req, res) => {
         }
 
         const elapsed = Date.now() - startTime;
-        console.log(`Saved, piped & broadcasted chunk: chunk_${paddedIndex}.webm (${req.body.length} bytes) in ${elapsed}ms`);
+        console.log(`Piped chunk #${chunkIndex} directly to FFmpeg (${req.body.length} bytes) in ${elapsed}ms | Disk write: 0 bytes`);
         res.json({ success: true, chunkIndex });
     } catch (err) {
-        console.error('Error handling stream chunk:', err);
+        console.error('Error piping stream chunk:', err);
         res.status(500).json({ success: false, error: err.message });
-    }
-});
-
-// Endpoint to recompile chunks using ffmpeg and trigger download
-app.get('/download', async (req, res) => {
-    try {
-        const filePath = await compileStream();
-        const ext = path.extname(filePath);
-        const fileName = `screen_recording${ext}`;
-        
-        res.download(filePath, fileName, (err) => {
-            if (err && !res.headersSent) {
-                console.error('Download sending error:', err);
-            }
-        });
-    } catch (err) {
-        console.error('Error in /download:', err);
-        if (!res.headersSent) {
-            res.status(500).send(err.message || 'Server error during download processing.');
-        }
     }
 });
 

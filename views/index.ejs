@@ -505,9 +505,9 @@
                 }
 
                 // Setup MediaRecorder for high quality Opus audio & video chunk streaming
-                let mimeType = 'video/webm;codecs=vp9,opus';
+                let mimeType = 'video/webm;codecs=vp8,opus';
                 if (!MediaRecorder.isTypeSupported(mimeType)) {
-                    mimeType = 'video/webm;codecs=vp8,opus';
+                    mimeType = 'video/webm;codecs=vp9,opus';
                     if (!MediaRecorder.isTypeSupported(mimeType)) {
                         mimeType = 'video/webm';
                     }
@@ -516,7 +516,7 @@
                 mediaRecorder = new MediaRecorder(mediaStream, {
                     mimeType: mimeType,
                     audioBitsPerSecond: 192000, // 192 kbps high quality Opus audio
-                    videoBitsPerSecond: 8000000 // 8 Mbps high quality video
+                    videoBitsPerSecond: 15000000 // 15 Mbps pristine video capture
                 });
 
                 mediaRecorder.ondataavailable = (event) => {
@@ -525,7 +525,7 @@
                     }
                 };
 
-                // Request chunk every 500 ms for low latency live streaming
+                // Request chunk every 500 ms for sub-second real-time streaming
                 mediaRecorder.start(500);
 
                 // Toggle button UI
@@ -549,6 +549,9 @@
                 mediaStream.getTracks().forEach(track => track.stop());
                 mediaStream = null;
             }
+
+            // Notify server that stream has ended and schedule 10-minute segment cleanup
+            fetch('/stop-stream', { method: 'POST' }).catch(err => console.warn('Error calling /stop-stream:', err));
 
             previewVideo.srcObject = null;
             previewVideo.classList.remove('active');
