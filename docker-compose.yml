@@ -1,0 +1,19 @@
+version: '3.8'
+
+services:
+  movie-streaming:
+    build: .
+    container_name: movie-streaming
+    restart: always
+    environment:
+      - PORT=5992
+    labels:
+      caddy: watch.pallabdev.in
+      caddy.reverse_proxy: "{{upstreams 5992}}"
+    networks:
+      - caddy
+
+networks:
+  caddy:
+    name: caddy
+    external: true
