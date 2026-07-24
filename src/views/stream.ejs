@@ -37,6 +37,15 @@
     .live-link:hover { border-color: #3b82f6; }
     #video-container { width: 100%; aspect-ratio: 16/9; background: #000; border-radius: 8px; overflow: hidden; margin-bottom: 16px; display: none; }
     #video-container video { width: 100%; height: 100%; object-fit: contain; }
+    #screen-preview { width: 100%; aspect-ratio: 16/9; background: #000; border-radius: 8px; overflow: hidden; margin-bottom: 16px; display: none; }
+    #screen-preview video { width: 100%; height: 100%; object-fit: contain; }
+    .share-bar { display: flex; align-items: center; gap: 12px; margin-top: 16px; flex-wrap: wrap; }
+    .share-status { font-size: 13px; color: #a1a1aa; display: flex; align-items: center; gap: 6px; }
+    .share-status .dot { width: 8px; height: 8px; }
+    .btn-blue { background: #3b82f6; color: #fff; }
+    .btn-blue:hover { background: #2563eb; }
+    .btn-orange { background: #ea580c; color: #fff; }
+    .btn-orange:hover { background: #c2410c; }
   </style>
 </head>
 <body>
@@ -80,6 +89,19 @@
           <button class="btn btn-red" id="end-btn" onclick="endStream()">End Stream</button>
         <% } %>
       </div>
+
+      <% if (stream.status === 'active') { %>
+      <div class="share-bar">
+        <button class="btn btn-blue" id="share-btn" onclick="toggleScreenShare()">Share Screen</button>
+        <div class="share-status" id="share-status" style="display:none">
+          <div class="dot dot-idle" id="share-dot"></div>
+          <span id="share-label">Initializing...</span>
+        </div>
+      </div>
+      <div id="screen-preview">
+        <video id="screen-video" autoplay muted playsinline></video>
+      </div>
+      <% } %>
     </div>
 
     <% if (stream.status === 'active') { %>
@@ -94,12 +116,12 @@
 
     <div class="card">
       <h2>Broadcasting Instructions</h2>
-      <p style="font-size:13px;color:#a1a1aa;margin-bottom:12px">Use OBS Studio or any RTMP client:</p>
+      <p style="font-size:13px;color:#a1a1aa;margin-bottom:12px"><strong>Option 1 — Share Screen (browser):</strong> Start the stream, then click <em>Share Screen</em> above to broadcast directly from your browser.</p>
+      <p style="font-size:13px;color:#a1a1aa;margin-bottom:12px"><strong>Option 2 — OBS Studio / RTMP:</strong></p>
       <div class="info-grid">
         <div><dt>Server URL</dt><dd style="font-family:monospace;font-size:12px;margin-top:4px"><%= APP_URL %>/stream</dd></div>
         <div><dt>Stream Key</dt><dd style="font-family:monospace;font-size:12px;margin-top:4px"><%= stream.streamKey %></dd></div>
       </div>
-      <p style="font-size:12px;color:#52525b;margin-top:12px">Or use the Web Broadcaster on the home page and paste your stream key.</p>
     </div>
   </div>
 
@@ -150,6 +172,7 @@
         const res = await fetch('/stream/<%= stream.id %>/start', { method: 'POST' });
         const data = await res.json();
         if (data.success) {
+          await fetch('/reset-stream', { method: 'POST' }).catch(() => {});
           showToast('Stream started!', 'success');
           setTimeout(() => location.reload(), 500);
         } else {
@@ -164,6 +187,8 @@
       const btn = document.getElementById('end-btn');
       btn.disabled = true;
       try {
+        if (screenRecorder && screenRecorder.state === 'recording') stopScreenShare();
+        await fetch('/stop-stream', { method: 'POST' }).catch(() => {});
         const res = await fetch('/stream/<%= stream.id %>/end', { method: 'POST' });
         const data = await res.json();
         if (data.success) {
@@ -175,6 +200,100 @@
         }
       } catch (e) { showToast('Network error', 'error'); btn.disabled = false; }
     }
+
+    // --- Screen Share ---
+    let screenWs = null;
+    let screenRecorder = null;
+    let screenStream = null;
+
+    function updateShareUI(state, label) {
+      const dot = document.getElementById('share-dot');
+      const lbl = document.getElementById('share-label');
+      const btn = document.getElementById('share-btn');
+      const status = document.getElementById('share-status');
+      if (!dot || !lbl || !btn) return;
+      status.style.display = 'flex';
+      lbl.textContent = label;
+      dot.className = 'dot';
+      if (state === 'live') { dot.classList.add('dot-live'); btn.textContent = 'Stop Sharing'; btn.className = 'btn btn-orange'; }
+      else if (state === 'idle') { dot.classList.add('dot-idle'); btn.textContent = 'Share Screen'; btn.className = 'btn btn-blue'; }
+      else if (state === 'error') { dot.classList.add('dot-ended'); btn.textContent = 'Share Screen'; btn.className = 'btn btn-blue'; }
+    }
+
+    async function toggleScreenShare() {
+      if (screenRecorder && screenRecorder.state === 'recording') {
+        stopScreenShare();
+        return;
+      }
+      try {
+        let withAudio = true;
+        try {
+          screenStream = await navigator.mediaDevices.getDisplayMedia({ video: { cursor: 'always', width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 30 } }, audio: true });
+        } catch (e) {
+          withAudio = false;
+          screenStream = await navigator.mediaDevices.getDisplayMedia({ video: { cursor: 'always', width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 30 } }, audio: false });
+        }
+
+        if (!withAudio) {
+          const audioCtx = new AudioContext();
+          const dest = audioCtx.createMediaStreamDestination();
+          const silent = audioCtx.createBufferSource();
+          silent.buffer = audioCtx.createBuffer(1, audioCtx.sampleRate * 2, audioCtx.sampleRate);
+          silent.loop = true;
+          silent.connect(dest);
+          silent.start();
+          const audioTrack = dest.stream.getAudioTracks()[0];
+          screenStream.addTrack(audioTrack);
+        }
+
+        const preview = document.getElementById('screen-video');
+        preview.srcObject = screenStream;
+        document.getElementById('screen-preview').style.display = 'block';
+
+        screenStream.getVideoTracks()[0].onended = () => stopScreenShare();
+
+        const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+        screenWs = new WebSocket(`${proto}://${location.host}/stream-ws`);
+        screenWs.onopen = () => {
+          const mimeType = MediaRecorder.isTypeSupported('video/webm; codecs=vp9')
+            ? 'video/webm; codecs=vp9'
+            : 'video/webm; codecs=vp8';
+          screenRecorder = new MediaRecorder(screenStream, { mimeType, videoBitsPerSecond: 4000000 });
+          screenRecorder.ondataavailable = (e) => {
+            if (e.data.size > 0 && screenWs && screenWs.readyState === 1) {
+              e.data.arrayBuffer().then(buf => screenWs.send(buf));
+            }
+          };
+          screenRecorder.start(500);
+          updateShareUI('live', 'Sharing screen');
+          showToast('Screen sharing started', 'success');
+        };
+        screenWs.onerror = () => { updateShareUI('error', 'WebSocket error'); };
+        screenWs.onclose = () => { if (screenRecorder && screenRecorder.state === 'recording') stopScreenShare(); };
+      } catch (err) {
+        if (err.name !== 'AbortError') {
+          updateShareUI('error', 'Could not start: ' + err.message);
+          showToast('Screen share failed', 'error');
+        }
+      }
+    }
+
+    function stopScreenShare() {
+      if (screenRecorder && screenRecorder.state === 'recording') screenRecorder.stop();
+      if (screenStream) screenStream.getTracks().forEach(t => t.stop());
+      if (screenWs && screenWs.readyState === 1) screenWs.close();
+      screenRecorder = null;
+      screenStream = null;
+      screenWs = null;
+      const preview = document.getElementById('screen-video');
+      if (preview) preview.srcObject = null;
+      document.getElementById('screen-preview').style.display = 'none';
+      updateShareUI('idle', 'Sharing stopped');
+    }
+
+    window.addEventListener('beforeunload', () => {
+      if (screenRecorder && screenRecorder.state === 'recording') stopScreenShare();
+    });
   </script>
 </body>
 </html>
