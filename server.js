@@ -59,9 +59,8 @@ function broadcastStatus(liveState) {
     }
 }
 
-// Active FFmpeg processes for separate 720p & 480p variant logging
-let ffmpeg720Process = null;
-let ffmpeg480Process = null;
+// Active FFmpeg process
+let ffmpegLiveProcess = null;
 
 // Helper function to clean live HLS folder
 function clearLiveFolder() {
@@ -77,47 +76,24 @@ function clearLiveFolder() {
     }
 }
 
-// Stop active FFmpeg live processes
+// Stop active FFmpeg live process
 function stopFfmpegLive() {
-    if (ffmpeg720Process) {
+    if (ffmpegLiveProcess) {
         try {
-            if (ffmpeg720Process.stdin) {
-                ffmpeg720Process.stdin.removeAllListeners('error');
-                ffmpeg720Process.stdin.on('error', () => {});
-                ffmpeg720Process.stdin.end();
+            if (ffmpegLiveProcess.stdin) {
+                ffmpegLiveProcess.stdin.removeAllListeners('error');
+                ffmpegLiveProcess.stdin.on('error', () => {});
+                ffmpegLiveProcess.stdin.end();
             }
-            ffmpeg720Process.kill('SIGKILL');
-        } catch (err) {}
-        ffmpeg720Process = null;
-    }
-
-    if (ffmpeg480Process) {
-        try {
-            if (ffmpeg480Process.stdin) {
-                ffmpeg480Process.stdin.removeAllListeners('error');
-                ffmpeg480Process.stdin.on('error', () => {});
-                ffmpeg480Process.stdin.end();
-            }
-            ffmpeg480Process.kill('SIGKILL');
-        } catch (err) {}
-        ffmpeg480Process = null;
+            ffmpegLiveProcess.kill('SIGKILL');
+        } catch (err) {
+            // Silent stop
+        }
+        ffmpegLiveProcess = null;
     }
 }
 
-// Create HLS Master Playlist for Adaptive Bitrate Switching
-function writeMasterPlaylist() {
-    const masterPath = path.join(liveDir, 'master.m3u8');
-    const content = `#EXTM3U
-#EXT-X-VERSION:3
-#EXT-X-STREAM-INF:BANDWIDTH=3800000,RESOLUTION=1280x720,NAME="720p"
-stream_720p.m3u8
-#EXT-X-STREAM-INF:BANDWIDTH=1200000,RESOLUTION=854x480,NAME="480p"
-stream_480p.m3u8
-`;
-    fs.writeFileSync(masterPath, content);
-}
-
-// Start Separate 720p & 480p FFmpeg Generators for Variant-Wise Speed Logging
+// Start Single-Pass 2-Core Multi-Threaded Dual-Quality (720p & 480p) Generator
 function startFfmpegLive() {
     if (cleanupTimer) {
         clearTimeout(cleanupTimer);
@@ -126,79 +102,81 @@ function startFfmpegLive() {
     
     stopFfmpegLive();
     clearLiveFolder();
-    writeMasterPlaylist();
 
-    // 1. FFmpeg Process for 720p Stream
-    const args720 = [
-        '-y', '-probesize', '64k', '-analyzeduration', '0', '-i', 'pipe:0',
-        '-vf', 'scale=1280:-2', '-r', '30',
-        '-c:v', 'libx264', '-preset', 'ultrafast', '-tune', 'zerolatency', '-profile:v', 'main',
-        '-b:v', '3800k', '-maxrate', '4500k', '-bufsize', '7000k', '-g', '30', '-sc_threshold', '0',
-        '-c:a', 'aac', '-b:a', '160k',
-        '-f', 'hls', '-hls_time', '1', '-hls_list_size', '5',
+    const masterPath = path.join(liveDir, 'master.m3u8');
+    
+    // Dedicated 2-Core Multi-Threaded Single-Pass ABR pipeline for 720p & 480p (Speed > 1.4x)
+    const args = [
+        '-y',
+        '-threads', '2',                     // Lock FFmpeg to exactly 2 CPU cores
+        '-filter_complex_threads', '2',      // Allocate 2 dedicated threads for scaling filter
+        '-probesize', '64k',
+        '-analyzeduration', '0',
+        '-i', 'pipe:0',
+        
+        '-filter_complex',
+        '[0:v]split=2[v720][v480];' +
+        '[v720]fps=30,scale=1280:-2[v720out];' +
+        '[v480]fps=30,scale=854:-2[v480out]',
+
+        // Rendition 0: Crisp 720p 30fps (3000k Bitrate)
+        '-map', '[v720out]', '-c:v:0', 'libx264', '-threads:v:0', '2', '-preset', 'ultrafast', '-tune', 'zerolatency', '-profile:v:0', 'main', '-b:v:0', '3000k', '-maxrate:v:0', '3600k', '-bufsize:v:0', '6000k', '-g:v:0', '30', '-sc_threshold:v:0', '0',
+        '-map', '0:a?', '-c:a:0', 'aac', '-b:a:0', '128k',
+
+        // Rendition 1: Clean 480p 30fps (1000k Bitrate)
+        '-map', '[v480out]', '-c:v:1', 'libx264', '-threads:v:1', '2', '-preset', 'ultrafast', '-tune', 'zerolatency', '-profile:v:1', 'baseline', '-b:v:1', '1000k', '-maxrate:v:1', '1200k', '-bufsize:v:1', '2000k', '-g:v:1', '30', '-sc_threshold:v:1', '0',
+        '-map', '0:a?', '-c:a:1', 'aac', '-b:a:1', '96k',
+
+        '-f', 'hls',
+        '-hls_time', '1',
+        '-hls_list_size', '5',
         '-hls_flags', 'delete_segments+omit_endlist+independent_segments',
         '-hls_segment_type', 'mpegts',
-        path.join(liveDir, 'stream_720p.m3u8')
+        '-master_pl_name', 'master.m3u8',
+        '-var_stream_map', 'v:0,a:0,name:720p v:1,a:1,name:480p',
+        path.join(liveDir, 'stream_%v.m3u8')
     ];
 
-    // 2. FFmpeg Process for 480p Stream
-    const args480 = [
-        '-y', '-probesize', '64k', '-analyzeduration', '0', '-i', 'pipe:0',
-        '-vf', 'scale=854:-2', '-r', '30',
-        '-c:v', 'libx264', '-preset', 'ultrafast', '-tune', 'zerolatency', '-profile:v', 'baseline',
-        '-b:v', '1200k', '-maxrate', '1500k', '-bufsize', '2500k', '-g', '30', '-sc_threshold', '0',
-        '-c:a', 'aac', '-b:a', '96k',
-        '-f', 'hls', '-hls_time', '1', '-hls_list_size', '5',
-        '-hls_flags', 'delete_segments+omit_endlist+independent_segments',
-        '-hls_segment_type', 'mpegts',
-        path.join(liveDir, 'stream_480p.m3u8')
-    ];
+    console.log('⚡ Spawning 2-Core Multi-Threaded Dual-Quality (720p & 480p) Live Generator...');
+    ffmpegLiveProcess = spawn('ffmpeg', args);
 
-    console.log('⚡ Spawning 720p & 480p Separate Variant Live Stream Generators...');
-    ffmpeg720Process = spawn('ffmpeg', args720);
-    ffmpeg480Process = spawn('ffmpeg', args480);
+    if (ffmpegLiveProcess.stdin) {
+        ffmpegLiveProcess.stdin.on('error', (err) => {
+            if (err.code !== 'EPIPE' && err.code !== 'EOF') {
+                // Suppress non-critical EPIPE
+            }
+        });
+    }
 
-    let last720Log = 0;
-    let last480Log = 0;
-
-    // Listen to 720p Speed Log
-    if (ffmpeg720Process.stderr) {
-        ffmpeg720Process.stderr.on('data', (data) => {
+    if (ffmpegLiveProcess.stderr) {
+        let lastLoggedTime = 0;
+        ffmpegLiveProcess.stderr.on('data', (data) => {
             const msg = data.toString().trim();
             if (msg.includes('fps=') || msg.includes('speed=')) {
                 const now = Date.now();
-                if (now - last720Log > 1500) {
-                    last720Log = now;
+                if (now - lastLoggedTime > 1500) { // Log clean summary every 1.5 seconds
+                    lastLoggedTime = now;
                     const fpsMatch = msg.match(/fps=\s*([\d.]+)/);
                     const speedMatch = msg.match(/speed=\s*([\d.x]+)/);
                     const fps = fpsMatch ? fpsMatch[1] : 'N/A';
                     const speed = speedMatch ? speedMatch[1] : '1.0x';
-                    console.log(`[720p Stream] Speed: ${speed} | FPS: ${fps}`);
+                    console.log(`[FFmpeg 2-Core Speed] [720p & 480p] Speed: ${speed} | FPS: ${fps}`);
                 }
             }
         });
     }
 
-    // Listen to 480p Speed Log
-    if (ffmpeg480Process.stderr) {
-        ffmpeg480Process.stderr.on('data', (data) => {
-            const msg = data.toString().trim();
-            if (msg.includes('fps=') || msg.includes('speed=')) {
-                const now = Date.now();
-                if (now - last480Log > 1500) {
-                    last480Log = now;
-                    const fpsMatch = msg.match(/fps=\s*([\d.]+)/);
-                    const speedMatch = msg.match(/speed=\s*([\d.x]+)/);
-                    const fps = fpsMatch ? fpsMatch[1] : 'N/A';
-                    const speed = speedMatch ? speedMatch[1] : '1.0x';
-                    console.log(`[480p Stream] Speed: ${speed} | FPS: ${fps}`);
-                }
-            }
-        });
-    }
+    ffmpegLiveProcess.on('error', (err) => {
+        console.error('FFmpeg error:', err.message);
+        ffmpegLiveProcess = null;
+    });
 
-    ffmpeg720Process.on('exit', () => { ffmpeg720Process = null; });
-    ffmpeg480Process.on('exit', () => { ffmpeg480Process = null; });
+    ffmpegLiveProcess.on('exit', (code, signal) => {
+        if (code !== 0 && signal !== 'SIGKILL') {
+            console.log(`FFmpeg process exited (code: ${code})`);
+        }
+        ffmpegLiveProcess = null;
+    });
 }
 
 // Routes
@@ -255,20 +233,19 @@ app.post('/stop-stream', (req, res) => {
     }
 });
 
-// Endpoint to receive video chunks and pipe DIRECTLY to BOTH 720p & 480p FFmpeg stdins
+// Endpoint to receive video chunks and pipe DIRECTLY to FFmpeg stdin (Cleaned & Silent)
 app.post('/stream', (req, res) => {
     try {
         const chunkIndexRaw = req.headers['x-chunk-index'] || '0';
         const chunkIndex = parseInt(chunkIndexRaw);
 
-        // Pipe to 720p FFmpeg process
-        if (ffmpeg720Process && ffmpeg720Process.stdin && ffmpeg720Process.stdin.writable) {
-            try { ffmpeg720Process.stdin.write(req.body); } catch (e) {}
-        }
-
-        // Pipe to 480p FFmpeg process
-        if (ffmpeg480Process && ffmpeg480Process.stdin && ffmpeg480Process.stdin.writable) {
-            try { ffmpeg480Process.stdin.write(req.body); } catch (e) {}
+        // Direct memory pipe to FFmpeg stdin
+        if (ffmpegLiveProcess && ffmpegLiveProcess.stdin && ffmpegLiveProcess.stdin.writable) {
+            try {
+                ffmpegLiveProcess.stdin.write(req.body);
+            } catch (writeErr) {
+                // Suppress stdin write catch
+            }
         }
 
         res.json({ success: true, chunkIndex });
