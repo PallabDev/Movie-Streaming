@@ -55,51 +55,12 @@ app.use((req, res, next) => {
     next();
 });
 
-// ─── In-Memory RAM Segment Cache & High-Speed Keep-Alive Delivery ────────────
-const segmentRamCache = new Map();
-const MAX_RAM_CACHE_ITEMS = 30;
-
-// High performance RAM cache & persistent Keep-Alive for HLS files
-app.get('/live/:file', (req, res, next) => {
-    const filename = req.params.file;
-
-    // Set persistent HTTP Keep-Alive and CORS headers for instant chunk delivery
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Connection', 'keep-alive');
-    res.setHeader('Keep-Alive', 'timeout=120, max=2000');
-
-    if (filename.endsWith('.ts') && segmentRamCache.has(filename)) {
-        res.setHeader('Content-Type', 'video/mp2t');
-        res.setHeader('Cache-Control', 'public, max-age=3600');
-        return res.send(segmentRamCache.get(filename));
-    }
-    next();
-});
-
-// File watcher populates Node V8 RAM cache in < 1ms as soon as FFmpeg writes segments
-fs.watch(liveDir, (eventType, filename) => {
-    if (filename && filename.endsWith('.ts')) {
-        const filePath = path.join(liveDir, filename);
-        setTimeout(() => {
-            if (fs.existsSync(filePath)) {
-                try {
-                    const buf = fs.readFileSync(filePath);
-                    segmentRamCache.set(filename, buf);
-                    if (segmentRamCache.size > MAX_RAM_CACHE_ITEMS) {
-                        const oldestKey = segmentRamCache.keys().next().value;
-                        segmentRamCache.delete(oldestKey);
-                    }
-                } catch (e) {}
-            }
-        }, 30);
-    }
-});
-
-// Static folder setup
+// File-based HLS Playlist Delivery with Keep-Alive headers
 app.use(express.static(path.join(__dirname, 'public')));
 app.use('/live', express.static(liveDir, {
     maxAge: '1h',
     setHeaders: (res) => {
+        res.setHeader('Access-Control-Allow-Origin', '*');
         res.setHeader('Connection', 'keep-alive');
         res.setHeader('Keep-Alive', 'timeout=120, max=2000');
     }
@@ -319,7 +280,6 @@ function broadcastStatus(liveState) {
 let ffmpegLiveProcess = null;
 
 function clearLiveFolder() {
-    segmentRamCache.clear();
     if (fs.existsSync(liveDir)) {
         const files = fs.readdirSync(liveDir);
         for (const file of files) {
@@ -342,7 +302,7 @@ function stopFfmpegLive() {
     }
 }
 
-// Start Single 720p Stream Generator (Ultra-fast, lightweight 720p encoding)
+// Start Single 720p Stream Generator (Discards corrupt frames & linearizes DTS timestamps)
 async function startFfmpegLive() {
     if (cleanupTimer) { clearTimeout(cleanupTimer); cleanupTimer = null; }
 
@@ -356,6 +316,7 @@ async function startFfmpegLive() {
     const args = [
         '-y',
         '-threads', '2',
+        '-fflags', '+genpts+discardcorrupt',
         '-probesize', '64k',
         '-analyzeduration', '0',
         '-i', 'pipe:0',
@@ -452,7 +413,8 @@ app.get(['/live', '/live/'], (req, res) => {
 });
 
 app.get('/live/status', (req, res) => {
-    res.json({ live: isLiveStreamActive });
+    const masterExists = fs.existsSync(path.join(liveDir, 'master.m3u8'));
+    res.json({ live: isLiveStreamActive || masterExists });
 });
 
 app.post('/reset-stream', async (req, res) => {
@@ -492,6 +454,7 @@ app.post('/stop-stream', async (req, res) => {
 });
 
 app.post('/stream', (req, res) => {
+    req.on('aborted', () => {});
     try {
         const chunkIndex = parseInt(req.headers['x-chunk-index'] || '0');
         if (ffmpegLiveProcess && ffmpegLiveProcess.stdin && ffmpegLiveProcess.stdin.writable) {
@@ -499,9 +462,16 @@ app.post('/stream', (req, res) => {
         }
         res.json({ success: true, chunkIndex });
     } catch (err) {
-        console.error('Error piping stream chunk:', err);
         res.status(500).json({ success: false, error: err.message });
     }
+});
+
+// Global Express error handler to swallow raw-body BadRequestError on aborted chunk uploads
+app.use((err, req, res, next) => {
+    if (err && (err.type === 'aborted' || err.status === 400)) {
+        return res.status(400).json({ success: false, error: 'Request aborted' });
+    }
+    next(err);
 });
 
 server.listen(PORT, () => {
