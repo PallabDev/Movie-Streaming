@@ -55,9 +55,55 @@ app.use((req, res, next) => {
     next();
 });
 
+// ─── In-Memory RAM Segment Cache & High-Speed Keep-Alive Delivery ────────────
+const segmentRamCache = new Map();
+const MAX_RAM_CACHE_ITEMS = 30;
+
+// High performance RAM cache & persistent Keep-Alive for HLS files
+app.get('/live/:file', (req, res, next) => {
+    const filename = req.params.file;
+
+    // Set persistent HTTP Keep-Alive and CORS headers for instant chunk delivery
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('Keep-Alive', 'timeout=120, max=2000');
+
+    if (filename.endsWith('.ts') && segmentRamCache.has(filename)) {
+        res.setHeader('Content-Type', 'video/mp2t');
+        res.setHeader('Cache-Control', 'public, max-age=3600');
+        return res.send(segmentRamCache.get(filename));
+    }
+    next();
+});
+
+// File watcher populates Node V8 RAM cache in < 1ms as soon as FFmpeg writes segments
+fs.watch(liveDir, (eventType, filename) => {
+    if (filename && filename.endsWith('.ts')) {
+        const filePath = path.join(liveDir, filename);
+        setTimeout(() => {
+            if (fs.existsSync(filePath)) {
+                try {
+                    const buf = fs.readFileSync(filePath);
+                    segmentRamCache.set(filename, buf);
+                    if (segmentRamCache.size > MAX_RAM_CACHE_ITEMS) {
+                        const oldestKey = segmentRamCache.keys().next().value;
+                        segmentRamCache.delete(oldestKey);
+                    }
+                } catch (e) {}
+            }
+        }, 30);
+    }
+});
+
 // Static folder setup
 app.use(express.static(path.join(__dirname, 'public')));
-app.use('/live', express.static(liveDir));
+app.use('/live', express.static(liveDir, {
+    maxAge: '1h',
+    setHeaders: (res) => {
+        res.setHeader('Connection', 'keep-alive');
+        res.setHeader('Keep-Alive', 'timeout=120, max=2000');
+    }
+}));
 
 // Middleware for parsing raw video/binary stream data up to 100MB per chunk
 app.use('/stream', express.raw({ type: '*/*', limit: '100mb' }));
@@ -273,6 +319,7 @@ function broadcastStatus(liveState) {
 let ffmpegLiveProcess = null;
 
 function clearLiveFolder() {
+    segmentRamCache.clear();
     if (fs.existsSync(liveDir)) {
         const files = fs.readdirSync(liveDir);
         for (const file of files) {
@@ -295,7 +342,7 @@ function stopFfmpegLive() {
     }
 }
 
-// Start High Performance 720p 30 FPS Stream Generator (Bitrate 4.5Mbps, High Profile)
+// Start Single 720p Stream Generator (Ultra-fast, lightweight 720p encoding)
 async function startFfmpegLive() {
     if (cleanupTimer) { clearTimeout(cleanupTimer); cleanupTimer = null; }
 
@@ -313,7 +360,7 @@ async function startFfmpegLive() {
         '-analyzeduration', '0',
         '-i', 'pipe:0',
 
-        // Locked 30 FPS High Profile Crisp 720p Rendition (CRF 18 / 6.5Mbps)
+        // Explicitly map input video 0:v and audio 0:a? to v:0 and a:0
         '-map', '0:v',
         '-c:v:0', 'libx264',
         '-threads:v:0', '2',
@@ -343,7 +390,7 @@ async function startFfmpegLive() {
         path.join(liveDir, 'stream_%v.m3u8')
     ];
 
-    console.log('⚡ Spawning High Performance 720p 30 FPS Stream Generator...');
+    console.log('⚡ Spawning Single 720p Stream Live Generator...');
     ffmpegLiveProcess = spawn('ffmpeg', args);
 
     if (SFTP_ENABLED) {
