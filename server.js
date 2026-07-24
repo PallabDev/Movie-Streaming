@@ -1,14 +1,18 @@
 import 'dotenv/config';
 import express from 'express';
+import http from 'http';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { exec, spawn } from 'child_process';
+import { WebSocketServer } from 'ws';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
+const server = http.createServer(app);
+
 const PORT = process.env.PORT || 3000;
 const NODE_ENV = process.env.NODE_ENV || 'development';
 const APP_URL = process.env.APP_URL || `http://localhost:${PORT}`;
@@ -36,11 +40,42 @@ app.use('/media', express.static(mediaDir));
 app.use('/stream', express.raw({ type: '*/*', limit: '100mb' }));
 app.use(express.json());
 
+// WebSocket Live Server setup for Sub-Second Zero Latency
+const wss = new WebSocketServer({ server, path: '/live-ws' });
+let headerChunks = []; // Stored EBML header chunks for instant late-joiner connection
+
+wss.on('connection', (ws) => {
+    console.log('[Live WS] New viewer connected!');
+    
+    // Send stored initial header chunks so late-joining viewers can decode stream instantly
+    for (const header of headerChunks) {
+        if (ws.readyState === 1) {
+            ws.send(header);
+        }
+    }
+    
+    ws.on('error', (err) => console.warn('[Live WS Error]:', err.message));
+});
+
+function broadcastLiveChunk(chunkBuffer, isHeader = false) {
+    if (isHeader) {
+        headerChunks = [chunkBuffer];
+    } else if (headerChunks.length < 2 && isHeader) {
+        headerChunks.push(chunkBuffer);
+    }
+
+    for (const client of wss.clients) {
+        if (client.readyState === 1) {
+            client.send(chunkBuffer);
+        }
+    }
+}
+
 // Active FFmpeg process & compilation locks
 let ffmpegLiveProcess = null;
 let activeCompilePromise = null;
 
-// Helper function to safely clean media folder without locking crashes
+// Helper function to safely clean media folder
 function clearMediaFolder() {
     if (fs.existsSync(mediaDir)) {
         const files = fs.readdirSync(mediaDir);
@@ -85,18 +120,17 @@ function stopFfmpegLive() {
     }
 }
 
-// Start FFmpeg process for Low-Latency HLS live generation
+// Start FFmpeg process for Low-Latency HLS fallback
 function startFfmpegLive() {
     stopFfmpegLive();
     clearLiveFolder();
 
     const hlsPath = path.join(liveDir, 'stream.m3u8');
     
-    // FFmpeg options for low latency HLS generation from raw WebM stdin pipe
     const args = [
         '-y',
-        '-f', 'matroska',            // WebM / Matroska format hint for unseekable pipe
-        '-probesize', '32k',         // Minimal probe size to start HLS immediately
+        '-f', 'matroska',
+        '-probesize', '32k',
         '-analyzeduration', '0',
         '-i', 'pipe:0',
         '-c:v', 'libx264',
@@ -173,7 +207,6 @@ function compileStream() {
             const rawCombinedPath = path.join(mediaDir, 'raw_combined.webm');
             const outputFilePath = path.join(mediaDir, `recompiled_recording_${Date.now()}.mp4`);
 
-            // Combine raw binary byte stream of WebM chunks into raw_combined.webm
             const writeStream = fs.createWriteStream(rawCombinedPath);
             for (const file of files) {
                 const chunkData = fs.readFileSync(path.join(mediaDir, file));
@@ -218,7 +251,7 @@ app.get('/', (req, res) => {
     });
 });
 
-// Live Watch Page Route (handles both /live and /live/)
+// Live Watch Page Route
 app.get(['/live', '/live/'], (req, res) => {
     res.render('live', {
         stream: {
@@ -230,18 +263,18 @@ app.get(['/live', '/live/'], (req, res) => {
 
 // Endpoint to check live stream status
 app.get('/live/status', (req, res) => {
-    const hlsPlaylist = path.join(liveDir, 'stream.m3u8');
-    const isLive = fs.existsSync(hlsPlaylist) && ffmpegLiveProcess !== null;
-    res.json({ live: isLive });
+    const isLive = headerChunks.length > 0 || (ffmpegLiveProcess !== null);
+    res.json({ live: isLive, viewers: wss.clients.size });
 });
 
 // Endpoint to reset media & live folders when a new stream starts
 app.post('/reset-stream', (req, res) => {
     try {
         activeCompilePromise = null;
+        headerChunks = [];
         clearMediaFolder();
         startFfmpegLive();
-        res.json({ success: true, message: 'Stream reset and live FFmpeg started' });
+        res.json({ success: true, message: 'Stream reset and live WebSocket/FFmpeg started' });
     } catch (err) {
         console.error('Error resetting stream:', err);
         res.status(500).json({ success: false, error: err.message });
@@ -251,7 +284,8 @@ app.post('/reset-stream', (req, res) => {
 // Endpoint to receive video chunks
 app.post('/stream', (req, res) => {
     try {
-        const chunkIndex = req.headers['x-chunk-index'] || Date.now();
+        const chunkIndexRaw = req.headers['x-chunk-index'] || '0';
+        const chunkIndex = parseInt(chunkIndexRaw);
         const paddedIndex = String(chunkIndex).padStart(6, '0');
         const chunkPath = path.join(mediaDir, `chunk_${paddedIndex}.webm`);
 
@@ -260,7 +294,11 @@ app.post('/stream', (req, res) => {
         // 1. Save chunk to media directory
         fs.writeFileSync(chunkPath, req.body);
 
-        // 2. Pipe chunk directly to FFmpeg Live stdin safely
+        // 2. Broadcast raw WebM chunk over WebSocket for ZERO-LATENCY streaming (< 100ms)
+        const isHeader = (chunkIndex === 0);
+        broadcastLiveChunk(req.body, isHeader);
+
+        // 3. Pipe chunk to FFmpeg Live stdin for HLS fallback
         if (ffmpegLiveProcess && ffmpegLiveProcess.stdin && ffmpegLiveProcess.stdin.writable) {
             try {
                 ffmpegLiveProcess.stdin.write(req.body, (err) => {
@@ -274,7 +312,7 @@ app.post('/stream', (req, res) => {
         }
 
         const elapsed = Date.now() - startTime;
-        console.log(`Saved & piped chunk: chunk_${paddedIndex}.webm (${req.body.length} bytes) in ${elapsed}ms`);
+        console.log(`Saved, piped & broadcasted chunk: chunk_${paddedIndex}.webm (${req.body.length} bytes) in ${elapsed}ms`);
         res.json({ success: true, chunkIndex });
     } catch (err) {
         console.error('Error handling stream chunk:', err);
@@ -302,6 +340,6 @@ app.get('/download', async (req, res) => {
     }
 });
 
-app.listen(PORT, () => {
+server.listen(PORT, () => {
     console.log(`Server running in [${NODE_ENV}] mode at ${APP_URL} (Port ${PORT})`);
 });

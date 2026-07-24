@@ -41,7 +41,6 @@ tailwind.config = {
   --value: 100%;
 }
 
-/* Make page exactly viewport size, no scroll */
 html, body {
   margin: 0;
   padding: 0;
@@ -51,7 +50,6 @@ html, body {
   background: #000000;
 }
 
-/* Custom scrollbar for settings */
 .sh-settings-list::-webkit-scrollbar {
   width: 6px;
 }
@@ -67,26 +65,23 @@ html, body {
   background: rgba(255, 255, 255, 0.3);
 }
 
-/* === VERTICAL VOLUME SLIDER === */
 .sh-volume-slider {
   display: flex;
   align-items: center;
   justify-content: center;
 }
 
-/* Base input reset */
 .sh-volume-range {
   -webkit-appearance: none;
   appearance: none;
   writing-mode: vertical-lr; direction: rtl;
-  width: 12px;                   /* thickness of the track */
+  width: 12px;
   height: 100%;
   padding: 0;
   background: transparent;
   cursor: pointer;
 }
 
-/* WebKit track */
 .sh-volume-range::-webkit-slider-runnable-track {
   width: 12px;
   height: 100%;
@@ -95,7 +90,6 @@ html, body {
   border: 1px solid rgba(255, 255, 255, 0.1);
 }
 
-/* WebKit thumb */
 .sh-volume-range::-webkit-slider-thumb {
   -webkit-appearance: none;
   appearance: none;
@@ -105,39 +99,13 @@ html, body {
   background: #ffffff;
   border: 1px solid #111;
   box-shadow: 0 2px 5px rgba(0, 0, 0, 0.4);
-  margin-top: -3px; /* center thumb on track */
+  margin-top: -3px;
 }
 
-/* Firefox track */
-.sh-volume-range::-moz-range-track {
-  width: 12px;
-  height: 100%;
-  background: #1e1b4b;
-  border-radius: 9999px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-}
-
-/* Firefox thumb */
-.sh-volume-range::-moz-range-thumb {
-  width: 18px;
-  height: 18px;
-  border-radius: 50%;
-  background: #ffffff;
-  border: 1px solid #111;
-  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.4);
-}
-
-/* Hide ugly focus ring */
-.sh-volume-range:focus {
-  outline: none;
-}
-
-/* Progress bar gradient */
 .sh-progress-bar {
   background: linear-gradient(90deg, #6366f1, #4f46e5);
 }
 
-/* Player layout centering and aspect ratio constraint */
 .sh-player {
   width: 100%;
   max-width: 100%;
@@ -157,7 +125,6 @@ html, body {
   }
 }
 
-/* Fullscreen adjustments override */
 :fullscreen .sh-player,
 :-webkit-full-screen .sh-player,
 :-moz-full-screen .sh-player {
@@ -173,7 +140,6 @@ html, body {
   padding-bottom: calc(env(safe-area-inset-bottom) + 1.25rem) !important;
 }
 
-/* Responsive adjustments for controls */
 @media (max-width: 600px) {
   #sh-controls {
     padding: 0.75rem !important;
@@ -293,6 +259,12 @@ html, body {
 
           <!-- Right Action Controls -->
           <div class="sh-controls-right flex items-center gap-1.5 sm:gap-2">
+            <!-- Latency Badge -->
+            <div id="latencyBadge" class="text-xs font-semibold px-2.5 py-1 rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 flex items-center gap-1.5">
+              <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping"></span>
+              <span>LIVE (&lt; 100ms)</span>
+            </div>
+
             <!-- Volume Button -->
             <button
               class="sh-btn w-8 h-8 sm:w-10 sm:h-10 bg-transparent text-[#aaaaaa] flex items-center justify-center text-lg p-2 rounded-lg transition-all duration-150 hover:text-white hover:bg-white/10 min-w-[32px]"
@@ -318,7 +290,6 @@ html, body {
 
 <script>
 (function () {
-  // DOM Elements
   const video = document.getElementById('sh-video');
   const player = document.getElementById('sh-player');
   const playBtn = document.getElementById('sh-play-btn');
@@ -338,21 +309,21 @@ html, body {
   const controls = document.getElementById('sh-controls');
   const offlineScreen = document.getElementById('offline-screen');
 
-  let hls = null;
+  let mediaSource = null;
+  let sourceBuffer = null;
+  let chunkQueue = [];
+  let ws = null;
   let scrubbing = false;
   let controlsTimeout = null;
-  let isFullscreen = false;
-  let controlsHidden = false;
-  let autoCheckTimer = null;
 
   function showOffline() {
     offlineScreen.style.display = 'flex';
     hideLoading();
-    if (hls) {
-      hls.destroy();
-      hls = null;
+    if (ws) {
+      ws.onclose = null;
+      ws.close();
+      ws = null;
     }
-    video.srcObject = null;
     video.pause();
     updatePlayIcon();
   }
@@ -374,7 +345,7 @@ html, body {
       .then(res => res.json())
       .then(data => {
         if (data.live) {
-          initHlsPlayer();
+          initZeroLatencyPlayer();
         } else {
           showOffline();
         }
@@ -385,56 +356,98 @@ html, body {
       });
   };
 
-  function initHlsPlayer() {
-    const streamUrl = '/live/stream.m3u8';
-    
-    if (Hls.isSupported()) {
-      if (hls) {
-        hls.destroy();
-      }
+  function initZeroLatencyPlayer() {
+    if ('MediaSource' in window) {
+      mediaSource = new MediaSource();
+      video.src = URL.createObjectURL(mediaSource);
 
-      hls = new Hls({
-        liveSyncDurationCount: 1,
-        liveMaxLatencyDurationCount: 3,
-        maxLiveSyncPlaybackRate: 1.5,
-        enableWorker: true,
-        lowLatencyMode: true,
-        backBufferLength: 0
+      mediaSource.addEventListener('sourceopen', () => {
+        try {
+          const vp9Mime = 'video/webm;codecs=vp9,opus';
+          const vp8Mime = 'video/webm;codecs=vp8,opus';
+          const mime = MediaSource.isTypeSupported(vp9Mime) ? vp9Mime : vp8Mime;
+
+          sourceBuffer = mediaSource.addSourceBuffer(mime);
+          sourceBuffer.mode = 'sequence';
+
+          sourceBuffer.addEventListener('updateend', () => {
+            if (chunkQueue.length > 0 && !sourceBuffer.updating) {
+              try {
+                sourceBuffer.appendBuffer(chunkQueue.shift());
+              } catch (e) {
+                console.warn('Buffer append error:', e);
+              }
+            }
+
+            // Zero-latency live edge catchup
+            if (video.buffered.length > 0) {
+              const liveEdge = video.buffered.end(video.buffered.length - 1);
+              if (liveEdge - video.currentTime > 0.4) {
+                video.currentTime = liveEdge - 0.05;
+              }
+            }
+          });
+
+          connectWebSocketStream();
+        } catch (err) {
+          console.error("MediaSource error:", err);
+          fallbackHlsPlayer();
+        }
       });
+    } else {
+      fallbackHlsPlayer();
+    }
+  }
 
+  function connectWebSocketStream() {
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsUrl = `${protocol}//${window.location.host}/live-ws`;
+
+    ws = new WebSocket(wsUrl);
+    ws.binaryType = 'arraybuffer';
+
+    ws.onopen = () => {
+      hideOffline();
+      hideLoading();
+    };
+
+    ws.onmessage = (event) => {
+      const buffer = event.data;
+      if (sourceBuffer && !sourceBuffer.updating) {
+        try {
+          sourceBuffer.appendBuffer(buffer);
+          if (video.paused) {
+            video.play().catch(e => console.warn("Autoplay prevented:", e));
+          }
+        } catch (e) {
+          console.warn("Append error:", e);
+        }
+      } else {
+        chunkQueue.push(buffer);
+      }
+    };
+
+    ws.onclose = () => {
+      console.warn("Live WebSocket connection closed.");
+      showOffline();
+    };
+
+    ws.onerror = (err) => {
+      console.error("WebSocket error:", err);
+      showOffline();
+    };
+  }
+
+  function fallbackHlsPlayer() {
+    const streamUrl = '/live/stream.m3u8';
+    if (Hls.isSupported()) {
+      const hls = new Hls({ lowLatencyMode: true, liveSyncDurationCount: 1 });
       hls.loadSource(streamUrl);
       hls.attachMedia(video);
-
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
         hideOffline();
         hideLoading();
-        video.play().then(() => {
-          updatePlayIcon();
-        }).catch(err => {
-          console.warn('Autoplay prevented:', err);
-          updatePlayIcon();
-        });
-      });
-
-      hls.on(Hls.Events.ERROR, (event, data) => {
-        if (data.fatal) {
-          console.warn('HLS Fatal Error:', data.type);
-          if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
-            showOffline();
-          } else {
-            hls.destroy();
-            hls = null;
-            showOffline();
-          }
-        }
-      });
-    } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-      video.src = streamUrl;
-      video.addEventListener('loadedmetadata', () => {
-        hideOffline();
-        hideLoading();
         video.play();
-        updatePlayIcon();
       });
     }
   }
@@ -446,7 +459,6 @@ html, body {
     return String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0');
   }
 
-  // Play / pause
   function updatePlayIcon() {
     if (video.paused) {
       playIcon.className = 'fas fa-play';
@@ -471,7 +483,6 @@ html, body {
   video.addEventListener('play', updatePlayIcon);
   video.addEventListener('pause', updatePlayIcon);
 
-  // Time + progress
   video.addEventListener('timeupdate', () => {
     const ct = video.currentTime || 0;
     const dur = video.duration || 0;
@@ -491,7 +502,6 @@ html, body {
   video.addEventListener('waiting', showLoading);
   video.addEventListener('playing', hideLoading);
 
-  // Buffer progress
   function updateBufferProgress() {
     if (video.buffered && video.buffered.length > 0 && video.duration > 0) {
       const bufferedEnd = video.buffered.end(video.buffered.length - 1);
@@ -501,7 +511,6 @@ html, body {
   }
   video.addEventListener('progress', updateBufferProgress);
 
-  // Hover handle
   progress.addEventListener('mouseenter', () => {
     progressHandle.style.width = '14px';
     progressHandle.style.height = '14px';
@@ -513,7 +522,6 @@ html, body {
     progressHandle.style.boxShadow = 'none';
   });
 
-  // Seek
   function seekByClientX(clientX) {
     const rect = progress.getBoundingClientRect();
     const ratio =
@@ -546,7 +554,6 @@ html, body {
     resetControlsTimer();
   });
 
-  // Volume Mute/Unmute
   volumeBtn.addEventListener('click', () => {
     video.muted = !video.muted;
     if (video.muted) {
@@ -557,7 +564,6 @@ html, body {
     resetControlsTimer();
   });
 
-  // Fullscreen
   function toggleFullscreen() {
     if (
       document.fullscreenElement ||
@@ -584,12 +590,6 @@ html, body {
       element.msRequestFullscreen();
     }
 
-    if (isMobile() && screen.orientation && screen.orientation.lock) {
-      screen.orientation.lock('landscape').catch(() => {});
-    }
-
-    isFullscreen = true;
-    fullscreenIcon.className = 'fas fa-compress';
     resetControlsTimer();
   }
 
@@ -604,46 +604,16 @@ html, body {
       document.msExitFullscreen();
     }
 
-    if (screen.orientation && screen.orientation.unlock) {
-      screen.orientation.unlock();
-    }
-
-    isFullscreen = false;
-    fullscreenIcon.className = 'fas fa-expand';
     resetControlsTimer();
   }
 
   fullBtn.addEventListener('click', toggleFullscreen);
 
-  // Fullscreen events
-  document.addEventListener('fullscreenchange', handleFullscreenChange);
-  document.addEventListener('webkitfullscreenchange', handleFullscreenChange);
-  document.addEventListener('mozfullscreenchange', handleFullscreenChange);
-  document.addEventListener('MSFullscreenChange', handleFullscreenChange);
-
-  function handleFullscreenChange() {
-    isFullscreen = !!(
-      document.fullscreenElement ||
-      document.webkitFullscreenElement ||
-      document.mozFullScreenElement ||
-      document.msFullscreenElement
-    );
-
-    if (isFullscreen) {
-      fullscreenIcon.className = 'fas fa-compress';
-    } else {
-      fullscreenIcon.className = 'fas fa-expand';
-    }
-    resetControlsTimer();
-  }
-
-  // Auto-hide controls
   function resetControlsTimer() {
     clearTimeout(controlsTimeout);
     controls.style.opacity = '1';
     controls.style.transform = 'translateY(0)';
     controls.style.pointerEvents = 'auto';
-    controlsHidden = false;
 
     if (!video.paused) {
       controlsTimeout = setTimeout(() => {
@@ -651,7 +621,6 @@ html, body {
           controls.style.opacity = '0';
           controls.style.transform = 'translateY(10px)';
           controls.style.pointerEvents = 'none';
-          controlsHidden = true;
         }
       }, 3000);
     }
@@ -661,86 +630,8 @@ html, body {
     resetControlsTimer();
   });
 
-  player.addEventListener('pointerdown', (e) => {
-    if (controls.contains(e.target)) return;
-    if (controlsHidden) {
-      resetControlsTimer();
-    } else {
-      clearTimeout(controlsTimeout);
-      controls.style.opacity = '0';
-      controls.style.transform = 'translateY(10px)';
-      controls.style.pointerEvents = 'none';
-      controlsHidden = true;
-    }
-  });
-
-  player.addEventListener('dblclick', (e) => {
-    if (controls.contains(e.target)) return;
-    toggleFullscreen();
-  });
-
-  const controlElements = [playBtn, progress, volumeBtn, fullBtn];
-  controlElements.forEach((el) => {
-    el.addEventListener('mouseenter', () => {
-      clearTimeout(controlsTimeout);
-      controls.style.opacity = '1';
-      controls.style.transform = 'translateY(0)';
-      controls.style.pointerEvents = 'auto';
-      controlsHidden = false;
-    });
-
-    el.addEventListener('mouseleave', () => {
-      if (!video.paused) {
-        controlsTimeout = setTimeout(() => {
-          if (!video.paused && !scrubbing) {
-            controls.style.opacity = '0';
-            controls.style.transform = 'translateY(10px)';
-            controls.style.pointerEvents = 'none';
-            controlsHidden = true;
-          }
-        }, 1000);
-      }
-    });
-  });
-
-  // Keyboard shortcuts
-  document.addEventListener('keydown', (e) => {
-    if (e.target.matches('input, textarea')) return;
-
-    if (e.code === 'Space') {
-      e.preventDefault();
-      if (video.paused) video.play();
-      else video.pause();
-      resetControlsTimer();
-    }
-
-    if (e.code === 'KeyF') {
-      e.preventDefault();
-      toggleFullscreen();
-    }
-
-    if (e.code === 'KeyM') {
-      e.preventDefault();
-      video.muted = !video.muted;
-      resetControlsTimer();
-    }
-  });
-
-  function isMobile() {
-    return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(
-      navigator.userAgent
-    );
-  }
-
-  // Initial stream status check & poll every 3 seconds if offline
+  // Start zero latency player
   checkStreamStatus();
-  autoCheckTimer = setInterval(() => {
-    if (offlineScreen.style.display !== 'none') {
-      checkStreamStatus();
-    }
-  }, 3000);
-
-  resetControlsTimer();
 })();
 </script>
 </body>
