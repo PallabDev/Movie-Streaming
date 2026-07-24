@@ -38,10 +38,32 @@ if (!fs.existsSync(liveDir)) {
 app.set('view engine', 'ejs');
 app.set('views', path.join(__dirname, 'src', 'views'));
 
+// Ensure sessions table exists for connect-pg-simple
+async function ensureSessionsTable() {
+    try {
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS "sessions" (
+                "sid" varchar NOT NULL COLLATE "default",
+                "sess" json NOT NULL,
+                "expire" timestamp(6) NOT NULL,
+                CONSTRAINT "sessions_pkey" PRIMARY KEY ("sid")
+            );
+            CREATE INDEX IF NOT EXISTS "IDX_session_expire" ON "sessions" ("expire");
+        `);
+        console.log('Sessions table ready');
+    } catch (err) {
+        console.error('Failed to create sessions table:', err.message);
+    }
+}
+
 // Session middleware
 const PgSession = pgSimple(session);
+const sessionStore = new PgSession({ pool, tableName: 'sessions' });
+sessionStore.on('error', (err) => {
+    console.error('Session store error:', err.message);
+});
 app.use(session({
-    store: new PgSession({ pool, tableName: 'sessions' }),
+    store: sessionStore,
     secret: process.env.SESSION_SECRET || 'cowatch-dev-secret',
     resave: false,
     saveUninitialized: false,
@@ -451,10 +473,12 @@ app.use((err, req, res, next) => {
     next(err);
 });
 
-server.listen(PORT, () => {
-    console.log(`Server running in [${NODE_ENV}] mode at ${APP_URL} (Port ${PORT})`);
-    if (IS_PROD) {
-        const cpus = os.cpus();
-        console.log(`VPS: ${cpus.length} cores (${cpus[0].model}) | ${(os.totalmem() / 1024 / 1024).toFixed(0)}MB RAM`);
-    }
+ensureSessionsTable().then(() => {
+    server.listen(PORT, () => {
+        console.log(`Server running in [${NODE_ENV}] mode at ${APP_URL} (Port ${PORT})`);
+        if (IS_PROD) {
+            const cpus = os.cpus();
+            console.log(`VPS: ${cpus.length} cores (${cpus[0].model}) | ${(os.totalmem() / 1024 / 1024).toFixed(0)}MB RAM`);
+        }
+    });
 });
