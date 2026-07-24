@@ -204,10 +204,6 @@ html, body {
           <span>Auto</span>
           <i class="fas fa-check text-xs hidden" id="check-auto"></i>
         </div>
-        <div class="sh-quality-item" id="quality-1080" onclick="setQuality(1080)">
-          <span>1080p (30fps)</span>
-          <i class="fas fa-check text-xs hidden" id="check-1080"></i>
-        </div>
         <div class="sh-quality-item" id="quality-720" onclick="setQuality(720)">
           <span>720p (30fps)</span>
           <i class="fas fa-check text-xs hidden" id="check-720"></i>
@@ -460,13 +456,12 @@ html, body {
     }
   }
 
-  // Quality Selection Handler
+  // Quality Selection Handler for VPS-Optimized 720p & 480p Renditions
   window.setQuality = function (targetHeight) {
     if (hls && hls.levels && hls.levels.length > 0) {
       if (targetHeight === -1) {
         hls.currentLevel = -1; // Auto mode
       } else {
-        // Match level index by height (1080, 720, 480) or level name attribute
         let index = hls.levels.findIndex(lvl => lvl.height === targetHeight);
         if (index === -1) {
           index = hls.levels.findIndex(lvl => lvl.attrs && lvl.attrs.NAME && lvl.attrs.NAME.includes(targetHeight + 'p'));
@@ -474,9 +469,7 @@ html, body {
         if (index !== -1) {
           hls.currentLevel = index;
         } else {
-          // Fallback based on bitrate sorting (lowest bitrate = index 0, highest bitrate = last index)
-          if (targetHeight === 1080) hls.currentLevel = hls.levels.length - 1;
-          else if (targetHeight === 720) hls.currentLevel = Math.min(1, hls.levels.length - 1);
+          if (targetHeight === 720) hls.currentLevel = hls.levels.length - 1;
           else if (targetHeight === 480) hls.currentLevel = 0;
         }
       }
@@ -488,8 +481,6 @@ html, body {
 
     if (targetHeight === -1) {
       document.getElementById('quality-auto').classList.add('selected');
-    } else if (targetHeight === 1080) {
-      document.getElementById('quality-1080').classList.add('selected');
     } else if (targetHeight === 720) {
       document.getElementById('quality-720').classList.add('selected');
     } else if (targetHeight === 480) {
