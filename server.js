@@ -166,6 +166,9 @@ function queueSftpUpload(filename) {
         clearTimeout(uploadQueue.get(filename));
     }
 
+    // Delay .m3u8 upload by 80ms to guarantee .ts segment files arrive on Hostinger CDN first
+    const delay = filename.endsWith('.m3u8') ? 80 : 10;
+
     uploadQueue.set(filename, setTimeout(async () => {
         uploadQueue.delete(filename);
         const localPath = path.join(liveDir, filename);
