@@ -128,7 +128,15 @@ function startFfmpegLive() {
     if (ffmpegLiveProcess.stderr) {
         ffmpegLiveProcess.stderr.on('data', (data) => {
             const msg = data.toString().trim();
-            if (msg.includes('Error') || msg.includes('Opening')) {
+            if (msg.includes('fps=') || msg.includes('speed=')) {
+                const fpsMatch = msg.match(/fps=\s*([\d.]+)/);
+                const speedMatch = msg.match(/speed=\s*([\d.x]+)/);
+                const bitrateMatch = msg.match(/bitrate=\s*([\d.]+kbits\/s)/);
+                const fps = fpsMatch ? fpsMatch[1] : 'N/A';
+                const speed = speedMatch ? speedMatch[1] : 'N/A';
+                const bitrate = bitrateMatch ? bitrateMatch[1] : 'N/A';
+                console.log(`[FFmpeg Speed] FPS: ${fps} | Speed: ${speed} | Bitrate: ${bitrate}`);
+            } else if (msg.includes('Error') || msg.includes('Opening')) {
                 console.log('[FFmpeg Live]', msg);
             }
         });
@@ -247,6 +255,8 @@ app.post('/stream', (req, res) => {
         const paddedIndex = String(chunkIndex).padStart(6, '0');
         const chunkPath = path.join(mediaDir, `chunk_${paddedIndex}.webm`);
 
+        const startTime = Date.now();
+
         // 1. Save chunk to media directory
         fs.writeFileSync(chunkPath, req.body);
 
@@ -263,7 +273,8 @@ app.post('/stream', (req, res) => {
             }
         }
 
-        console.log(`Saved & piped chunk: chunk_${paddedIndex}.webm (${req.body.length} bytes)`);
+        const elapsed = Date.now() - startTime;
+        console.log(`Saved & piped chunk: chunk_${paddedIndex}.webm (${req.body.length} bytes) in ${elapsed}ms`);
         res.json({ success: true, chunkIndex });
     } catch (err) {
         console.error('Error handling stream chunk:', err);
