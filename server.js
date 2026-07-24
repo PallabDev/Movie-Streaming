@@ -363,7 +363,8 @@ async function startFfmpegLive() {
 
 // ─── Routes ─────────────────────────────────────────────────────────────────────
 app.get('/', (req, res) => {
-    res.render('index', { title: 'CoWatch - Broadcaster Studio', user: req.session?.user || null });
+    if (!req.session?.user) return res.redirect('/login');
+    res.redirect('/dashboard');
 });
 
 // MVC Routes
