@@ -455,6 +455,11 @@
         }
 
         async function startSharing() {
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
+                alert("Screen Sharing requires HTTPS or localhost.\n\nBrowsers block media capture on unencrypted HTTP IP addresses (http://222.167.207.36:5992).\n\nTo enable Screen Share over HTTP for testing:\n1. Open chrome://flags/#unsafely-treat-insecure-origin-as-secure in Chrome.\n2. Add 'http://222.167.207.36:5992' and set to Enabled.\n3. Relaunch Chrome.");
+                return;
+            }
+
             try {
                 // Clear server media folder for new recording session
                 await fetch('/reset-stream', { method: 'POST' });
