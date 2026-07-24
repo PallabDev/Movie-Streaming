@@ -457,7 +457,7 @@ app.post('/stop-stream', async (req, res) => {
 });
 
 app.post('/stream', (req, res) => {
-    req.on('aborted', () => {});
+    req.on('aborted', () => { });
     const chunkIndex = parseInt(req.headers['x-chunk-index'] || '0');
 
     // Respond IMMEDIATELY to release Chrome's HTTP socket connection instantly (< 1ms)
@@ -467,7 +467,7 @@ app.post('/stream', (req, res) => {
     if (ffmpegLiveProcess && ffmpegLiveProcess.stdin && ffmpegLiveProcess.stdin.writable) {
         try {
             ffmpegLiveProcess.stdin.write(req.body);
-        } catch (e) {}
+        } catch (e) { }
     }
 });
 
@@ -487,7 +487,6 @@ server.listen(PORT, () => {
     }
     if (SFTP_ENABLED) {
         console.log(`📡 SFTP CDN: ${SFTP_HOST}:${SFTP_PORT} → ${HLS_CDN_URL}`);
-    } else {
         console.log(`📁 SFTP CDN: Disabled (serving HLS locally from /live)`);
     }
 });
