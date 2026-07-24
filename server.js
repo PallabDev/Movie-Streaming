@@ -286,7 +286,8 @@ streamWss.on('connection', (ws) => {
     ws.on('message', (data) => {
         if (ffmpegLiveProcess && ffmpegLiveProcess.stdin && ffmpegLiveProcess.stdin.writable) {
             try {
-                ffmpegLiveProcess.stdin.write(data);
+                const buf = Buffer.isBuffer(data) ? data : Buffer.from(data);
+                ffmpegLiveProcess.stdin.write(buf);
             } catch (e) {}
         }
     });
@@ -334,17 +335,19 @@ async function startFfmpegLive() {
         '-y',
         '-threads', '4',
         '-fflags', '+genpts+discardcorrupt',
-        '-probesize', '64k',
-        '-analyzeduration', '0',
+        '-probesize', '5M',
+        '-analyzeduration', '2000000',
         '-i', 'pipe:0',
+        '-f', 'lavfi',
+        '-i', 'anullsrc=channel_layout=stereo:sample_rate=48000',
 
-        // Multi-resolution filter graph (1080p, 720p, 480p) + Audio Resampler Split
+        // Multi-resolution filter graph (1080p, 720p, 480p) + Robust Audio Resampler Split
         '-filter_complex',
         '[0:v]fps=30,split=3[v1080in][v720in][v480in];' +
         '[v1080in]copy[v1080out];' +
         '[v720in]scale=1280:720[v720out];' +
         '[v480in]scale=854:480[v480out];' +
-        '[0:a?]aresample=async=1000:first_pts=0,asplit=3[a1080][a720][a480]',
+        '[0:a?][1:a]amix=inputs=2:duration=first:dropout_transition=0,aresample=async=1000:first_pts=0,asplit=3[a1080][a720][a480]',
 
         // 1080p Rendition (6.0 Mbps High Quality)
         '-map', '[v1080out]',
@@ -438,10 +441,10 @@ async function startFfmpegLive() {
                     const speedMatch = msg.match(/speed=\s*([\d.x]+)/);
                     const fps = fpsMatch ? parseFloat(fpsMatch[1]).toFixed(1) : '30.0';
                     const speed = speedMatch ? speedMatch[1] : '1.0x';
-                    console.log(`[720p Stream] Speed: ${speed} | FPS: ${fps}`);
+                    console.log(`[Multi-Stream] Speed: ${speed} | FPS: ${fps}`);
                 }
-            } else if (msg.includes('Error') || msg.includes('Invalid') || msg.includes('Unrecognized')) {
-                console.error('[FFmpeg Error]:', msg);
+            } else {
+                console.error('[FFmpeg]:', msg);
             }
         });
     }
@@ -523,7 +526,8 @@ app.post('/stream', (req, res) => {
     // Write binary chunk asynchronously to FFmpeg stdin without blocking HTTP socket
     if (ffmpegLiveProcess && ffmpegLiveProcess.stdin && ffmpegLiveProcess.stdin.writable) {
         try {
-            ffmpegLiveProcess.stdin.write(req.body);
+            const buf = Buffer.isBuffer(req.body) ? req.body : Buffer.from(req.body);
+            ffmpegLiveProcess.stdin.write(buf);
         } catch (e) { }
     }
 });
