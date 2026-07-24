@@ -4,13 +4,15 @@
     "description": "",
     "main": "server.js",
     "scripts": {
-        "start": "node server.js"
+        "start": "node server.js",
+        "dev": "node --watch server.js"
     },
     "keywords": [],
     "author": "",
     "license": "ISC",
     "type": "module",
     "dependencies": {
+        "dotenv": "^16.4.7",
         "ejs": "^3.1.9",
         "express": "^5.2.1"
     }

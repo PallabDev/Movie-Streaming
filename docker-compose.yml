@@ -6,7 +6,9 @@ services:
     container_name: movie-streaming
     restart: always
     environment:
+      - NODE_ENV=production
       - PORT=5992
+      - APP_URL=https://watch.pallabdev.in
     labels:
       caddy: watch.pallabdev.in
       caddy.reverse_proxy: "{{upstreams 5992}}"

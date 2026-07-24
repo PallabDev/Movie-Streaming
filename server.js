@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import express from 'express';
 import path from 'path';
 import fs from 'fs';
@@ -8,7 +9,9 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
-const PORT = process.env.PORT || 5992;
+const PORT = process.env.PORT || 3000;
+const NODE_ENV = process.env.NODE_ENV || 'development';
+const APP_URL = process.env.APP_URL || `http://localhost:${PORT}`;
 
 // Directories setup
 const mediaDir = path.join(__dirname, 'media');
@@ -289,5 +292,5 @@ app.get('/download', async (req, res) => {
 });
 
 app.listen(PORT, () => {
-    console.log(`Server is running on http://localhost:${PORT}`);
+    console.log(`Server running in [${NODE_ENV}] mode at ${APP_URL} (Port ${PORT})`);
 });
