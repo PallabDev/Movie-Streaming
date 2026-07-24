@@ -515,8 +515,8 @@
 
                 mediaRecorder = new MediaRecorder(mediaStream, {
                     mimeType: mimeType,
-                    audioBitsPerSecond: 128000, // 128 kbps Opus audio
-                    videoBitsPerSecond: 5000000 // 5 Mbps 720p capture (optimal for VPS decode speed)
+                    audioBitsPerSecond: 192000, // 192 kbps high quality Opus audio
+                    videoBitsPerSecond: 12000000 // 12 Mbps pristine capture (sharp text & fine detail)
                 });
 
                 mediaRecorder.ondataavailable = (event) => {

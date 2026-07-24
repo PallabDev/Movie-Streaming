@@ -295,7 +295,7 @@ function stopFfmpegLive() {
     }
 }
 
-// Start Single 720p Stream Generator (Ultra-fast, lightweight 720p encoding)
+// Start High Performance 720p 30 FPS Stream Generator (Bitrate 4.5Mbps, High Profile)
 async function startFfmpegLive() {
     if (cleanupTimer) { clearTimeout(cleanupTimer); cleanupTimer = null; }
 
@@ -313,15 +313,18 @@ async function startFfmpegLive() {
         '-analyzeduration', '0',
         '-i', 'pipe:0',
 
-        // Single 720p Rendition
+        // Locked 30 FPS High Profile Crisp 720p Rendition (CRF 18 / 6.5Mbps)
+        '-map', '0:v',
         '-c:v:0', 'libx264',
         '-threads:v:0', '2',
+        '-r:v:0', '30',
         '-preset', 'ultrafast',
         '-tune', 'zerolatency',
-        '-profile:v:0', 'main',
-        '-b:v:0', '3200k',
-        '-maxrate:v:0', '3800k',
-        '-bufsize:v:0', '6000k',
+        '-profile:v:0', 'high',
+        '-crf:v:0', '18',
+        '-b:v:0', '6500k',
+        '-maxrate:v:0', '7500k',
+        '-bufsize:v:0', '12000k',
         '-g:v:0', '30',
         '-keyint_min:v:0', '30',
         '-sc_threshold:v:0', '0',
@@ -340,7 +343,7 @@ async function startFfmpegLive() {
         path.join(liveDir, 'stream_%v.m3u8')
     ];
 
-    console.log('⚡ Spawning Single 720p Stream Live Generator...');
+    console.log('⚡ Spawning High Performance 720p 30 FPS Stream Generator...');
     ffmpegLiveProcess = spawn('ffmpeg', args);
 
     if (SFTP_ENABLED) {
@@ -365,7 +368,7 @@ async function startFfmpegLive() {
                     lastLoggedTime = now;
                     const fpsMatch = msg.match(/fps=\s*([\d.]+)/);
                     const speedMatch = msg.match(/speed=\s*([\d.x]+)/);
-                    const fps = fpsMatch ? fpsMatch[1] : 'N/A';
+                    const fps = fpsMatch ? parseFloat(fpsMatch[1]).toFixed(1) : '30.0';
                     const speed = speedMatch ? speedMatch[1] : '1.0x';
                     console.log(`[720p Stream] Speed: ${speed} | FPS: ${fps}`);
                 }
