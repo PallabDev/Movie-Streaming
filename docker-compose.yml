@@ -11,9 +11,9 @@ services:
       caddy: watch.pallabdev.in
       caddy.reverse_proxy: "{{upstreams 5992}}"
     networks:
-      - caddy
+      - caddy_net
 
 networks:
-  caddy:
-    name: caddy
+  caddy_net:
+    name: caddy_net
     external: true
