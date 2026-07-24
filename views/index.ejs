@@ -1,0 +1,579 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Screen Share Studio</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-dark: #090d16;
+            --card-bg: rgba(17, 24, 39, 0.75);
+            --primary: #6366f1;
+            --primary-hover: #4f46e5;
+            --danger: #ef4444;
+            --danger-hover: #dc2626;
+            --success: #10b981;
+            --text-main: #f3f4f6;
+            --text-sub: #9ca3af;
+            --border-glass: rgba(255, 255, 255, 0.08);
+            --shadow-glow: rgba(99, 102, 241, 0.15);
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: var(--bg-dark);
+            color: var(--text-main);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 3rem 2rem 6rem 2rem;
+            position: relative;
+            overflow-x: hidden;
+        }
+
+        /* Ambient background glow */
+        .ambient-glow {
+            position: absolute;
+            top: 20%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 600px;
+            height: 600px;
+            background: radial-gradient(circle, var(--shadow-glow) 0%, rgba(9, 13, 22, 0) 70%);
+            pointer-events: none;
+            z-index: 0;
+        }
+
+        /* Main Container */
+        .app-container {
+            position: relative;
+            z-index: 1;
+            width: 100%;
+            max-width: 960px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            margin-bottom: 2rem;
+        }
+
+        /* 16:9 Video Player Container */
+        .player-wrapper {
+            position: relative;
+            width: 100%;
+            aspect-ratio: 16 / 9;
+            background: #030712;
+            border-radius: 20px;
+            overflow: hidden;
+            border: 1px solid var(--border-glass);
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.7);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        video {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            display: none;
+        }
+
+        video.active {
+            display: block;
+        }
+
+        /* Placeholder State */
+        .placeholder {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 1rem;
+            color: var(--text-sub);
+            text-align: center;
+            padding: 2rem;
+        }
+
+        .placeholder-icon {
+            width: 64px;
+            height: 64px;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.05);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .placeholder-icon svg {
+            width: 32px;
+            height: 32px;
+            fill: none;
+            stroke: var(--text-sub);
+            stroke-width: 1.8;
+        }
+
+        .placeholder h2 {
+            font-size: 1.25rem;
+            font-weight: 600;
+            color: var(--text-main);
+        }
+
+        .placeholder p {
+            font-size: 0.9rem;
+            color: var(--text-sub);
+        }
+
+        /* Custom Player Controls Overlay */
+        .controls-overlay {
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            background: linear-gradient(to top, rgba(0,0,0,0.85) 0%, rgba(0,0,0,0) 100%);
+            padding: 1.5rem 1.5rem 1rem 1.5rem;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            opacity: 0;
+            transition: opacity 0.3s ease;
+            pointer-events: none;
+        }
+
+        .player-wrapper:hover .controls-overlay,
+        .controls-overlay.visible {
+            opacity: 1;
+            pointer-events: auto;
+        }
+
+        .controls-left, .controls-right {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        .control-btn {
+            background: rgba(255, 255, 255, 0.15);
+            border: none;
+            color: var(--text-main);
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            backdrop-filter: blur(8px);
+            transition: all 0.2s ease;
+        }
+
+        .control-btn:hover {
+            background: rgba(255, 255, 255, 0.3);
+            transform: scale(1.05);
+        }
+
+        .control-btn svg {
+            width: 20px;
+            height: 20px;
+            fill: none;
+            stroke: currentColor;
+            stroke-width: 2;
+        }
+
+        /* Badges */
+        .badge-container {
+            position: absolute;
+            top: 1rem;
+            left: 1rem;
+            display: flex;
+            gap: 0.5rem;
+            z-index: 5;
+        }
+
+        .badge-live {
+            background: rgba(239, 68, 68, 0.9);
+            color: white;
+            padding: 0.3rem 0.75rem;
+            border-radius: 20px;
+            font-size: 0.75rem;
+            font-weight: 700;
+            letter-spacing: 0.05em;
+            display: flex;
+            align-items: center;
+            gap: 0.4rem;
+            text-transform: uppercase;
+            box-shadow: 0 4px 12px rgba(239, 68, 68, 0.3);
+        }
+
+        .badge-live::before {
+            content: '';
+            width: 6px;
+            height: 6px;
+            background: white;
+            border-radius: 50%;
+            animation: pulse 1.5s infinite;
+        }
+
+        .badge-quality {
+            background: rgba(0, 0, 0, 0.6);
+            backdrop-filter: blur(8px);
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            color: #60a5fa;
+            padding: 0.3rem 0.75rem;
+            border-radius: 20px;
+            font-size: 0.75rem;
+            font-weight: 600;
+        }
+
+        .badge-chunks {
+            background: rgba(16, 185, 129, 0.2);
+            backdrop-filter: blur(8px);
+            border: 1px solid rgba(16, 185, 129, 0.4);
+            color: #34d399;
+            padding: 0.3rem 0.75rem;
+            border-radius: 20px;
+            font-size: 0.75rem;
+            font-weight: 600;
+        }
+
+        @keyframes pulse {
+            0% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.4; transform: scale(0.8); }
+            100% { opacity: 1; transform: scale(1); }
+        }
+
+        /* Floating Action Buttons Container fixed at Bottom Center */
+        .action-button-container {
+            position: fixed;
+            left: 50%;
+            bottom: 2rem;
+            transform: translateX(-50%);
+            z-index: 100;
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        .btn-action {
+            padding: 0.9rem 2rem;
+            border-radius: 50px;
+            border: none;
+            font-family: inherit;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            box-shadow: 0 12px 35px rgba(0, 0, 0, 0.6);
+            transition: all 0.3s ease;
+            text-decoration: none;
+        }
+
+        .btn-share.start {
+            background: linear-gradient(135deg, var(--primary) 0%, #a855f7 100%);
+            color: white;
+            box-shadow: 0 10px 30px var(--shadow-glow);
+        }
+
+        .btn-share.start:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 15px 35px rgba(99, 102, 241, 0.4);
+        }
+
+        .btn-share.stop {
+            background: linear-gradient(135deg, var(--danger) 0%, #b91c1c 100%);
+            color: white;
+            box-shadow: 0 10px 30px rgba(239, 68, 68, 0.4);
+        }
+
+        .btn-share.stop:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 15px 35px rgba(239, 68, 68, 0.6);
+        }
+
+        .btn-download {
+            background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+            color: white;
+            box-shadow: 0 10px 30px rgba(16, 185, 129, 0.3);
+        }
+
+        .btn-download:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 15px 35px rgba(16, 185, 129, 0.5);
+        }
+
+        .btn-action svg {
+            width: 22px;
+            height: 22px;
+            fill: none;
+            stroke: currentColor;
+            stroke-width: 2;
+        }
+    </style>
+</head>
+<body>
+    <div class="ambient-glow"></div>
+
+    <div class="app-container">
+        <!-- 16:9 Video Player -->
+        <div class="player-wrapper" id="playerWrapper">
+            <!-- Badges -->
+            <div id="badgeGroup" class="badge-container" style="display: none;">
+                <div class="badge-live">Live</div>
+                <div class="badge-quality" id="qualityBadge">1080p 60FPS</div>
+                <div class="badge-chunks" id="chunksBadge">Chunks Sent: 0</div>
+            </div>
+
+            <!-- Placeholder State -->
+            <div class="placeholder" id="placeholder">
+                <div class="placeholder-icon">
+                    <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round">
+                        <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
+                        <line x1="8" y1="21" x2="16" y2="21"></line>
+                        <line x1="12" y1="17" x2="12" y2="21"></line>
+                    </svg>
+                </div>
+                <h2>No Screen Shared</h2>
+                <p>Click "Share Screen" below to stream high quality chunks to server</p>
+            </div>
+
+            <!-- Video Player -->
+            <video id="previewVideo" autoplay playsinline muted></video>
+
+            <!-- Custom Controls Overlay -->
+            <div class="controls-overlay" id="controlsOverlay">
+                <div class="controls-left">
+                    <button class="control-btn" id="muteBtn" title="Mute/Unmute Audio">
+                        <svg id="unmutedIcon" viewBox="0 0 24 24">
+                            <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
+                            <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path>
+                        </svg>
+                        <svg id="mutedIcon" viewBox="0 0 24 24" style="display: none;">
+                            <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
+                            <line x1="23" y1="9" x2="17" y2="15"></line>
+                            <line x1="17" y1="9" x2="23" y2="15"></line>
+                        </svg>
+                    </button>
+                </div>
+                <div class="controls-right">
+                    <button class="control-btn" id="fullscreenBtn" title="Toggle Fullscreen">
+                        <svg viewBox="0 0 24 24">
+                            <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"></path>
+                        </svg>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Floating Action Buttons (Fixed at Bottom Center) -->
+    <div id="buttonContainer" class="action-button-container">
+        <button id="toggleShareBtn" class="btn-action btn-share start">
+            <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round">
+                <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
+                <line x1="8" y1="21" x2="16" y2="21"></line>
+                <line x1="12" y1="17" x2="12" y2="21"></line>
+            </svg>
+            <span id="btnText">Share Screen</span>
+        </button>
+
+        <a id="watchLiveBtn" href="/live" target="_blank" class="btn-action btn-share start" style="background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%);">
+            <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                <circle cx="12" cy="12" r="3"></circle>
+            </svg>
+            <span>Watch Live Stream</span>
+        </a>
+
+        <a id="downloadBtn" href="/download" class="btn-action btn-download" style="display: none;">
+            <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                <polyline points="7 10 12 15 17 10"></polyline>
+                <line x1="12" y1="15" x2="12" y2="3"></line>
+            </svg>
+            <span>Download Recording</span>
+        </a>
+    </div>
+
+    <script>
+        const toggleShareBtn = document.getElementById('toggleShareBtn');
+        const downloadBtn = document.getElementById('downloadBtn');
+        const btnText = document.getElementById('btnText');
+        const previewVideo = document.getElementById('previewVideo');
+        const placeholder = document.getElementById('placeholder');
+        const badgeGroup = document.getElementById('badgeGroup');
+        const qualityBadge = document.getElementById('qualityBadge');
+        const chunksBadge = document.getElementById('chunksBadge');
+        const playerWrapper = document.getElementById('playerWrapper');
+
+        // Controls
+        const muteBtn = document.getElementById('muteBtn');
+        const unmutedIcon = document.getElementById('unmutedIcon');
+        const mutedIcon = document.getElementById('mutedIcon');
+        const fullscreenBtn = document.getElementById('fullscreenBtn');
+
+        let mediaStream = null;
+        let mediaRecorder = null;
+        let chunkIndex = 0;
+
+        toggleShareBtn.addEventListener('click', () => {
+            if (mediaStream) {
+                stopSharing();
+            } else {
+                startSharing();
+            }
+        });
+
+        async function sendChunk(blob, index) {
+            try {
+                const arrayBuffer = await blob.arrayBuffer();
+                await fetch('/stream', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/octet-stream',
+                        'x-chunk-index': index
+                    },
+                    body: arrayBuffer
+                });
+                chunksBadge.textContent = `Chunks Sent: ${index + 1}`;
+                downloadBtn.style.display = 'inline-flex';
+            } catch (err) {
+                console.error("Failed to send chunk:", err);
+            }
+        }
+
+        async function startSharing() {
+            try {
+                // Clear server media folder for new recording session
+                await fetch('/reset-stream', { method: 'POST' });
+                chunkIndex = 0;
+                chunksBadge.textContent = 'Chunks Sent: 0';
+                downloadBtn.style.display = 'none';
+
+                // Request screen share with high-fidelity Opus audio in 1080p 60fps
+                const constraints = {
+                    video: {
+                        width: { ideal: 1920, max: 1920 },
+                        height: { ideal: 1080, max: 1080 },
+                        frameRate: { ideal: 60, max: 60 }
+                    },
+                    audio: {
+                        echoCancellation: false,
+                        noiseSuppression: false,
+                        autoGainControl: false,
+                        channelCount: 2,
+                        sampleRate: 48000
+                    }
+                };
+
+                mediaStream = await navigator.mediaDevices.getDisplayMedia(constraints);
+
+                // Set stream to video element
+                previewVideo.srcObject = mediaStream;
+                previewVideo.classList.add('active');
+                placeholder.style.display = 'none';
+                badgeGroup.style.display = 'flex';
+
+                // Detect actual settings
+                const videoTrack = mediaStream.getVideoTracks()[0];
+                if (videoTrack) {
+                    const settings = videoTrack.getSettings();
+                    const height = settings.height || 1080;
+                    const fps = Math.round(settings.frameRate) || 60;
+                    qualityBadge.textContent = `${height}p ${fps}FPS`;
+
+                    videoTrack.addEventListener('ended', () => {
+                        stopSharing();
+                    });
+                }
+
+                // Setup MediaRecorder for high quality Opus audio & video chunk streaming
+                let mimeType = 'video/webm;codecs=vp9,opus';
+                if (!MediaRecorder.isTypeSupported(mimeType)) {
+                    mimeType = 'video/webm;codecs=vp8,opus';
+                    if (!MediaRecorder.isTypeSupported(mimeType)) {
+                        mimeType = 'video/webm';
+                    }
+                }
+
+                mediaRecorder = new MediaRecorder(mediaStream, {
+                    mimeType: mimeType,
+                    audioBitsPerSecond: 192000, // 192 kbps high quality Opus audio
+                    videoBitsPerSecond: 8000000 // 8 Mbps high quality video
+                });
+
+                mediaRecorder.ondataavailable = (event) => {
+                    if (event.data && event.data.size > 0) {
+                        sendChunk(event.data, chunkIndex++);
+                    }
+                };
+
+                // Request chunk every 500 ms for low latency live streaming
+                mediaRecorder.start(500);
+
+                // Toggle button UI
+                toggleShareBtn.classList.remove('start');
+                toggleShareBtn.classList.add('stop');
+                btnText.textContent = 'Stop Sharing';
+
+                previewVideo.play();
+            } catch (err) {
+                console.error("Error accessing screen share:", err);
+            }
+        }
+
+        function stopSharing() {
+            if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+                mediaRecorder.stop();
+                mediaRecorder = null;
+            }
+
+            if (mediaStream) {
+                mediaStream.getTracks().forEach(track => track.stop());
+                mediaStream = null;
+            }
+
+            previewVideo.srcObject = null;
+            previewVideo.classList.remove('active');
+            placeholder.style.display = 'flex';
+            badgeGroup.style.display = 'none';
+
+            toggleShareBtn.classList.remove('stop');
+            toggleShareBtn.classList.add('start');
+            btnText.textContent = 'Share Screen';
+        }
+
+        // Controls
+        muteBtn.addEventListener('click', () => {
+            previewVideo.muted = !previewVideo.muted;
+            if (previewVideo.muted) {
+                unmutedIcon.style.display = 'none';
+                mutedIcon.style.display = 'block';
+            } else {
+                unmutedIcon.style.display = 'block';
+                mutedIcon.style.display = 'none';
+            }
+        });
+
+        fullscreenBtn.addEventListener('click', () => {
+            if (!document.fullscreenElement) {
+                playerWrapper.requestFullscreen().catch(err => console.error(err));
+            } else {
+                document.exitFullscreen();
+            }
+        });
+    </script>
+</body>
+</html>
