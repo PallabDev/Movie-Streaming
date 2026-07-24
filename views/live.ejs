@@ -412,11 +412,12 @@ html, body {
         maxLiveSyncPlaybackRate: 1.0,      // Never pitch shift or speed up audio
         enableWorker: true,
         lowLatencyMode: false,
-        backBufferLength: 30,              // Keep 30s back-buffer
-        maxBufferLength: 30,               // Pre-download up to 30 seconds ahead in memory
-        maxMaxBufferLength: 60,            // Allow buffer growth up to 60 seconds
+        progressive: true,                 // Enable progressive chunk streaming
+        backBufferLength: 60,              // Keep 60s back-buffer
+        maxBufferLength: 60,               // Pre-download up to 60 seconds ahead in memory
+        maxMaxBufferLength: 120,           // Allow buffer growth up to 120 seconds
         startLevel: -1,
-        abrEwmaDefaultEstimate: 5000000,
+        abrEwmaDefaultEstimate: 8000000,
         abrBandWidthUpFactor: 0.7,
         abrBandWidthFactor: 0.8,
         abrMaxWithRealBitrate: true
