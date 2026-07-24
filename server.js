@@ -295,7 +295,7 @@ function stopFfmpegLive() {
     }
 }
 
-// Start Dual-Quality (720p & 480p) ABR Generator
+// Start Single 720p Stream Generator (Ultra-fast, lightweight 720p encoding)
 async function startFfmpegLive() {
     if (cleanupTimer) { clearTimeout(cleanupTimer); cleanupTimer = null; }
 
@@ -313,17 +313,22 @@ async function startFfmpegLive() {
         '-analyzeduration', '0',
         '-i', 'pipe:0',
 
-        '-filter_complex',
-        '[0:v]fps=30,split=2[v720][v480];' +
-        '[v480]scale=854:-2[v480out]',
+        // Single 720p Rendition
+        '-c:v:0', 'libx264',
+        '-threads:v:0', '2',
+        '-preset', 'ultrafast',
+        '-tune', 'zerolatency',
+        '-profile:v:0', 'main',
+        '-b:v:0', '3200k',
+        '-maxrate:v:0', '3800k',
+        '-bufsize:v:0', '6000k',
+        '-g:v:0', '30',
+        '-keyint_min:v:0', '30',
+        '-sc_threshold:v:0', '0',
 
-        // Rendition 0: 720p passthrough + AAC audio
-        '-map', '[v720]', '-c:v:0', 'libx264', '-threads:v:0', '1', '-preset', 'ultrafast', '-tune', 'zerolatency', '-profile:v:0', 'main', '-b:v:0', '3000k', '-maxrate:v:0', '3600k', '-bufsize:v:0', '6000k', '-g:v:0', '30', '-keyint_min:v:0', '30', '-sc_threshold:v:0', '0',
-        '-map', '0:a?', '-c:a:0', 'aac', '-b:a:0', '128k',
-
-        // Rendition 1: 480p downscale + AAC audio
-        '-map', '[v480out]', '-c:v:1', 'libx264', '-threads:v:1', '1', '-preset', 'ultrafast', '-tune', 'zerolatency', '-profile:v:1', 'baseline', '-b:v:1', '1000k', '-maxrate:v:1', '1200k', '-bufsize:v:1', '2000k', '-g:v:1', '30', '-keyint_min:v:1', '30', '-sc_threshold:v:1', '0',
-        '-map', '0:a?', '-c:a:1', 'aac', '-b:a:1', '96k',
+        '-map', '0:a?',
+        '-c:a:0', 'aac',
+        '-b:a:0', '128k',
 
         '-f', 'hls',
         '-hls_time', '1',
@@ -331,11 +336,11 @@ async function startFfmpegLive() {
         '-hls_flags', 'delete_segments+omit_endlist+independent_segments',
         '-hls_segment_type', 'mpegts',
         '-master_pl_name', 'master.m3u8',
-        '-var_stream_map', 'v:0,a:0,name:720p v:1,a:1,name:480p',
+        '-var_stream_map', 'v:0,a:0,name:720p',
         path.join(liveDir, 'stream_%v.m3u8')
     ];
 
-    console.log('⚡ Spawning Dual-Quality Live Generator...');
+    console.log('⚡ Spawning Single 720p Stream Live Generator...');
     ffmpegLiveProcess = spawn('ffmpeg', args);
 
     if (SFTP_ENABLED) {
@@ -362,7 +367,7 @@ async function startFfmpegLive() {
                     const speedMatch = msg.match(/speed=\s*([\d.x]+)/);
                     const fps = fpsMatch ? fpsMatch[1] : 'N/A';
                     const speed = speedMatch ? speedMatch[1] : '1.0x';
-                    console.log(`[FFmpeg Speed] [720p & 480p] Speed: ${speed} | FPS: ${fps}`);
+                    console.log(`[720p Stream] Speed: ${speed} | FPS: ${fps}`);
                 }
             } else if (msg.includes('Error') || msg.includes('Invalid') || msg.includes('Unrecognized')) {
                 console.error('[FFmpeg Error]:', msg);
