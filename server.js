@@ -343,7 +343,7 @@ async function startFfmpegLive() {
 
         // Multi-resolution filter graph (1080p, 720p, 480p) + Robust Audio Resampler Split
         '-filter_complex',
-        '[0:v]fps=30,split=3[v1080in][v720in][v480in];' +
+        '[0:v]fps=30,format=yuv420p,split=3[v1080in][v720in][v480in];' +
         '[v1080in]copy[v1080out];' +
         '[v720in]scale=1280:720[v720out];' +
         '[v480in]scale=854:480[v480out];' +
@@ -360,7 +360,6 @@ async function startFfmpegLive() {
         '-maxrate:v:0', '7000k',
         '-bufsize:v:0', '12000k',
         '-g:v:0', '30',
-        '-keyint_min:v:0', '30',
         '-sc_threshold:v:0', '0',
         '-x264-params:v:0', 'no-scenecut=1:open-gop=0:keyint=30:min-keyint=30',
         '-map', '[a1080]',
@@ -378,7 +377,6 @@ async function startFfmpegLive() {
         '-maxrate:v:1', '4800k',
         '-bufsize:v:1', '8000k',
         '-g:v:1', '30',
-        '-keyint_min:v:1', '30',
         '-sc_threshold:v:1', '0',
         '-x264-params:v:1', 'no-scenecut=1:open-gop=0:keyint=30:min-keyint=30',
         '-map', '[a720]',
@@ -396,7 +394,6 @@ async function startFfmpegLive() {
         '-maxrate:v:2', '1800k',
         '-bufsize:v:2', '3000k',
         '-g:v:2', '30',
-        '-keyint_min:v:2', '30',
         '-sc_threshold:v:2', '0',
         '-x264-params:v:2', 'no-scenecut=1:open-gop=0:keyint=30:min-keyint=30',
         '-map', '[a480]',
@@ -432,19 +429,23 @@ async function startFfmpegLive() {
     if (ffmpegLiveProcess.stderr) {
         let lastLoggedTime = 0;
         ffmpegLiveProcess.stderr.on('data', (data) => {
-            const msg = data.toString().trim();
-            if (msg.includes('fps=') || msg.includes('speed=')) {
-                const now = Date.now();
-                if (now - lastLoggedTime > 1500) {
-                    lastLoggedTime = now;
-                    const fpsMatch = msg.match(/fps=\s*([\d.]+)/);
-                    const speedMatch = msg.match(/speed=\s*([\d.x]+)/);
-                    const fps = fpsMatch ? parseFloat(fpsMatch[1]).toFixed(1) : '30.0';
-                    const speed = speedMatch ? speedMatch[1] : '1.0x';
-                    console.log(`[Multi-Stream] Speed: ${speed} | FPS: ${fps}`);
+            const lines = data.toString().split(/\r?\n/);
+            for (const line of lines) {
+                const msg = line.trim();
+                if (!msg) continue;
+                if (msg.includes('fps=') || msg.includes('speed=')) {
+                    const now = Date.now();
+                    if (now - lastLoggedTime > 1500) {
+                        lastLoggedTime = now;
+                        const fpsMatch = msg.match(/fps=\s*([\d.]+)/);
+                        const speedMatch = msg.match(/speed=\s*([\d.x]+)/);
+                        const fps = fpsMatch ? parseFloat(fpsMatch[1]).toFixed(1) : '30.0';
+                        const speed = speedMatch ? speedMatch[1] : '1.0x';
+                        console.log(`[Multi-Stream] Speed: ${speed} | FPS: ${fps}`);
+                    }
+                } else {
+                    console.error('[FFmpeg]:', msg);
                 }
-            } else {
-                console.error('[FFmpeg]:', msg);
             }
         });
     }
