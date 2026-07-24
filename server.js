@@ -110,7 +110,7 @@ async function ensureSftpConnected() {
 
 async function disconnectSftp() {
     if (sftp) {
-        try { await sftp.end(); } catch (e) {}
+        try { await sftp.end(); } catch (e) { }
         sftp = null;
         sftpConnected = false;
     }
@@ -129,7 +129,7 @@ async function cleanSftpFolder() {
                 if (file.name.endsWith('.ts') || file.name.endsWith('.m3u8')) {
                     try {
                         await sftp.delete(`${SFTP_BASE_PATH}/${file.name}`);
-                    } catch (e) {}
+                    } catch (e) { }
                 }
             }
         } else {
@@ -182,7 +182,7 @@ function queueSftpUpload(filename) {
                 const data = fs.readFileSync(localPath);
                 await sftp.put(Buffer.from(data), remotePath);
             } else {
-                try { await sftp.delete(remotePath); } catch (e) {}
+                try { await sftp.delete(remotePath); } catch (e) { }
             }
         } catch (err) {
             if (err.message && err.message.includes('No SFTP')) {
@@ -286,7 +286,7 @@ function clearLiveFolder() {
     if (fs.existsSync(liveDir)) {
         const files = fs.readdirSync(liveDir);
         for (const file of files) {
-            try { fs.unlinkSync(path.join(liveDir, file)); } catch (err) {}
+            try { fs.unlinkSync(path.join(liveDir, file)); } catch (err) { }
         }
     }
 }
@@ -296,11 +296,11 @@ function stopFfmpegLive() {
         try {
             if (ffmpegLiveProcess.stdin) {
                 ffmpegLiveProcess.stdin.removeAllListeners('error');
-                ffmpegLiveProcess.stdin.on('error', () => {});
+                ffmpegLiveProcess.stdin.on('error', () => { });
                 ffmpegLiveProcess.stdin.end();
             }
             ffmpegLiveProcess.kill('SIGKILL');
-        } catch (err) {}
+        } catch (err) { }
         ffmpegLiveProcess = null;
     }
 }
@@ -365,7 +365,7 @@ async function startFfmpegLive() {
 
     if (ffmpegLiveProcess.stdin) {
         ffmpegLiveProcess.stdin.on('error', (err) => {
-            if (err.code !== 'EPIPE' && err.code !== 'EOF') {}
+            if (err.code !== 'EPIPE' && err.code !== 'EOF') { }
         });
     }
 
@@ -458,14 +458,16 @@ app.post('/stop-stream', async (req, res) => {
 
 app.post('/stream', (req, res) => {
     req.on('aborted', () => {});
-    try {
-        const chunkIndex = parseInt(req.headers['x-chunk-index'] || '0');
-        if (ffmpegLiveProcess && ffmpegLiveProcess.stdin && ffmpegLiveProcess.stdin.writable) {
-            try { ffmpegLiveProcess.stdin.write(req.body); } catch (e) {}
-        }
-        res.json({ success: true, chunkIndex });
-    } catch (err) {
-        res.status(500).json({ success: false, error: err.message });
+    const chunkIndex = parseInt(req.headers['x-chunk-index'] || '0');
+
+    // Respond IMMEDIATELY to release Chrome's HTTP socket connection instantly (< 1ms)
+    res.status(200).json({ success: true, chunkIndex });
+
+    // Write binary chunk asynchronously to FFmpeg stdin without blocking HTTP socket
+    if (ffmpegLiveProcess && ffmpegLiveProcess.stdin && ffmpegLiveProcess.stdin.writable) {
+        try {
+            ffmpegLiveProcess.stdin.write(req.body);
+        } catch (e) {}
     }
 });
 
