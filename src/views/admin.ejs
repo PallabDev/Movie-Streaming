@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title><%= title %> - CoWatch</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📺</text></svg>">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: 'Inter', sans-serif; background: #0a0a0a; color: #e4e4e7; min-height: 100vh; }
+    .page { max-width: 1200px; margin: 0 auto; padding: 32px 24px; }
+    .header { margin-bottom: 32px; }
+    .header h1 { font-size: 28px; font-weight: 700; margin-bottom: 4px; }
+    .header p { color: #71717a; font-size: 14px; }
+    .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 32px; }
+    .stat-card { background: #111; border: 1px solid #222; border-radius: 10px; padding: 20px; }
+    .stat-card .label { font-size: 12px; color: #71717a; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; }
+    .stat-card .value { font-size: 24px; font-weight: 700; }
+    .stat-card .value.green { color: #22c55e; }
+    .stat-card .value.blue { color: #3b82f6; }
+    .card { background: #111; border: 1px solid #222; border-radius: 10px; padding: 24px; margin-bottom: 24px; }
+    .card h2 { font-size: 16px; margin-bottom: 16px; }
+    .btn { padding: 6px 12px; border: none; border-radius: 6px; font-size: 12px; font-weight: 500; cursor: pointer; }
+    .btn-primary { background: #3b82f6; color: #fff; }
+    .btn-primary:hover { background: #2563eb; }
+    .btn-danger { background: #7f1d1d; color: #fca5a5; }
+    .btn-success { background: #14532d; color: #4ade80; }
+    .btn-outline { background: transparent; border: 1px solid #27272a; color: #a1a1aa; }
+    .btn-outline:hover { border-color: #52525b; }
+    .btn-sm { padding: 3px 8px; font-size: 11px; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { padding: 8px 10px; text-align: left; border-bottom: 1px solid #222; font-size: 13px; }
+    th { color: #71717a; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; }
+    .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; }
+    .badge-admin { background: #1e1b4b; color: #a5b4fc; }
+    .badge-user { background: #18181b; color: #71717a; }
+    .badge-granted { background: #14532d; color: #4ade80; }
+    .badge-denied { background: #1c1917; color: #fca5a5; }
+    .badge-active { background: #14532d; color: #4ade80; }
+    .badge-ended { background: #1c1917; color: #78716c; }
+    .flex { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+    .input { padding: 6px 10px; background: #18181b; border: 1px solid #27272a; border-radius: 6px; color: #fff; font-size: 12px; outline: none; width: 60px; }
+    .input:focus { border-color: #3b82f6; }
+  </style>
+</head>
+<body>
+  <%- include('partials/nav') %>
+  <div class="page">
+    <div class="header">
+      <h1>Admin Panel</h1>
+      <p>Manage users and monitor platform activity.</p>
+    </div>
+
+    <div class="stats">
+      <div class="stat-card"><div class="label">Total Users</div><div class="value blue"><%= stats.totalUsers %></div></div>
+      <div class="stat-card"><div class="label">Total Streams</div><div class="value"><%= stats.totalStreams %></div></div>
+      <div class="stat-card"><div class="label">Total Hours</div><div class="value green"><%= stats.totalHours %>h</div></div>
+      <div class="stat-card"><div class="label">Active Streams</div><div class="value"><%= stats.activeStreams %></div></div>
+    </div>
+
+    <div class="card">
+      <h2>Users</h2>
+      <table>
+        <thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Access</th><th>Streams</th><th>Limit</th><th>Actions</th></tr></thead>
+        <tbody>
+          <% allUsers.forEach(u => { %>
+            <tr>
+              <td><strong><%= u.name %></strong></td>
+              <td><%= u.email %></td>
+              <td><span class="badge badge-<%= u.role %>"><%= u.role %></span></td>
+              <td><span class="badge badge-<%= u.hasAccess ? 'granted' : 'denied' %>"><%= u.hasAccess ? 'Granted' : 'Denied' %></span></td>
+              <td><%= u.streamsUsed %></td>
+              <td><input class="input" type="number" value="<%= u.streamLimit %>" min="1" onchange="updateLimit('<%= u.id %>', this.value)"></td>
+              <td>
+                <div class="flex">
+                  <% if (u.id !== user.id) { %>
+                    <% if (u.hasAccess) { %>
+                      <button class="btn btn-danger btn-sm" onclick="revoke('<%= u.id %>')">Revoke</button>
+                    <% } else { %>
+                      <button class="btn btn-success btn-sm" onclick="grant('<%= u.id %>')">Grant</button>
+                    <% } %>
+                    <button class="btn btn-outline btn-sm" onclick="toggleRole('<%= u.id %>')"><%= u.role === 'admin' ? 'Demote' : 'Promote' %></button>
+                    <button class="btn btn-outline btn-sm" onclick="resetStreams('<%= u.id %>')">Reset</button>
+                    <button class="btn btn-danger btn-sm" onclick="deleteUser('<%= u.id %>')">Del</button>
+                  <% } else { %>
+                    <span style="color:#52525b;font-size:11px">You</span>
+                  <% } %>
+                </div>
+              </td>
+            </tr>
+          <% }) %>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <h2>Recent Streams</h2>
+      <% if (recentStreams.length === 0) { %>
+        <p style="color:#52525b;text-align:center;padding:20px;font-size:14px">No streams yet.</p>
+      <% } else { %>
+        <table>
+          <thead><tr><th>Title</th><th>User</th><th>Status</th><th>Duration</th><th>Created</th></tr></thead>
+          <tbody>
+            <% recentStreams.forEach(s => { %>
+              <tr>
+                <td><%= s.title %></td>
+                <td><%= s.userName %> (<%= s.userEmail %>)</td>
+                <td><span class="badge badge-<%= s.status %>"><%= s.status %></span></td>
+                <td><%= s.duration ? Math.floor(s.duration / 60) + 'm ' + (s.duration % 60) + 's' : '-' %></td>
+                <td><%= new Date(s.createdAt).toLocaleDateString() %></td>
+              </tr>
+            <% }) %>
+          </tbody>
+        </table>
+      <% } %>
+    </div>
+  </div>
+
+  <%- include('partials/toast') %>
+  <script>
+    async function api(url, body) {
+      try {
+        const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+        const data = await res.json();
+        if (data.success) { showToast('Done', 'success'); setTimeout(() => location.reload(), 500); }
+        else showToast(data.message || 'Failed', 'error');
+      } catch (e) { showToast('Network error', 'error'); }
+    }
+    function grant(id) { api('/admin/user/' + id + '/grant'); }
+    function revoke(id) { api('/admin/user/' + id + '/revoke'); }
+    function toggleRole(id) { api('/admin/user/' + id + '/role'); }
+    function resetStreams(id) { api('/admin/user/' + id + '/reset'); }
+    function updateLimit(id, limit) { api('/admin/user/' + id + '/limit', { limit }); }
+    async function deleteUser(id) {
+      if (!confirm('Delete this user permanently?')) return;
+      api('/admin/user/' + id + '/delete');
+    }
+  </script>
+</body>
+</html>

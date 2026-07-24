@@ -1,22 +1,18 @@
 FROM node:20-slim
 
-# Install FFmpeg and clean up apt cache
-RUN apt-get update && apt-get install -y ffmpeg && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && \
+    apt-get install -y ffmpeg && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# Copy dependency definition
 COPY package*.json ./
+RUN npm install
 
-# Install production dependencies
-RUN npm install --production
-
-# Copy application files
 COPY . .
 
-# Expose port
-EXPOSE 5992
+RUN mkdir -p /app/public/live
 
-ENV PORT=5992
+EXPOSE 3000
 
-CMD ["node", "server.js"]
+CMD ["npm", "start"]

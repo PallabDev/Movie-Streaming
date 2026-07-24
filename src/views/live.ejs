@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title><%= title %> - CoWatch</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📺</text></svg>">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@1"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: 'Inter', sans-serif; background: #0a0a0a; color: #e4e4e7; min-height: 100vh; }
+    .page { max-width: 1000px; margin: 0 auto; padding: 32px 24px; }
+    .header { margin-bottom: 24px; }
+    .header h1 { font-size: 24px; font-weight: 700; }
+    .header p { color: #71717a; font-size: 14px; margin-top: 4px; }
+    #video-container { width: 100%; aspect-ratio: 16/9; background: #000; border-radius: 10px; overflow: hidden; margin-bottom: 16px; }
+    #video-container video { width: 100%; height: 100%; object-fit: contain; }
+    .controls { display: flex; align-items: center; gap: 12px; margin-bottom: 20px; }
+    .btn { padding: 8px 16px; border: none; border-radius: 6px; font-size: 13px; font-weight: 500; cursor: pointer; background: #27272a; color: #e4e4e7; }
+    .btn:hover { background: #3f3f46; }
+    .btn.active { background: #3b82f6; color: #fff; }
+    .status { display: flex; align-items: center; gap: 8px; font-size: 13px; color: #71717a; }
+    .dot { width: 8px; height: 8px; border-radius: 50%; background: #52525b; }
+    .dot.live { background: #22c55e; box-shadow: 0 0 8px #22c55e; animation: pulse 2s infinite; }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.5} }
+    .offline { display: flex; align-items: center; justify-content: center; height: 100%; color: #52525b; font-size: 16px; }
+    .viewer-count { font-size: 13px; color: #a1a1aa; margin-left: auto; }
+    .viewer-count span { color: #fff; font-weight: 600; }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <div class="header">
+      <h1><%= stream.title %></h1>
+      <div class="status">
+        <div class="dot" id="status-dot"></div>
+        <span id="status-text">Connecting...</span>
+        <div class="viewer-count" id="viewer-count" style="display:none">
+          <span id="viewer-num">0</span> watching
+        </div>
+      </div>
+    </div>
+
+    <div id="video-container">
+      <div class="offline" id="offline-msg">Stream is offline</div>
+      <video id="video-player" controls autoplay muted style="display:none"></video>
+    </div>
+
+    <div class="controls">
+      <button class="btn active" id="btn-1080p" onclick="switchQuality('1080p')">1080p</button>
+      <button class="btn" id="btn-720p" onclick="switchQuality('720p')">720p</button>
+      <button class="btn" id="btn-480p" onclick="switchQuality('480p')">480p</button>
+    </div>
+  </div>
+
+  <script>
+    const hlsBaseUrl = '<%= hlsBaseUrl %>';
+    const streamKey = '<%= stream.streamKey %>';
+    let hls = null;
+    let currentQuality = '1080p';
+
+    const video = document.getElementById('video-player');
+    const offlineMsg = document.getElementById('offline-msg');
+    const statusDot = document.getElementById('status-dot');
+    const statusText = document.getElementById('status-text');
+    const viewerCount = document.getElementById('viewer-count');
+    const viewerNum = document.getElementById('viewer-num');
+
+    function checkLive() {
+      fetch(hlsBaseUrl + '/master.m3u8', { cache: 'no-store' })
+        .then(r => { if (r.ok) startPlayback(); else waitForLive(); })
+        .catch(() => waitForLive());
+    }
+
+    function waitForLive() {
+      statusText.textContent = 'Waiting for stream...';
+      const poll = setInterval(() => {
+        fetch(hlsBaseUrl + '/master.m3u8', { cache: 'no-store' })
+          .then(r => { if (r.ok) { clearInterval(poll); startPlayback(); } })
+          .catch(() => {});
+      }, 5000);
+    }
+
+    function startPlayback() {
+      statusDot.classList.add('live');
+      statusText.textContent = 'Live';
+      offlineMsg.style.display = 'none';
+      video.style.display = 'block';
+      viewerCount.style.display = 'block';
+
+      if (video.canPlayType('application/vnd.apple.mpegurl')) {
+        video.src = hlsBaseUrl + '/stream_1080p.m3u8';
+      } else if (Hls.isSupported()) {
+        hls = new Hls({ maxBufferLength: 4, startLevel: -1 });
+        hls.loadSource(hlsBaseUrl + '/master.m3u8');
+        hls.attachMedia(video);
+        hls.on(Hls.Events.MANIFEST_PARSED, () => { video.play().catch(() => {}); });
+      }
+    }
+
+    function switchQuality(q) {
+      currentQuality = q;
+      document.querySelectorAll('.controls .btn').forEach(b => b.classList.remove('active'));
+      document.getElementById('btn-' + q).classList.add('active');
+      if (!hls) return;
+      const idx = hls.levels.findIndex(l => l.height && l.height.toString().startsWith(q.replace('p','')));
+      if (idx !== -1) hls.currentLevel = idx;
+    }
+
+    // Viewer count
+    const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+    const vws = new WebSocket(`${proto}://${location.host}/status-ws`);
+    vws.onmessage = (e) => {
+      try {
+        const msg = JSON.parse(e.data);
+        if (msg.type === 'VIEWER_COUNT') { viewerNum.textContent = msg.count; }
+      } catch(err) {}
+    };
+
+    checkLive();
+  </script>
+</body>
+</html>

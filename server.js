@@ -4,14 +4,17 @@ import http from 'http';
 import path from 'path';
 import fs from 'fs';
 import os from 'os';
+import session from 'express-session';
+import pgSimple from 'connect-pg-simple';
 import { fileURLToPath } from 'url';
 import { spawn } from 'child_process';
 import { WebSocketServer } from 'ws';
-import SftpClient from 'ssh2-sftp-client';
-import { EventEmitter } from 'events';
-
-// Increase default max listeners to prevent SFTP event listener warnings
-EventEmitter.defaultMaxListeners = 50;
+import { pool } from './src/db/index.js';
+import { injectUser } from './src/middleware/auth.js';
+import authRoutes from './src/routes/auth.js';
+import dashboardRoutes from './src/routes/dashboard.js';
+import adminRoutes from './src/routes/admin.js';
+import streamRoutes from './src/routes/stream.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -24,15 +27,6 @@ const NODE_ENV = process.env.NODE_ENV || 'development';
 const APP_URL = process.env.APP_URL || `http://localhost:${PORT}`;
 const IS_PROD = NODE_ENV === 'production';
 
-// SFTP CDN Configuration
-const SFTP_HOST = process.env.SFTP_HOST;
-const SFTP_PORT = parseInt(process.env.SFTP_PORT || '22');
-const SFTP_USER = process.env.SFTP_USER;
-const SFTP_PASSWORD = process.env.SFTP_PASSWORD;
-const SFTP_BASE_PATH = process.env.SFTP_BASE_PATH;
-const HLS_CDN_URL = process.env.HLS_CDN_URL || '';
-const SFTP_ENABLED = !!(SFTP_HOST && SFTP_USER && SFTP_PASSWORD && SFTP_BASE_PATH);
-
 // Directories setup
 const liveDir = path.join(__dirname, 'public', 'live');
 
@@ -42,9 +36,32 @@ if (!fs.existsSync(liveDir)) {
 
 // Configure EJS view engine
 app.set('view engine', 'ejs');
-app.set('views', path.join(__dirname, 'views'));
+app.set('views', path.join(__dirname, 'src', 'views'));
 
-// CORS Middleware for Express server (Allows cross-domain playback from anywhere)
+// Session middleware
+const PgSession = pgSimple(session);
+app.use(session({
+    store: new PgSession({ pool, tableName: 'sessions' }),
+    secret: process.env.SESSION_SECRET || 'cowatch-dev-secret',
+    resave: false,
+    saveUninitialized: false,
+    cookie: { maxAge: 7 * 24 * 60 * 60 * 1000, secure: IS_PROD, sameSite: 'lax' },
+}));
+
+// Make APP_URL available to all views
+app.use((req, res, next) => {
+    res.locals.APP_URL = APP_URL;
+    next();
+});
+
+// Auth middleware - inject user into all views
+app.use(injectUser);
+
+// Body parsing
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+// CORS Middleware
 app.use((req, res, next) => {
     res.header('Access-Control-Allow-Origin', '*');
     res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, HEAD');
@@ -55,173 +72,31 @@ app.use((req, res, next) => {
     next();
 });
 
-// File-based HLS Playlist Delivery with Keep-Alive headers
+// Static files + HLS segments served via Caddy reverse proxy
 app.use(express.static(path.join(__dirname, 'public')));
 app.use('/live', express.static(liveDir, {
-    maxAge: '1h',
-    setHeaders: (res) => {
+    setHeaders: (res, filePath) => {
         res.setHeader('Access-Control-Allow-Origin', '*');
         res.setHeader('Connection', 'keep-alive');
         res.setHeader('Keep-Alive', 'timeout=120, max=2000');
+
+        if (filePath.endsWith('.m3u8')) {
+            res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate, max-age=0');
+            res.setHeader('Pragma', 'no-cache');
+            res.setHeader('Expires', '0');
+        } else {
+            res.setHeader('Cache-Control', 'public, max-age=3600');
+        }
     }
 }));
 
 // Middleware for parsing raw video/binary stream data up to 100MB per chunk
 app.use('/stream', express.raw({ type: '*/*', limit: '100mb' }));
-app.use(express.json());
 
-// Live Status & Cleanups
+// Live Status
 let isLiveStreamActive = false;
 let cleanupTimer = null;
 let cpuMonitorInterval = null;
-const CLEANUP_DELAY_MS = 10 * 60 * 1000;
-
-// ─── SFTP CDN Sync Manager ─────────────────────────────────────────────────────
-let sftp = null;
-let sftpConnected = false;
-let sftpWatcher = null;
-const uploadQueue = new Map();
-
-async function ensureSftpConnected() {
-    if (sftpConnected && sftp) return true;
-    try {
-        sftp = new SftpClient();
-        if (sftp.client) {
-            sftp.client.setMaxListeners(100);
-        }
-        await sftp.connect({
-            host: SFTP_HOST,
-            port: SFTP_PORT,
-            username: SFTP_USER,
-            password: SFTP_PASSWORD,
-            readyTimeout: 10000,
-            retries: 3
-        });
-        sftpConnected = true;
-        console.log(`📡 SFTP connected to ${SFTP_HOST}:${SFTP_PORT}`);
-        return true;
-    } catch (err) {
-        console.warn(`[SFTP] Connection failed: ${err.message}`);
-        sftpConnected = false;
-        sftp = null;
-        return false;
-    }
-}
-
-async function disconnectSftp() {
-    if (sftp) {
-        try { await sftp.end(); } catch (e) { }
-        sftp = null;
-        sftpConnected = false;
-    }
-}
-
-async function cleanSftpFolder() {
-    if (!SFTP_ENABLED) return;
-    try {
-        const connected = await ensureSftpConnected();
-        if (!connected) return;
-
-        const exists = await sftp.exists(SFTP_BASE_PATH);
-        if (exists) {
-            const files = await sftp.list(SFTP_BASE_PATH);
-            for (const file of files) {
-                if (file.name.endsWith('.ts') || file.name.endsWith('.m3u8')) {
-                    try {
-                        await sftp.delete(`${SFTP_BASE_PATH}/${file.name}`);
-                    } catch (e) { }
-                }
-            }
-        } else {
-            await sftp.mkdir(SFTP_BASE_PATH, true);
-        }
-
-        // Upload .htaccess with robust CORS 'always set' headers for Hostinger CDN
-        const htaccess = `# Allow all origins for HLS video streaming
-<IfModule mod_headers.c>
-    Header always set Access-Control-Allow-Origin "*"
-    Header always set Access-Control-Allow-Methods "GET, HEAD, OPTIONS"
-    Header always set Access-Control-Allow-Headers "Range, Origin, Content-Type, Accept"
-    Header always set Access-Control-Expose-Headers "Content-Length, Content-Range"
-</IfModule>
-
-# Correct MIME types for HLS
-<IfModule mod_mime.c>
-    AddType application/vnd.apple.mpegurl .m3u8
-    AddType video/mp2t .ts
-</IfModule>
-`;
-        await sftp.put(Buffer.from(htaccess), `${SFTP_BASE_PATH}/.htaccess`);
-        console.log('🧹 SFTP CDN folder cleaned + .htaccess CORS (Header always set) uploaded');
-    } catch (err) {
-        console.warn('[SFTP] Clean folder error:', err.message);
-    }
-}
-
-function queueSftpUpload(filename) {
-    if (!SFTP_ENABLED) return;
-    if (filename.endsWith('.tmp')) return;
-
-    if (uploadQueue.has(filename)) {
-        clearTimeout(uploadQueue.get(filename));
-    }
-
-    // Delay .m3u8 upload by 80ms to guarantee .ts segment files arrive on Hostinger CDN first
-    const delay = filename.endsWith('.m3u8') ? 80 : 10;
-
-    uploadQueue.set(filename, setTimeout(async () => {
-        uploadQueue.delete(filename);
-        const localPath = path.join(liveDir, filename);
-        const remotePath = `${SFTP_BASE_PATH}/${filename}`;
-
-        try {
-            const connected = await ensureSftpConnected();
-            if (!connected) return;
-
-            if (fs.existsSync(localPath)) {
-                const data = fs.readFileSync(localPath);
-                await sftp.put(Buffer.from(data), remotePath);
-            } else {
-                try { await sftp.delete(remotePath); } catch (e) { }
-            }
-        } catch (err) {
-            if (err.message && err.message.includes('No SFTP')) {
-                sftpConnected = false;
-                sftp = null;
-            }
-            console.warn(`[SFTP] Sync error (${filename}): ${err.message}`);
-        }
-    }, 50));
-}
-
-function startSftpWatcher() {
-    if (!SFTP_ENABLED) return;
-    if (sftpWatcher) { sftpWatcher.close(); sftpWatcher = null; }
-
-    sftpWatcher = fs.watch(liveDir, (eventType, filename) => {
-        if (!filename) return;
-        if (filename.endsWith('.ts') || filename.endsWith('.m3u8')) {
-            queueSftpUpload(filename);
-        }
-    });
-
-    sftpWatcher.on('error', (err) => {
-        console.warn('[SFTP Watcher] Error:', err.message);
-    });
-
-    console.log('👁️ SFTP file watcher started on liveDir');
-}
-
-function stopSftpWatcher() {
-    if (sftpWatcher) {
-        sftpWatcher.close();
-        sftpWatcher = null;
-    }
-    for (const timer of uploadQueue.values()) {
-        clearTimeout(timer);
-    }
-    uploadQueue.clear();
-}
 
 // ─── CPU Usage Monitor (Production Only) ────────────────────────────────────────
 let prevCpuTimes = null;
@@ -264,7 +139,24 @@ function stopCpuMonitor() {
 }
 
 // ─── WebSocket Servers (Status & High-Speed Stream Ingest) ─────────────────────
-const wss = new WebSocketServer({ server, path: '/status-ws' });
+const wss = new WebSocketServer({ noServer: true });
+const streamWss = new WebSocketServer({ noServer: true });
+
+server.on('upgrade', (request, socket, head) => {
+    const pathname = request.url;
+
+    if (pathname === '/status-ws') {
+        wss.handleUpgrade(request, socket, head, (ws) => {
+            wss.emit('connection', ws, request);
+        });
+    } else if (pathname === '/stream-ws') {
+        streamWss.handleUpgrade(request, socket, head, (ws) => {
+            streamWss.emit('connection', ws, request);
+        });
+    } else {
+        socket.destroy();
+    }
+});
 
 wss.on('connection', (ws) => {
     ws.send(JSON.stringify({ type: 'STATUS', live: isLiveStreamActive }));
@@ -279,15 +171,12 @@ function broadcastStatus(liveState) {
     }
 }
 
-// Ultra-low latency binary WebSocket stream ingest
-const streamWss = new WebSocketServer({ server, path: '/stream-ws' });
-
 streamWss.on('connection', (ws) => {
     ws.on('message', (data) => {
         if (ffmpegLiveProcess && ffmpegLiveProcess.stdin && ffmpegLiveProcess.stdin.writable) {
             try {
                 ffmpegLiveProcess.stdin.write(data);
-            } catch (e) {}
+            } catch (e) { }
         }
     });
     ws.on('error', (err) => console.warn('[Stream WS Error]:', err.message));
@@ -319,16 +208,11 @@ function stopFfmpegLive() {
     }
 }
 
-// Start Single 720p Stream Generator (Discards corrupt frames & linearizes DTS timestamps)
 async function startFfmpegLive() {
     if (cleanupTimer) { clearTimeout(cleanupTimer); cleanupTimer = null; }
 
     stopFfmpegLive();
     clearLiveFolder();
-
-    if (SFTP_ENABLED) {
-        await cleanSftpFolder();
-    }
 
     const args = [
         '-y',
@@ -338,85 +222,88 @@ async function startFfmpegLive() {
         '-analyzeduration', '0',
         '-i', 'pipe:0',
 
-        // Multi-resolution filter graph (1080p, 720p, 480p) + Audio Resampler Split
+        // Multi-resolution filter graph (1080p, 720p, 480p)
         '-filter_complex',
         '[0:v]fps=30,split=3[v1080in][v720in][v480in];' +
         '[v1080in]copy[v1080out];' +
         '[v720in]scale=1280:720[v720out];' +
-        '[v480in]scale=854:480[v480out];' +
-        '[0:a?]aresample=async=1000:first_pts=0,asplit=3[a1080][a720][a480]',
+        '[v480in]scale=854:480:force_original_aspect_ratio=decrease,scale=trunc(iw/2)*2:trunc(ih/2)*2[v480out];' +
+        '[0:a]aformat=sample_rates=48000:channel_layouts=stereo,aresample=async=1:min_comp=0.001:comp_duration=1,asplit=3[a1080][a720][a480]',
 
-        // 1080p Rendition (6.0 Mbps High Quality)
+        // 1080p (CRF 15, 14Mbps)
         '-map', '[v1080out]',
         '-c:v:0', 'libx264',
         '-threads:v:0', '2',
-        '-preset', 'ultrafast',
+        '-preset', 'superfast',
         '-tune', 'zerolatency',
         '-profile:v:0', 'high',
-        '-b:v:0', '6000k',
-        '-maxrate:v:0', '7000k',
-        '-bufsize:v:0', '12000k',
+        '-crf:v:0', '15',
+        '-b:v:0', '14000k',
+        '-maxrate:v:0', '16000k',
+        '-bufsize:v:0', '24000k',
         '-g:v:0', '30',
         '-keyint_min:v:0', '30',
         '-sc_threshold:v:0', '0',
         '-x264-params:v:0', 'no-scenecut=1:open-gop=0:keyint=30:min-keyint=30',
         '-map', '[a1080]',
         '-c:a:0', 'aac',
-        '-b:a:0', '192k',
+        '-b:a:0', '320k',
+        '-ar:a:0', '48000',
+        '-ac:a:0', '2',
 
-        // 720p Rendition (4.0 Mbps Medium Quality)
+        // 720p (6Mbps)
         '-map', '[v720out]',
         '-c:v:1', 'libx264',
         '-threads:v:1', '2',
         '-preset', 'ultrafast',
         '-tune', 'zerolatency',
         '-profile:v:1', 'main',
-        '-b:v:1', '4000k',
-        '-maxrate:v:1', '4800k',
-        '-bufsize:v:1', '8000k',
+        '-b:v:1', '6000k',
+        '-maxrate:v:1', '7000k',
+        '-bufsize:v:1', '12000k',
         '-g:v:1', '30',
         '-keyint_min:v:1', '30',
         '-sc_threshold:v:1', '0',
         '-x264-params:v:1', 'no-scenecut=1:open-gop=0:keyint=30:min-keyint=30',
         '-map', '[a720]',
         '-c:a:1', 'aac',
-        '-b:a:1', '128k',
+        '-b:a:1', '256k',
+        '-ar:a:1', '48000',
+        '-ac:a:1', '2',
 
-        // 480p Rendition (1.5 Mbps Mobile Quality)
+        // 480p (2.5Mbps)
         '-map', '[v480out]',
         '-c:v:2', 'libx264',
         '-threads:v:2', '2',
         '-preset', 'ultrafast',
         '-tune', 'zerolatency',
         '-profile:v:2', 'main',
-        '-b:v:2', '1500k',
-        '-maxrate:v:2', '1800k',
-        '-bufsize:v:2', '3000k',
+        '-b:v:2', '2500k',
+        '-maxrate:v:2', '3000k',
+        '-bufsize:v:2', '5000k',
         '-g:v:2', '30',
         '-keyint_min:v:2', '30',
         '-sc_threshold:v:2', '0',
         '-x264-params:v:2', 'no-scenecut=1:open-gop=0:keyint=30:min-keyint=30',
         '-map', '[a480]',
         '-c:a:2', 'aac',
-        '-b:a:2', '96k',
+        '-b:a:2', '192k',
+        '-ar:a:2', '48000',
+        '-ac:a:2', '2',
 
-        // HLS Packaging Config
+        // HLS fMP4
         '-f', 'hls',
-        '-hls_time', '1',
+        '-hls_time', '2',
         '-hls_list_size', '60',
-        '-hls_flags', 'delete_segments+omit_endlist+independent_segments',
-        '-hls_segment_type', 'mpegts',
+        '-hls_flags', 'delete_segments+omit_endlist+independent_segments+temp_file',
+        '-hls_segment_type', 'fmp4',
         '-master_pl_name', 'master.m3u8',
         '-var_stream_map', 'v:0,a:0,name:1080p v:1,a:1,name:720p v:2,a:2,name:480p',
         path.join(liveDir, 'stream_%v.m3u8')
     ];
 
-    console.log('⚡ Spawning Triple-Quality (1080p / 720p / 480p) Multi-Rendition Live Generator...');
+    console.log('Spawning Triple-Quality (1080p CRF 15 / 720p 6Mbps / 480p 2.5Mbps) Live Generator...');
     ffmpegLiveProcess = spawn('ffmpeg', args);
-
-    if (SFTP_ENABLED) {
-        startSftpWatcher();
-    }
 
     startCpuMonitor();
 
@@ -428,20 +315,36 @@ async function startFfmpegLive() {
 
     if (ffmpegLiveProcess.stderr) {
         let lastLoggedTime = 0;
+        let stderrBuffer = '';
         ffmpegLiveProcess.stderr.on('data', (data) => {
-            const msg = data.toString().trim();
-            if (msg.includes('fps=') || msg.includes('speed=')) {
-                const now = Date.now();
-                if (now - lastLoggedTime > 1500) {
-                    lastLoggedTime = now;
-                    const fpsMatch = msg.match(/fps=\s*([\d.]+)/);
-                    const speedMatch = msg.match(/speed=\s*([\d.x]+)/);
-                    const fps = fpsMatch ? parseFloat(fpsMatch[1]).toFixed(1) : '30.0';
-                    const speed = speedMatch ? speedMatch[1] : '1.0x';
-                    console.log(`[720p Stream] Speed: ${speed} | FPS: ${fps}`);
+            stderrBuffer += data.toString();
+            const lines = stderrBuffer.split(/\r?\n/);
+            stderrBuffer = lines.pop();
+
+            for (const line of lines) {
+                if (line.includes('fps=') || line.includes('speed=')) {
+                    const now = Date.now();
+                    if (now - lastLoggedTime > 2000) {
+                        lastLoggedTime = now;
+                        const fpsMatch = line.match(/fps=\s*([\d.]+)/);
+                        const speedMatch = line.match(/speed=\s*([\d.x]+)/);
+                        const bitrateMatch = line.match(/bitrate=\s*([\d.]+)kbits\/s/);
+                        const frameMatch = line.match(/frame=\s*(\d+)/);
+                        const timeMatch = line.match(/time=\s*(\d+:\d+:\d+\.\d+)/);
+                        const sizeMatch = line.match(/size=\s*(\d+)kB/);
+
+                        const realFps = fpsMatch ? fpsMatch[1] : 'N/A';
+                        const realSpeed = speedMatch ? speedMatch[1] : 'N/A';
+                        const actualBitrate = bitrateMatch ? (parseFloat(bitrateMatch[1]) / 1000).toFixed(1) : 'N/A';
+                        const frame = frameMatch ? frameMatch[1] : 'N/A';
+                        const time = timeMatch ? timeMatch[1] : 'N/A';
+                        const size = sizeMatch ? sizeMatch[1] : 'N/A';
+
+                        console.log(`[FFmpeg] FPS: ${realFps} | Speed: ${realSpeed}x | Bitrate: ${actualBitrate} Mbps | Frame: ${frame} | Time: ${time} | Size: ${size}kB`);
+                    }
+                } else if (line.includes('Error') || line.includes('Invalid') || line.includes('Unrecognized')) {
+                    console.error('[FFmpeg Error]:', line);
                 }
-            } else if (msg.includes('Error') || msg.includes('Invalid') || msg.includes('Unrecognized')) {
-                console.error('[FFmpeg Error]:', msg);
             }
         });
     }
@@ -455,21 +358,42 @@ async function startFfmpegLive() {
         if (code !== 0 && signal !== 'SIGKILL') console.log(`FFmpeg exited (code: ${code})`);
         ffmpegLiveProcess = null;
         stopCpuMonitor();
-        stopSftpWatcher();
     });
 }
 
 // ─── Routes ─────────────────────────────────────────────────────────────────────
 app.get('/', (req, res) => {
-    res.render('index', { title: 'Movie Streaming - Broadcaster Studio' });
+    res.render('index', { title: 'CoWatch - Broadcaster Studio', user: req.session?.user || null });
 });
 
+// MVC Routes
+app.use('/auth', authRoutes);
+app.use('/dashboard', dashboardRoutes);
+app.use('/admin', adminRoutes);
+app.use('/stream', streamRoutes);
+
+// Viewer live page (no auth required)
 app.get(['/live', '/live/'], (req, res) => {
-    const hlsBaseUrl = HLS_CDN_URL || '/live';
     res.render('live', {
-        stream: { title: 'Live Screen Stream', streamKey: 'live' },
-        hlsBaseUrl: hlsBaseUrl
+        stream: { title: 'Live Stream', streamKey: 'live' },
+        hlsBaseUrl: '/live',
+        user: req.session?.user || null,
     });
+});
+
+// Stream key viewer page
+app.get('/live/:key', async (req, res) => {
+    try {
+        const { db } = await import('./src/db/index.js');
+        const { streams } = await import('./src/db/schema.js');
+        const { eq } = await import('drizzle-orm');
+        const [stream] = await db.select().from(streams).where(eq(streams.streamKey, req.params.key));
+        if (!stream) return res.status(404).render('partials/404', { title: 'Stream Not Found', user: req.session?.user || null });
+        res.render('live', { stream, hlsBaseUrl: '/live', user: req.session?.user || null });
+    } catch (err) {
+        console.error('Live page error:', err);
+        res.status(500).send('Error loading stream');
+    }
 });
 
 app.get('/live/status', (req, res) => {
@@ -492,21 +416,13 @@ app.post('/stop-stream', async (req, res) => {
     try {
         broadcastStatus(false);
         stopCpuMonitor();
-        stopSftpWatcher();
-        console.log('🔴 Stream stopped. Segment cleanup scheduled in 10 minutes.');
+        if (cleanupTimer) { clearTimeout(cleanupTimer); cleanupTimer = null; }
 
-        if (cleanupTimer) clearTimeout(cleanupTimer);
-        cleanupTimer = setTimeout(async () => {
-            console.log('🧹 Purging HLS segment files (local + SFTP CDN)...');
-            stopFfmpegLive();
-            clearLiveFolder();
-            if (SFTP_ENABLED) {
-                await cleanSftpFolder();
-                await disconnectSftp();
-            }
-        }, CLEANUP_DELAY_MS);
+        console.log('Stream stopped. Purging HLS segment files...');
+        stopFfmpegLive();
+        clearLiveFolder();
 
-        res.json({ success: true, message: 'Stream stopped. Deletion scheduled in 10 minutes.' });
+        res.json({ success: true, message: 'Stream stopped and HLS cleaned.' });
     } catch (err) {
         console.error('Error stopping stream:', err);
         res.status(500).json({ success: false, error: err.message });
@@ -517,10 +433,8 @@ app.post('/stream', (req, res) => {
     req.on('aborted', () => { });
     const chunkIndex = parseInt(req.headers['x-chunk-index'] || '0');
 
-    // Respond IMMEDIATELY to release Chrome's HTTP socket connection instantly (< 1ms)
     res.status(200).json({ success: true, chunkIndex });
 
-    // Write binary chunk asynchronously to FFmpeg stdin without blocking HTTP socket
     if (ffmpegLiveProcess && ffmpegLiveProcess.stdin && ffmpegLiveProcess.stdin.writable) {
         try {
             ffmpegLiveProcess.stdin.write(req.body);
@@ -528,7 +442,7 @@ app.post('/stream', (req, res) => {
     }
 });
 
-// Global Express error handler to swallow raw-body BadRequestError on aborted chunk uploads
+// Global Express error handler
 app.use((err, req, res, next) => {
     if (err && (err.type === 'aborted' || err.status === 400)) {
         return res.status(400).json({ success: false, error: 'Request aborted' });
@@ -537,13 +451,9 @@ app.use((err, req, res, next) => {
 });
 
 server.listen(PORT, () => {
-    console.log(`🚀 Server running in [${NODE_ENV}] mode at ${APP_URL} (Port ${PORT})`);
+    console.log(`Server running in [${NODE_ENV}] mode at ${APP_URL} (Port ${PORT})`);
     if (IS_PROD) {
         const cpus = os.cpus();
-        console.log(`📊 VPS: ${cpus.length} cores (${cpus[0].model}) | ${(os.totalmem() / 1024 / 1024).toFixed(0)}MB RAM`);
-    }
-    if (SFTP_ENABLED) {
-        console.log(`📡 SFTP CDN: ${SFTP_HOST}:${SFTP_PORT} → ${HLS_CDN_URL}`);
-        console.log(`📁 SFTP CDN: Disabled (serving HLS locally from /live)`);
+        console.log(`VPS: ${cpus.length} cores (${cpus[0].model}) | ${(os.totalmem() / 1024 / 1024).toFixed(0)}MB RAM`);
     }
 });

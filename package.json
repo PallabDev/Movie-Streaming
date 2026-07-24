@@ -5,17 +5,31 @@
     "main": "server.js",
     "scripts": {
         "start": "node server.js",
-        "dev": "node --watch server.js"
+        "dev": "node --watch server.js",
+        "seed": "node src/db/seed.js",
+        "db:push": "drizzle-kit push",
+        "db:studio": "drizzle-kit studio"
     },
     "keywords": [],
     "author": "",
     "license": "ISC",
     "type": "module",
     "dependencies": {
+        "bcrypt": "^6.0.0",
+        "connect-pg-simple": "^10.0.0",
         "dotenv": "^16.4.7",
+        "drizzle-orm": "^0.45.2",
         "ejs": "^3.1.9",
         "express": "^5.2.1",
-        "ssh2-sftp-client": "^12.1.1",
+        "express-session": "^1.19.0",
+        "pg": "^8.22.0",
+        "uuid": "^14.0.1",
         "ws": "^8.18.0"
+    },
+    "devDependencies": {
+        "@types/bcrypt": "^6.0.0",
+        "@types/express-session": "^1.19.0",
+        "@types/pg": "^8.20.0",
+        "drizzle-kit": "^0.31.10"
     }
 }

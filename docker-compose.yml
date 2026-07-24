@@ -1,7 +1,22 @@
 services:
+  cowatch-v1-db:
+    image: postgres:16-alpine
+    container_name: cowatch-v1-db
+    restart: always
+    environment:
+      POSTGRES_USER: cowatch
+      POSTGRES_PASSWORD: cowatch_secret_2026
+      POSTGRES_DB: cowatch_v1
+    volumes:
+      - cowatch_v1_data:/var/lib/postgresql/data
+    ports:
+      - "5434:5432"
+    networks:
+      - caddy_net
+
   movie-streaming:
     build: .
-    container_name: movie-streaming
+    container_name: cowatch-v1
     restart: always
     env_file:
       - .env
@@ -9,11 +24,20 @@ services:
       - NODE_ENV=${NODE_ENV:-production}
       - PORT=${PORT:-5992}
       - APP_URL=${APP_URL:-https://watch.pallabdev.in}
+      - DATABASE_URL=postgresql://cowatch:cowatch_secret_2026@cowatch-v1-db:5432/cowatch_v1
+    depends_on:
+      cowatch-v1-db:
+        condition: service_healthy
+    volumes:
+      - ./public/live:/app/public/live
     labels:
       caddy: ${DOMAIN:-watch.pallabdev.in}
       caddy.reverse_proxy: "{{upstreams ${PORT:-5992}}}"
     networks:
       - caddy_net
+
+volumes:
+  cowatch_v1_data:
 
 networks:
   caddy_net:

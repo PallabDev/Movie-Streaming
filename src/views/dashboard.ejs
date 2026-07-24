@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title><%= title %> - CoWatch</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📺</text></svg>">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: 'Inter', sans-serif; background: #0a0a0a; color: #e4e4e7; min-height: 100vh; }
+    .page { max-width: 1200px; margin: 0 auto; padding: 32px 24px; }
+    .header { margin-bottom: 32px; }
+    .header h1 { font-size: 28px; font-weight: 700; margin-bottom: 4px; }
+    .header p { color: #71717a; font-size: 14px; }
+    .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 32px; }
+    .stat-card { background: #111; border: 1px solid #222; border-radius: 10px; padding: 20px; }
+    .stat-card .label { font-size: 12px; color: #71717a; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; }
+    .stat-card .value { font-size: 24px; font-weight: 700; }
+    .stat-card .value.green { color: #22c55e; }
+    .stat-card .value.blue { color: #3b82f6; }
+    .stat-card .value.yellow { color: #eab308; }
+    .card { background: #111; border: 1px solid #222; border-radius: 10px; padding: 24px; margin-bottom: 24px; }
+    .card h2 { font-size: 16px; margin-bottom: 16px; }
+    .btn { padding: 8px 16px; border: none; border-radius: 6px; font-size: 13px; font-weight: 500; cursor: pointer; }
+    .btn-primary { background: #3b82f6; color: #fff; }
+    .btn-primary:hover { background: #2563eb; }
+    .btn-danger { background: #7f1d1d; color: #fca5a5; }
+    .btn-danger:hover { background: #991b1b; }
+    .btn-sm { padding: 4px 10px; font-size: 12px; }
+    .input { padding: 10px 14px; background: #18181b; border: 1px solid #27272a; border-radius: 8px; color: #fff; font-size: 14px; outline: none; }
+    .input:focus { border-color: #3b82f6; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { padding: 10px 12px; text-align: left; border-bottom: 1px solid #222; font-size: 14px; }
+    th { color: #71717a; font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; }
+    .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; }
+    .badge-active { background: #14532d; color: #4ade80; }
+    .badge-ended { background: #1c1917; color: #78716c; }
+    .badge-idle { background: #1e1b4b; color: #a5b4fc; }
+    .flex { display: flex; align-items: center; gap: 8px; }
+    .mt-16 { margin-top: 16px; }
+    .empty { color: #52525b; text-align: center; padding: 40px; font-size: 14px; }
+  </style>
+</head>
+<body>
+  <%- include('partials/nav') %>
+  <div class="page">
+    <div class="header">
+      <h1>Dashboard</h1>
+      <p>Welcome back, <%= user.name %>. <%= user.streamsUsed %>/<%= user.streamLimit %> streams used this month.</p>
+    </div>
+
+    <div class="stats">
+      <div class="stat-card">
+        <div class="label">Streams Used</div>
+        <div class="value blue"><%= user.streamsUsed %>/<%= user.streamLimit %></div>
+      </div>
+      <div class="stat-card">
+        <div class="label">Active Stream</div>
+        <div class="value <%= activeStream ? 'green' : '' %>"><%= activeStream ? 'Live' : 'None' %></div>
+      </div>
+      <div class="stat-card">
+        <div class="label">Platform Status</div>
+        <div class="value <%= isSomeoneStreaming ? 'yellow' : 'green' %>"><%= isSomeoneStreaming ? 'Busy' : 'Available' %></div>
+      </div>
+    </div>
+
+    <% if (isSomeoneStreaming && !activeStream) { %>
+      <div style="background:#422006;border:1px solid #713f12;color:#fde68a;padding:16px;border-radius:8px;margin-bottom:24px;font-size:14px">
+        Someone else is currently streaming. You'll need to wait until they finish.
+      </div>
+    <% } %>
+
+    <div class="card">
+      <h2>Create Stream</h2>
+      <div class="flex">
+        <input type="text" class="input" id="stream-title" placeholder="Stream title..." style="flex:1" <%= isSomeoneStreaming && !activeStream ? 'disabled' : '' %>>
+        <button class="btn btn-primary" id="create-btn" onclick="createStream()" <%= isSomeoneStreaming && !activeStream ? 'disabled' : '' %>>Create</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>My Streams</h2>
+      <% if (userStreams.length === 0) { %>
+        <div class="empty">No streams yet. Create one above.</div>
+      <% } else { %>
+        <table>
+          <thead>
+            <tr><th>Title</th><th>Status</th><th>Duration</th><th>Created</th><th>Actions</th></tr>
+          </thead>
+          <tbody>
+            <% userStreams.forEach(s => { %>
+              <tr>
+                <td><%= s.title %></td>
+                <td><span class="badge badge-<%= s.status %>"><%= s.status %></span></td>
+                <td><%= s.duration ? Math.floor(s.duration / 60) + 'm ' + (s.duration % 60) + 's' : '-' %></td>
+                <td><%= new Date(s.createdAt).toLocaleDateString() %></td>
+                <td>
+                  <div class="flex">
+                    <% if (s.status === 'idle') { %>
+                      <a href="/stream/<%= s.id %>" class="btn btn-primary btn-sm">Open Studio</a>
+                      <button class="btn btn-danger btn-sm" onclick="deleteStream('<%= s.id %>')">Delete</button>
+                    <% } else if (s.status === 'active') { %>
+                      <a href="/stream/<%= s.id %>" class="btn btn-primary btn-sm">View Studio</a>
+                    <% } else { %>
+                      <span style="color:#52525b;font-size:12px">Ended</span>
+                    <% } %>
+                  </div>
+                </td>
+              </tr>
+            <% }) %>
+          </tbody>
+        </table>
+      <% } %>
+    </div>
+  </div>
+
+  <%- include('partials/toast') %>
+  <script>
+    async function createStream() {
+      const title = document.getElementById('stream-title').value.trim();
+      if (!title) return showToast('Enter a stream title', 'error');
+      try {
+        const res = await fetch('/dashboard/stream/create', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ title })
+        });
+        const data = await res.json();
+        if (data.success) {
+          showToast('Stream created!', 'success');
+          setTimeout(() => window.location.href = '/stream/' + data.streamId, 500);
+        } else {
+          showToast(data.message || 'Failed to create', 'error');
+        }
+      } catch (e) { showToast('Network error', 'error'); }
+    }
+    async function deleteStream(id) {
+      if (!confirm('Delete this stream?')) return;
+      try {
+        const res = await fetch('/dashboard/stream/' + id + '/delete', { method: 'POST' });
+        const data = await res.json();
+        if (data.success) { showToast('Deleted', 'success'); setTimeout(() => location.reload(), 500); }
+      } catch (e) { showToast('Failed', 'error'); }
+    }
+  </script>
+</body>
+</html>
