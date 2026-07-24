@@ -1,6 +1,5 @@
 <!DOCTYPE html>
 <html lang="en">
-
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -142,7 +141,7 @@
             bottom: 0;
             left: 0;
             right: 0;
-            background: linear-gradient(to top, rgba(0, 0, 0, 0.85) 0%, rgba(0, 0, 0, 0) 100%);
+            background: linear-gradient(to top, rgba(0,0,0,0.85) 0%, rgba(0,0,0,0) 100%);
             padding: 1.5rem 1.5rem 1rem 1.5rem;
             display: flex;
             align-items: center;
@@ -158,8 +157,7 @@
             pointer-events: auto;
         }
 
-        .controls-left,
-        .controls-right {
+        .controls-left, .controls-right {
             display: flex;
             align-items: center;
             gap: 1rem;
@@ -250,20 +248,9 @@
         }
 
         @keyframes pulse {
-            0% {
-                opacity: 1;
-                transform: scale(1);
-            }
-
-            50% {
-                opacity: 0.4;
-                transform: scale(0.8);
-            }
-
-            100% {
-                opacity: 1;
-                transform: scale(1);
-            }
+            0% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.4; transform: scale(0.8); }
+            100% { opacity: 1; transform: scale(1); }
         }
 
         /* Floating Action Buttons Container fixed at Bottom Center */
@@ -336,7 +323,6 @@
         }
     </style>
 </head>
-
 <body>
     <div class="ambient-glow"></div>
 
@@ -384,9 +370,7 @@
                 <div class="controls-right">
                     <button class="control-btn" id="fullscreenBtn" title="Toggle Fullscreen">
                         <svg viewBox="0 0 24 24">
-                            <path
-                                d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3">
-                            </path>
+                            <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"></path>
                         </svg>
                     </button>
                 </div>
@@ -405,8 +389,7 @@
             <span id="btnText">Share Screen</span>
         </button>
 
-        <a id="watchLiveBtn" href="/live" target="_blank" class="btn-action btn-share start"
-            style="background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%);">
+        <a id="watchLiveBtn" href="/live" target="_blank" class="btn-action btn-share start" style="background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%);">
             <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round">
                 <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
                 <circle cx="12" cy="12" r="3"></circle>
@@ -462,13 +445,9 @@
             streamWs = new WebSocket(wsUrl);
             streamWs.binaryType = 'arraybuffer';
             streamWs.onopen = () => console.log('⚡ High-Speed WebSocket Stream Ingest Connected');
-            streamWs.onclose = () => {
-                console.warn('⚠️ Stream WebSocket disconnected. Auto-retrying in 1 second...');
-                streamWs = null;
-                setTimeout(connectStreamWebSocket, 1000);
-            };
             streamWs.onerror = (err) => console.warn('Stream WebSocket error:', err);
         }
+
         async function sendChunk(blob, index) {
             try {
                 const arrayBuffer = await blob.arrayBuffer();
@@ -485,6 +464,7 @@
                     }).catch(() => {});
                 }
                 chunksBadge.textContent = `Chunks Sent: ${index + 1}`;
+                downloadBtn.style.display = 'inline-flex';
             } catch (err) {
                 console.error("Failed to send chunk:", err);
             }
@@ -552,8 +532,8 @@
 
                 mediaRecorder = new MediaRecorder(mediaStream, {
                     mimeType: mimeType,
-                    audioBitsPerSecond: 320000, // 320 kbps High-Fidelity Studio Opus Audio
-                    videoBitsPerSecond: 20000000 // 20 Mbps Ultra Studio Quality capture
+                    audioBitsPerSecond: 192000, // 192 kbps Opus audio
+                    videoBitsPerSecond: 8000000 // 8 Mbps 1080p capture
                 });
 
                 mediaRecorder.ondataavailable = (event) => {
@@ -588,7 +568,7 @@
             }
 
             if (streamWs) {
-                try { streamWs.close(); } catch (e) { }
+                try { streamWs.close(); } catch(e){}
                 streamWs = null;
             }
 
@@ -626,5 +606,4 @@
         });
     </script>
 </body>
-
 </html>
