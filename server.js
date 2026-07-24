@@ -401,6 +401,7 @@ app.use('/stream', streamRoutes);
 app.get(['/live', '/live/'], (req, res) => {
     res.render('live', {
         stream: { title: 'Live Stream', streamKey: 'live' },
+        title: 'Live Stream',
         hlsBaseUrl: '/live',
         user: req.session?.user || null,
     });
@@ -414,7 +415,7 @@ app.get('/live/:key', async (req, res) => {
         const { eq } = await import('drizzle-orm');
         const [stream] = await db.select().from(streams).where(eq(streams.streamKey, req.params.key));
         if (!stream) return res.status(404).render('partials/404', { title: 'Stream Not Found', user: req.session?.user || null });
-        res.render('live', { stream, hlsBaseUrl: '/live', user: req.session?.user || null });
+        res.render('live', { stream, title: stream.title, hlsBaseUrl: '/live', user: req.session?.user || null });
     } catch (err) {
         console.error('Live page error:', err);
         res.status(500).send('Error loading stream');
