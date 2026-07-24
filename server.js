@@ -3,6 +3,7 @@ import express from 'express';
 import http from 'http';
 import path from 'path';
 import fs from 'fs';
+import os from 'os';
 import { fileURLToPath } from 'url';
 import { spawn } from 'child_process';
 import { WebSocketServer } from 'ws';
@@ -16,6 +17,7 @@ const server = http.createServer(app);
 const PORT = process.env.PORT || 3000;
 const NODE_ENV = process.env.NODE_ENV || 'development';
 const APP_URL = process.env.APP_URL || `http://localhost:${PORT}`;
+const IS_PROD = NODE_ENV === 'production';
 
 // Directories setup
 const liveDir = path.join(__dirname, 'public', 'live');
@@ -39,9 +41,59 @@ app.use(express.json());
 // Live Status & Cleanups
 let isLiveStreamActive = false;
 let cleanupTimer = null;
+let cpuMonitorInterval = null;
 const CLEANUP_DELAY_MS = 10 * 60 * 1000; // 10 minutes after stream ends
 
-// WebSocket Server for Real-Time Status Travel between Host & Viewers
+// ─── CPU Usage Monitor (Production Only) ───────────────────────────────────────
+let prevCpuTimes = null;
+
+function getCpuUsage() {
+    const cpus = os.cpus();
+    let totalIdle = 0, totalTick = 0;
+
+    for (const cpu of cpus) {
+        for (const type in cpu.times) {
+            totalTick += cpu.times[type];
+        }
+        totalIdle += cpu.times.idle;
+    }
+
+    const currentTimes = { idle: totalIdle, total: totalTick };
+
+    if (prevCpuTimes) {
+        const idleDiff = currentTimes.idle - prevCpuTimes.idle;
+        const totalDiff = currentTimes.total - prevCpuTimes.total;
+        const usage = totalDiff > 0 ? ((1 - idleDiff / totalDiff) * 100).toFixed(1) : '0.0';
+        prevCpuTimes = currentTimes;
+        return usage;
+    }
+
+    prevCpuTimes = currentTimes;
+    return null; // First call, no delta yet
+}
+
+function startCpuMonitor() {
+    if (!IS_PROD) return;
+    prevCpuTimes = null;
+    getCpuUsage(); // Prime the first reading
+    cpuMonitorInterval = setInterval(() => {
+        const usage = getCpuUsage();
+        if (usage !== null) {
+            const freeMem = (os.freemem() / 1024 / 1024).toFixed(0);
+            const totalMem = (os.totalmem() / 1024 / 1024).toFixed(0);
+            console.log(`[VPS Resource] CPU: ${usage}% | RAM: ${freeMem}MB / ${totalMem}MB`);
+        }
+    }, 3000); // Log every 3 seconds
+}
+
+function stopCpuMonitor() {
+    if (cpuMonitorInterval) {
+        clearInterval(cpuMonitorInterval);
+        cpuMonitorInterval = null;
+    }
+}
+
+// ─── WebSocket Server ───────────────────────────────────────────────────────────
 const wss = new WebSocketServer({ server, path: '/status-ws' });
 
 wss.on('connection', (ws) => {
@@ -59,24 +111,18 @@ function broadcastStatus(liveState) {
     }
 }
 
-// Active FFmpeg process
+// ─── FFmpeg Live Process ────────────────────────────────────────────────────────
 let ffmpegLiveProcess = null;
 
-// Helper function to clean live HLS folder
 function clearLiveFolder() {
     if (fs.existsSync(liveDir)) {
         const files = fs.readdirSync(liveDir);
         for (const file of files) {
-            try {
-                fs.unlinkSync(path.join(liveDir, file));
-            } catch (err) {
-                // Silent clean
-            }
+            try { fs.unlinkSync(path.join(liveDir, file)); } catch (err) {}
         }
     }
 }
 
-// Stop active FFmpeg live process
 function stopFfmpegLive() {
     if (ffmpegLiveProcess) {
         try {
@@ -86,45 +132,41 @@ function stopFfmpegLive() {
                 ffmpegLiveProcess.stdin.end();
             }
             ffmpegLiveProcess.kill('SIGKILL');
-        } catch (err) {
-            // Silent stop
-        }
+        } catch (err) {}
         ffmpegLiveProcess = null;
     }
 }
 
-// Start Single-Pass 2-Core Multi-Threaded Dual-Quality (720p & 480p) Generator
+// Start Optimized Single-Pass (720p & 480p) ABR Generator
+// Input: 720p 30fps VP8 from browser (lightweight decode)
+// Output: 720p passthrough-res + 480p downscale, both ultrafast H.264
 function startFfmpegLive() {
     if (cleanupTimer) {
         clearTimeout(cleanupTimer);
         cleanupTimer = null;
     }
-    
+
     stopFfmpegLive();
     clearLiveFolder();
 
-    const masterPath = path.join(liveDir, 'master.m3u8');
-    
-    // Dedicated 2-Core Multi-Threaded Single-Pass ABR pipeline for 720p & 480p (Speed > 1.4x)
+    // Optimized for 720p input: no upscale/downscale on 720p rendition, only 480p needs scaling
     const args = [
         '-y',
-        '-threads', '2',                     // Lock FFmpeg to exactly 2 CPU cores
-        '-filter_complex_threads', '2',      // Allocate 2 dedicated threads for scaling filter
+        '-threads', '2',
         '-probesize', '64k',
         '-analyzeduration', '0',
         '-i', 'pipe:0',
-        
-        '-filter_complex',
-        '[0:v]split=2[v720][v480];' +
-        '[v720]fps=30,scale=1280:-2[v720out];' +
-        '[v480]fps=30,scale=854:-2[v480out]',
 
-        // Rendition 0: Crisp 720p 30fps (3000k Bitrate)
-        '-map', '[v720out]', '-c:v:0', 'libx264', '-threads:v:0', '2', '-preset', 'ultrafast', '-tune', 'zerolatency', '-profile:v:0', 'main', '-b:v:0', '3000k', '-maxrate:v:0', '3600k', '-bufsize:v:0', '6000k', '-g:v:0', '30', '-sc_threshold:v:0', '0',
+        '-filter_complex',
+        '[0:v]fps=30,split=2[v720][v480];' +
+        '[v480]scale=854:-2[v480out]',
+
+        // Rendition 0: 720p passthrough (no scale needed — input is already 720p)
+        '-map', '[v720]', '-c:v:0', 'libx264', '-threads:v:0', '1', '-preset', 'ultrafast', '-tune', 'zerolatency', '-profile:v:0', 'main', '-b:v:0', '3000k', '-maxrate:v:0', '3600k', '-bufsize:v:0', '6000k', '-g:v:0', '30', '-sc_threshold:v:0', '0',
         '-map', '0:a?', '-c:a:0', 'aac', '-b:a:0', '128k',
 
-        // Rendition 1: Clean 480p 30fps (1000k Bitrate)
-        '-map', '[v480out]', '-c:v:1', 'libx264', '-threads:v:1', '2', '-preset', 'ultrafast', '-tune', 'zerolatency', '-profile:v:1', 'baseline', '-b:v:1', '1000k', '-maxrate:v:1', '1200k', '-bufsize:v:1', '2000k', '-g:v:1', '30', '-sc_threshold:v:1', '0',
+        // Rendition 1: 480p downscale (lightweight 720p→480p scale)
+        '-map', '[v480out]', '-c:v:1', 'libx264', '-threads:v:1', '1', '-preset', 'ultrafast', '-tune', 'zerolatency', '-profile:v:1', 'baseline', '-b:v:1', '1000k', '-maxrate:v:1', '1200k', '-bufsize:v:1', '2000k', '-g:v:1', '30', '-sc_threshold:v:1', '0',
         '-map', '0:a?', '-c:a:1', 'aac', '-b:a:1', '96k',
 
         '-f', 'hls',
@@ -137,14 +179,15 @@ function startFfmpegLive() {
         path.join(liveDir, 'stream_%v.m3u8')
     ];
 
-    console.log('⚡ Spawning 2-Core Multi-Threaded Dual-Quality (720p & 480p) Live Generator...');
+    console.log('⚡ Spawning Optimized 720p+480p Live Generator (720p input, 2 threads)...');
     ffmpegLiveProcess = spawn('ffmpeg', args);
+
+    // Start CPU monitoring in production
+    startCpuMonitor();
 
     if (ffmpegLiveProcess.stdin) {
         ffmpegLiveProcess.stdin.on('error', (err) => {
-            if (err.code !== 'EPIPE' && err.code !== 'EOF') {
-                // Suppress non-critical EPIPE
-            }
+            if (err.code !== 'EPIPE' && err.code !== 'EOF') {}
         });
     }
 
@@ -154,13 +197,13 @@ function startFfmpegLive() {
             const msg = data.toString().trim();
             if (msg.includes('fps=') || msg.includes('speed=')) {
                 const now = Date.now();
-                if (now - lastLoggedTime > 1500) { // Log clean summary every 1.5 seconds
+                if (now - lastLoggedTime > 1500) {
                     lastLoggedTime = now;
                     const fpsMatch = msg.match(/fps=\s*([\d.]+)/);
                     const speedMatch = msg.match(/speed=\s*([\d.x]+)/);
                     const fps = fpsMatch ? fpsMatch[1] : 'N/A';
                     const speed = speedMatch ? speedMatch[1] : '1.0x';
-                    console.log(`[FFmpeg 2-Core Speed] [720p & 480p] Speed: ${speed} | FPS: ${fps}`);
+                    console.log(`[FFmpeg Speed] [720p & 480p] Speed: ${speed} | FPS: ${fps}`);
                 }
             }
         });
@@ -173,35 +216,28 @@ function startFfmpegLive() {
 
     ffmpegLiveProcess.on('exit', (code, signal) => {
         if (code !== 0 && signal !== 'SIGKILL') {
-            console.log(`FFmpeg process exited (code: ${code})`);
+            console.log(`FFmpeg exited (code: ${code})`);
         }
         ffmpegLiveProcess = null;
+        stopCpuMonitor();
     });
 }
 
-// Routes
+// ─── Routes ─────────────────────────────────────────────────────────────────────
 app.get('/', (req, res) => {
-    res.render('index', {
-        title: 'Movie Streaming - Broadcaster Studio'
-    });
+    res.render('index', { title: 'Movie Streaming - Broadcaster Studio' });
 });
 
-// Live Watch Page Route
 app.get(['/live', '/live/'], (req, res) => {
     res.render('live', {
-        stream: {
-            title: 'Live Screen Stream',
-            streamKey: 'live'
-        }
+        stream: { title: 'Live Screen Stream', streamKey: 'live' }
     });
 });
 
-// Endpoint to check live stream status
 app.get('/live/status', (req, res) => {
     res.json({ live: isLiveStreamActive });
 });
 
-// Endpoint called when host starts sharing screen
 app.post('/reset-stream', (req, res) => {
     try {
         startFfmpegLive();
@@ -213,15 +249,15 @@ app.post('/reset-stream', (req, res) => {
     }
 });
 
-// Endpoint called when host stops sharing screen (Schedules 10-minute HLS segment cleanup)
 app.post('/stop-stream', (req, res) => {
     try {
         broadcastStatus(false);
-        console.log('🔴 Stream stopped by host. Segment cleanup scheduled in 10 minutes.');
+        stopCpuMonitor();
+        console.log('🔴 Stream stopped. Segment cleanup scheduled in 10 minutes.');
 
         if (cleanupTimer) clearTimeout(cleanupTimer);
         cleanupTimer = setTimeout(() => {
-            console.log('🧹 10 minutes elapsed. Purging live HLS segment files...');
+            console.log('🧹 Purging live HLS segment files...');
             stopFfmpegLive();
             clearLiveFolder();
         }, CLEANUP_DELAY_MS);
@@ -233,19 +269,12 @@ app.post('/stop-stream', (req, res) => {
     }
 });
 
-// Endpoint to receive video chunks and pipe DIRECTLY to FFmpeg stdin (Cleaned & Silent)
 app.post('/stream', (req, res) => {
     try {
-        const chunkIndexRaw = req.headers['x-chunk-index'] || '0';
-        const chunkIndex = parseInt(chunkIndexRaw);
+        const chunkIndex = parseInt(req.headers['x-chunk-index'] || '0');
 
-        // Direct memory pipe to FFmpeg stdin
         if (ffmpegLiveProcess && ffmpegLiveProcess.stdin && ffmpegLiveProcess.stdin.writable) {
-            try {
-                ffmpegLiveProcess.stdin.write(req.body);
-            } catch (writeErr) {
-                // Suppress stdin write catch
-            }
+            try { ffmpegLiveProcess.stdin.write(req.body); } catch (e) {}
         }
 
         res.json({ success: true, chunkIndex });
@@ -257,4 +286,8 @@ app.post('/stream', (req, res) => {
 
 server.listen(PORT, () => {
     console.log(`🚀 Server running in [${NODE_ENV}] mode at ${APP_URL} (Port ${PORT})`);
+    if (IS_PROD) {
+        const cpus = os.cpus();
+        console.log(`📊 VPS: ${cpus.length} cores (${cpus[0].model}) | ${(os.totalmem() / 1024 / 1024).toFixed(0)}MB RAM`);
+    }
 });

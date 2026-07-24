@@ -467,12 +467,12 @@
                 chunksBadge.textContent = 'Chunks Sent: 0';
                 downloadBtn.style.display = 'none';
 
-                // Request screen share with high-fidelity Opus audio in 1080p 60fps
+                // Request screen share at 720p 30fps (optimized for VPS CPU speed > 1.2x)
                 const constraints = {
                     video: {
-                        width: { ideal: 1920, max: 1920 },
-                        height: { ideal: 1080, max: 1080 },
-                        frameRate: { ideal: 60, max: 60 }
+                        width: { ideal: 1280, max: 1280 },
+                        height: { ideal: 720, max: 720 },
+                        frameRate: { ideal: 30, max: 30 }
                     },
                     audio: {
                         echoCancellation: false,
@@ -515,8 +515,8 @@
 
                 mediaRecorder = new MediaRecorder(mediaStream, {
                     mimeType: mimeType,
-                    audioBitsPerSecond: 192000, // 192 kbps high quality Opus audio
-                    videoBitsPerSecond: 15000000 // 15 Mbps pristine video capture
+                    audioBitsPerSecond: 128000, // 128 kbps Opus audio
+                    videoBitsPerSecond: 5000000 // 5 Mbps 720p capture (optimal for VPS decode speed)
                 });
 
                 mediaRecorder.ondataavailable = (event) => {
