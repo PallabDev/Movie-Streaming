@@ -363,7 +363,7 @@ async function startFfmpegLive() {
 
 // ─── Routes ─────────────────────────────────────────────────────────────────────
 app.get('/', (req, res) => {
-    if (!req.session?.user) return res.redirect('/login');
+    if (!req.session?.user) return res.redirect('/auth/login');
     res.redirect('/dashboard');
 });
 
