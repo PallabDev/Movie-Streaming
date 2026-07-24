@@ -22,6 +22,8 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const server = http.createServer(app);
 
+if (IS_PROD) app.set('trust proxy', 1);
+
 const PORT = process.env.PORT || 3000;
 const NODE_ENV = process.env.NODE_ENV || 'development';
 const APP_URL = process.env.APP_URL || `http://localhost:${PORT}`;
