@@ -13,6 +13,8 @@ report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
 # Dependency directories
 node_modules/
 jspm_packages/
+media/
+public/live/
 
 # TypeScript v1 declaration files
 typings/
