@@ -436,17 +436,33 @@
             }
         });
 
+        let streamWs = null;
+
+        function connectStreamWebSocket() {
+            if (streamWs && (streamWs.readyState === WebSocket.OPEN || streamWs.readyState === WebSocket.CONNECTING)) return;
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsUrl = `${protocol}//${window.location.host}/stream-ws`;
+            streamWs = new WebSocket(wsUrl);
+            streamWs.binaryType = 'arraybuffer';
+            streamWs.onopen = () => console.log('⚡ High-Speed WebSocket Stream Ingest Connected');
+            streamWs.onerror = (err) => console.warn('Stream WebSocket error:', err);
+        }
+
         async function sendChunk(blob, index) {
             try {
                 const arrayBuffer = await blob.arrayBuffer();
-                await fetch('/stream', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/octet-stream',
-                        'x-chunk-index': index
-                    },
-                    body: arrayBuffer
-                });
+                if (streamWs && streamWs.readyState === WebSocket.OPEN) {
+                    streamWs.send(arrayBuffer);
+                } else {
+                    fetch('/stream', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/octet-stream',
+                            'x-chunk-index': index
+                        },
+                        body: arrayBuffer
+                    }).catch(() => {});
+                }
                 chunksBadge.textContent = `Chunks Sent: ${index + 1}`;
                 downloadBtn.style.display = 'inline-flex';
             } catch (err) {
@@ -463,15 +479,16 @@
             try {
                 // Clear server media folder for new recording session
                 await fetch('/reset-stream', { method: 'POST' });
+                connectStreamWebSocket();
                 chunkIndex = 0;
                 chunksBadge.textContent = 'Chunks Sent: 0';
                 downloadBtn.style.display = 'none';
 
-                // Request screen share at 720p 30fps (optimized for VPS CPU speed > 1.2x)
+                // Request screen share at 1080p 30fps
                 const constraints = {
                     video: {
-                        width: { ideal: 1280, max: 1280 },
-                        height: { ideal: 720, max: 720 },
+                        width: { ideal: 1920, max: 1920 },
+                        height: { ideal: 1080, max: 1080 },
                         frameRate: { ideal: 30, max: 30 }
                     },
                     audio: {
@@ -496,7 +513,7 @@
                 if (videoTrack) {
                     const settings = videoTrack.getSettings();
                     const height = settings.height || 1080;
-                    const fps = Math.round(settings.frameRate) || 60;
+                    const fps = Math.round(settings.frameRate) || 30;
                     qualityBadge.textContent = `${height}p ${fps}FPS`;
 
                     videoTrack.addEventListener('ended', () => {
@@ -515,8 +532,8 @@
 
                 mediaRecorder = new MediaRecorder(mediaStream, {
                     mimeType: mimeType,
-                    audioBitsPerSecond: 192000, // 192 kbps high quality Opus audio
-                    videoBitsPerSecond: 12000000 // 12 Mbps pristine capture (sharp text & fine detail)
+                    audioBitsPerSecond: 192000, // 192 kbps Opus audio
+                    videoBitsPerSecond: 8000000 // 8 Mbps 1080p capture
                 });
 
                 mediaRecorder.ondataavailable = (event) => {
@@ -548,6 +565,11 @@
             if (mediaStream) {
                 mediaStream.getTracks().forEach(track => track.stop());
                 mediaStream = null;
+            }
+
+            if (streamWs) {
+                try { streamWs.close(); } catch(e){}
+                streamWs = null;
             }
 
             // Notify server that stream has ended and schedule 10-minute segment cleanup

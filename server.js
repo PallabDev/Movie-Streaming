@@ -263,7 +263,7 @@ function stopCpuMonitor() {
     if (cpuMonitorInterval) { clearInterval(cpuMonitorInterval); cpuMonitorInterval = null; }
 }
 
-// ─── WebSocket Server ───────────────────────────────────────────────────────────
+// ─── WebSocket Servers (Status & High-Speed Stream Ingest) ─────────────────────
 const wss = new WebSocketServer({ server, path: '/status-ws' });
 
 wss.on('connection', (ws) => {
@@ -278,6 +278,20 @@ function broadcastStatus(liveState) {
         if (client.readyState === 1) client.send(msg);
     }
 }
+
+// Ultra-low latency binary WebSocket stream ingest
+const streamWss = new WebSocketServer({ server, path: '/stream-ws' });
+
+streamWss.on('connection', (ws) => {
+    ws.on('message', (data) => {
+        if (ffmpegLiveProcess && ffmpegLiveProcess.stdin && ffmpegLiveProcess.stdin.writable) {
+            try {
+                ffmpegLiveProcess.stdin.write(data);
+            } catch (e) {}
+        }
+    });
+    ws.on('error', (err) => console.warn('[Stream WS Error]:', err.message));
+});
 
 // ─── FFmpeg Live Process ────────────────────────────────────────────────────────
 let ffmpegLiveProcess = null;
@@ -318,43 +332,86 @@ async function startFfmpegLive() {
 
     const args = [
         '-y',
-        '-threads', '2',
+        '-threads', '4',
         '-fflags', '+genpts+discardcorrupt',
         '-probesize', '64k',
         '-analyzeduration', '0',
         '-i', 'pipe:0',
 
-        // Explicitly map input video 0:v and audio 0:a? to v:0 and a:0
-        '-map', '0:v',
+        // Multi-resolution filter graph (1080p, 720p, 480p) + Audio Resampler Split
+        '-filter_complex',
+        '[0:v]fps=30,split=3[v1080in][v720in][v480in];' +
+        '[v1080in]copy[v1080out];' +
+        '[v720in]scale=1280:720[v720out];' +
+        '[v480in]scale=854:480[v480out];' +
+        '[0:a?]aresample=async=1000:first_pts=0,asplit=3[a1080][a720][a480]',
+
+        // 1080p Rendition (6.0 Mbps High Quality)
+        '-map', '[v1080out]',
         '-c:v:0', 'libx264',
         '-threads:v:0', '2',
-        '-r:v:0', '30',
         '-preset', 'ultrafast',
         '-tune', 'zerolatency',
         '-profile:v:0', 'high',
-        '-crf:v:0', '18',
-        '-b:v:0', '6500k',
-        '-maxrate:v:0', '7500k',
+        '-b:v:0', '6000k',
+        '-maxrate:v:0', '7000k',
         '-bufsize:v:0', '12000k',
         '-g:v:0', '30',
         '-keyint_min:v:0', '30',
         '-sc_threshold:v:0', '0',
-
-        '-map', '0:a?',
+        '-x264-params:v:0', 'no-scenecut=1:open-gop=0:keyint=30:min-keyint=30',
+        '-map', '[a1080]',
         '-c:a:0', 'aac',
-        '-b:a:0', '128k',
+        '-b:a:0', '192k',
 
+        // 720p Rendition (4.0 Mbps Medium Quality)
+        '-map', '[v720out]',
+        '-c:v:1', 'libx264',
+        '-threads:v:1', '2',
+        '-preset', 'ultrafast',
+        '-tune', 'zerolatency',
+        '-profile:v:1', 'main',
+        '-b:v:1', '4000k',
+        '-maxrate:v:1', '4800k',
+        '-bufsize:v:1', '8000k',
+        '-g:v:1', '30',
+        '-keyint_min:v:1', '30',
+        '-sc_threshold:v:1', '0',
+        '-x264-params:v:1', 'no-scenecut=1:open-gop=0:keyint=30:min-keyint=30',
+        '-map', '[a720]',
+        '-c:a:1', 'aac',
+        '-b:a:1', '128k',
+
+        // 480p Rendition (1.5 Mbps Mobile Quality)
+        '-map', '[v480out]',
+        '-c:v:2', 'libx264',
+        '-threads:v:2', '2',
+        '-preset', 'ultrafast',
+        '-tune', 'zerolatency',
+        '-profile:v:2', 'main',
+        '-b:v:2', '1500k',
+        '-maxrate:v:2', '1800k',
+        '-bufsize:v:2', '3000k',
+        '-g:v:2', '30',
+        '-keyint_min:v:2', '30',
+        '-sc_threshold:v:2', '0',
+        '-x264-params:v:2', 'no-scenecut=1:open-gop=0:keyint=30:min-keyint=30',
+        '-map', '[a480]',
+        '-c:a:2', 'aac',
+        '-b:a:2', '96k',
+
+        // HLS Packaging Config
         '-f', 'hls',
         '-hls_time', '1',
         '-hls_list_size', '60',
         '-hls_flags', 'delete_segments+omit_endlist+independent_segments',
         '-hls_segment_type', 'mpegts',
         '-master_pl_name', 'master.m3u8',
-        '-var_stream_map', 'v:0,a:0,name:720p',
+        '-var_stream_map', 'v:0,a:0,name:1080p v:1,a:1,name:720p v:2,a:2,name:480p',
         path.join(liveDir, 'stream_%v.m3u8')
     ];
 
-    console.log('⚡ Spawning Single 720p Stream Live Generator...');
+    console.log('⚡ Spawning Triple-Quality (1080p / 720p / 480p) Multi-Rendition Live Generator...');
     ffmpegLiveProcess = spawn('ffmpeg', args);
 
     if (SFTP_ENABLED) {
