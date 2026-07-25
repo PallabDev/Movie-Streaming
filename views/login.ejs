@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Login & Register - CoWatch Cloud Studio</title>
+    <link rel="icon" type="image/png" href="/favicon.png">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        accent: '#6366f1',
+                        'accent-dark': '#4f46e5',
+                        'dark-bg': '#090d16',
+                        'card-bg': 'rgba(15, 23, 42, 0.8)',
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        body {
+            background-color: #090d16;
+            background-image: 
+                radial-gradient(at 0% 0%, rgba(99, 102, 241, 0.18) 0px, transparent 50%),
+                radial-gradient(at 100% 100%, rgba(139, 92, 246, 0.15) 0px, transparent 50%);
+            font-family: 'Inter', system-ui, -apple-system, sans-serif;
+        }
+
+        .glass-card {
+            background: rgba(15, 23, 42, 0.8);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+        }
+
+        .gradient-text {
+            background: linear-gradient(135deg, #818cf8 0%, #c084fc 100%);
+            background-clip: text;
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .glow-btn {
+            background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%);
+            box-shadow: 0 4px 20px rgba(99, 102, 241, 0.4);
+            transition: all 0.2s ease;
+        }
+
+        .glow-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 25px rgba(99, 102, 241, 0.6);
+        }
+    </style>
+</head>
+<body class="min-h-screen text-slate-100 flex items-center justify-center p-4 antialiased">
+
+    <div class="glass-card rounded-3xl p-8 max-w-md w-full shadow-2xl border border-white/15 relative overflow-hidden">
+        
+        <!-- Header Logo -->
+        <div class="text-center mb-8">
+            <div class="w-12 h-12 rounded-2xl bg-indigo-600/20 border border-indigo-500/30 flex items-center justify-center text-indigo-400 text-2xl mx-auto mb-3 shadow-inner">
+                <i class="fa-solid fa-play"></i>
+            </div>
+            <h1 class="text-2xl font-extrabold text-white tracking-tight">CoWatch <span class="gradient-text">Studio</span></h1>
+            <p class="text-xs text-slate-400 mt-1">Cloud Real-Time Multi-Stream Platform</p>
+        </div>
+
+        <!-- Auth Tabs -->
+        <div class="flex bg-slate-900/90 rounded-xl p-1 mb-6 border border-white/10">
+            <button id="loginTabBtn" onclick="switchTab('login')" class="flex-1 py-2 text-xs font-semibold rounded-lg transition-all bg-indigo-600 text-white shadow">
+                Login
+            </button>
+            <button id="registerTabBtn" onclick="switchTab('register')" class="flex-1 py-2 text-xs font-semibold rounded-lg transition-all text-slate-400 hover:text-white">
+                Register
+            </button>
+        </div>
+
+        <!-- Error Alert -->
+        <div id="errorAlert" class="hidden mb-4 p-3 rounded-xl bg-red-500/10 border border-red-500/20 text-red-400 text-xs font-medium text-center">
+        </div>
+
+        <!-- Success Alert -->
+        <div id="successAlert" class="hidden mb-4 p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs font-medium text-center">
+        </div>
+
+        <!-- Login Form -->
+        <form id="loginForm" onsubmit="handleLogin(event)">
+            <div class="mb-4">
+                <label class="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">Email Address</label>
+                <div class="relative">
+                    <i class="fa-solid fa-envelope absolute left-4 top-3.5 text-slate-500 text-xs"></i>
+                    <input type="email" id="loginEmail" required placeholder="name@domain.com" class="w-full pl-10 pr-4 py-3 rounded-xl bg-slate-950/90 border border-white/15 text-white placeholder-slate-500 text-sm focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-all">
+                </div>
+            </div>
+
+            <div class="mb-6">
+                <label class="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">Password</label>
+                <div class="relative">
+                    <i class="fa-solid fa-lock absolute left-4 top-3.5 text-slate-500 text-xs"></i>
+                    <input type="password" id="loginPassword" required placeholder="••••••••" class="w-full pl-10 pr-4 py-3 rounded-xl bg-slate-950/90 border border-white/15 text-white placeholder-slate-500 text-sm focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-all">
+                </div>
+            </div>
+
+            <button type="submit" class="w-full glow-btn py-3 rounded-xl text-sm font-semibold text-white flex items-center justify-center gap-2">
+                <i class="fa-solid fa-right-to-bracket"></i>
+                <span>Sign In to Studio</span>
+            </button>
+        </form>
+
+        <!-- Register Form -->
+        <form id="registerForm" onsubmit="handleRegister(event)" class="hidden">
+            <div class="mb-4">
+                <label class="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">Full Name</label>
+                <div class="relative">
+                    <i class="fa-solid fa-user absolute left-4 top-3.5 text-slate-500 text-xs"></i>
+                    <input type="text" id="regName" required placeholder="John Doe" class="w-full pl-10 pr-4 py-3 rounded-xl bg-slate-950/90 border border-white/15 text-white placeholder-slate-500 text-sm focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-all">
+                </div>
+            </div>
+
+            <div class="mb-4">
+                <label class="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">Email Address</label>
+                <div class="relative">
+                    <i class="fa-solid fa-envelope absolute left-4 top-3.5 text-slate-500 text-xs"></i>
+                    <input type="email" id="regEmail" required placeholder="name@domain.com" class="w-full pl-10 pr-4 py-3 rounded-xl bg-slate-950/90 border border-white/15 text-white placeholder-slate-500 text-sm focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-all">
+                </div>
+            </div>
+
+            <div class="mb-6">
+                <label class="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">Password</label>
+                <div class="relative">
+                    <i class="fa-solid fa-lock absolute left-4 top-3.5 text-slate-500 text-xs"></i>
+                    <input type="password" id="regPassword" required placeholder="••••••••" class="w-full pl-10 pr-4 py-3 rounded-xl bg-slate-950/90 border border-white/15 text-white placeholder-slate-500 text-sm focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-all">
+                </div>
+            </div>
+
+            <button type="submit" class="w-full glow-btn py-3 rounded-xl text-sm font-semibold text-white flex items-center justify-center gap-2">
+                <i class="fa-solid fa-user-plus"></i>
+                <span>Create Account</span>
+            </button>
+        </form>
+    </div>
+
+    <script>
+        function switchTab(tab) {
+            const loginForm = document.getElementById('loginForm');
+            const registerForm = document.getElementById('registerForm');
+            const loginBtn = document.getElementById('loginTabBtn');
+            const registerBtn = document.getElementById('registerTabBtn');
+            hideAlerts();
+
+            if (tab === 'login') {
+                loginForm.classList.remove('hidden');
+                registerForm.classList.add('hidden');
+                loginBtn.classList.add('bg-indigo-600', 'text-white', 'shadow');
+                loginBtn.classList.remove('text-slate-400');
+                registerBtn.classList.remove('bg-indigo-600', 'text-white', 'shadow');
+                registerBtn.classList.add('text-slate-400');
+            } else {
+                loginForm.classList.add('hidden');
+                registerForm.classList.remove('hidden');
+                registerBtn.classList.add('bg-indigo-600', 'text-white', 'shadow');
+                registerBtn.classList.remove('text-slate-400');
+                loginBtn.classList.remove('bg-indigo-600', 'text-white', 'shadow');
+                loginBtn.classList.add('text-slate-400');
+            }
+        }
+
+        function showError(msg) {
+            const err = document.getElementById('errorAlert');
+            err.textContent = msg;
+            err.classList.remove('hidden');
+            document.getElementById('successAlert').classList.add('hidden');
+        }
+
+        function showSuccess(msg) {
+            const succ = document.getElementById('successAlert');
+            succ.textContent = msg;
+            succ.classList.remove('hidden');
+            document.getElementById('errorAlert').classList.add('hidden');
+        }
+
+        function hideAlerts() {
+            document.getElementById('errorAlert').classList.add('hidden');
+            document.getElementById('successAlert').classList.add('hidden');
+        }
+
+        async function handleLogin(e) {
+            e.preventDefault();
+            hideAlerts();
+            const email = document.getElementById('loginEmail').value.trim();
+            const password = document.getElementById('loginPassword').value;
+
+            try {
+                const res = await fetch('/api/auth/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email, password })
+                });
+
+                const data = await res.json();
+                if (data.success) {
+                    window.location.href = data.redirect || '/';
+                } else {
+                    showError(data.error || 'Invalid credentials');
+                }
+            } catch (err) {
+                showError('Network error: ' + err.message);
+            }
+        }
+
+        async function handleRegister(e) {
+            e.preventDefault();
+            hideAlerts();
+            const name = document.getElementById('regName').value.trim();
+            const email = document.getElementById('regEmail').value.trim();
+            const password = document.getElementById('regPassword').value;
+
+            try {
+                const res = await fetch('/api/auth/register', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name, email, password })
+                });
+
+                const data = await res.json();
+                if (data.success) {
+                    showSuccess('Registration successful! Please wait for Admin approval or sign in if granted access.');
+                    setTimeout(() => switchTab('login'), 2000);
+                } else {
+                    showError(data.error || 'Registration failed');
+                }
+            } catch (err) {
+                showError('Network error: ' + err.message);
+            }
+        }
+    </script>
+</body>
+</html>

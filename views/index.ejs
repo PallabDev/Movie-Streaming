@@ -339,8 +339,10 @@
             <!-- Badges -->
             <div id="badgeGroup" class="badge-container" style="display: none;">
                 <div class="badge-live">Live</div>
-                <div class="badge-quality" id="qualityBadge">1080p 60FPS</div>
+                <div class="badge-quality" id="qualityBadge">1080p 30FPS</div>
                 <div class="badge-chunks" id="chunksBadge">Chunks Sent: 0</div>
+                <div class="badge-chunks" id="viewersBadge" style="background: rgba(99, 102, 241, 0.2); border-color: rgba(99, 102, 241, 0.4); color: #818cf8;">👁️ Viewers: 0</div>
+                <div class="badge-chunks" id="telemetryBadge" style="background: rgba(16, 185, 129, 0.2); border-color: rgba(16, 185, 129, 0.4); color: #34d399;">⚡ S3: 0.0/s (720p: 0 | 480p: 0)</div>
             </div>
 
             <!-- Placeholder State -->
@@ -385,10 +387,14 @@
         </div>
     </div>
 
-    <!-- Floating Action Buttons (Fixed at Bottom Center) -->
-    <div id="buttonContainer" class="action-button-container">
-        <button id="toggleShareBtn" class="btn-action btn-share start">
-            <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Compact Floating Action Bar (Fixed at Bottom Center) -->
+    <div id="buttonContainer" class="action-button-container" style="gap: 12px; padding: 8px 16px; border-radius: 9999px; background: rgba(15, 23, 42, 0.85); backdrop-filter: blur(16px); border: 1px solid rgba(255, 255, 255, 0.12); box-shadow: 0 20px 40px rgba(0,0,0,0.5);">
+        <a href="/" title="Home Dashboard" style="width: 42px; height: 42px; border-radius: 50%; background: rgba(255, 255, 255, 0.1); color: #ffffff; display: flex; align-items: center; justify-content: center; transition: all 0.2s ease;">
+            <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><polyline points="9 22 9 12 15 12 15 22"></polyline></svg>
+        </a>
+
+        <button id="toggleShareBtn" class="btn-action btn-share start" title="Start / Stop Sharing" style="padding: 8px 18px; border-radius: 9999px; font-size: 0.85rem;">
+            <svg viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
                 <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
                 <line x1="8" y1="21" x2="16" y2="21"></line>
                 <line x1="12" y1="17" x2="12" y2="21"></line>
@@ -396,21 +402,11 @@
             <span id="btnText">Share Screen</span>
         </button>
 
-        <a id="watchLiveBtn" href="/live/<%= typeof streamKey !== 'undefined' ? streamKey : 'default' %>" target="_blank" class="btn-action btn-share start" style="background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%);">
-            <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round">
+        <a id="watchLiveBtn" href="/live/<%= typeof streamKey !== 'undefined' ? streamKey : 'default' %>" target="_blank" title="Watch Live Stream" style="width: 42px; height: 42px; border-radius: 50%; background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%); color: white; display: flex; align-items: center; justify-content: center; transition: all 0.2s ease; box-shadow: 0 4px 15px rgba(59, 130, 246, 0.4);">
+            <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
                 <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
                 <circle cx="12" cy="12" r="3"></circle>
             </svg>
-            <span>Watch Live Stream</span>
-        </a>
-
-        <a id="downloadBtn" href="/download" class="btn-action btn-download" style="display: none;">
-            <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-                <polyline points="7 10 12 15 17 10"></polyline>
-                <line x1="12" y1="15" x2="12" y2="3"></line>
-            </svg>
-            <span>Download Recording</span>
         </a>
     </div>
 
@@ -485,6 +481,33 @@
             });
         }
 
+        const viewersBadge = document.getElementById('viewersBadge');
+        const telemetryBadge = document.getElementById('telemetryBadge');
+
+        function connectHostStatusWebSocket() {
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsUrl = `${protocol}//${window.location.host}/status-ws?key=${encodeURIComponent(currentStreamKey)}`;
+            const statusWs = new WebSocket(wsUrl);
+
+            statusWs.onmessage = (event) => {
+                try {
+                    const data = JSON.parse(event.data);
+                    if (data.type === 'STATUS') {
+                        if (viewersBadge && typeof data.viewers !== 'undefined') {
+                            viewersBadge.textContent = `👁️ Viewers: ${data.viewers}`;
+                        }
+                        if (telemetryBadge && data.s3Telemetry) {
+                            const { chunksPerSec, p720Count, p480Count } = data.s3Telemetry;
+                            telemetryBadge.textContent = `⚡ S3: ${chunksPerSec}/s (720p: ${p720Count} | 480p: ${p480Count})`;
+                        }
+                    }
+                } catch(e) {}
+            };
+
+            statusWs.onclose = () => setTimeout(connectHostStatusWebSocket, 3000);
+        }
+        connectHostStatusWebSocket();
+
         async function sendChunk(blob, index) {
             try {
                 const arrayBuffer = await blob.arrayBuffer();
@@ -502,7 +525,7 @@
                     }).catch(() => {});
                 }
                 chunksBadge.textContent = `Chunks Sent: ${index + 1}`;
-                downloadBtn.style.display = 'inline-flex';
+                if (downloadBtn) downloadBtn.style.display = 'inline-flex';
             } catch (err) {
                 console.error("Failed to send chunk:", err);
             }
@@ -549,7 +572,7 @@
                 await fetch('/reset-stream/' + currentStreamKey, { method: 'POST' });
                 chunkIndex = 0;
                 chunksBadge.textContent = 'Chunks Sent: 0';
-                downloadBtn.style.display = 'none';
+                if (downloadBtn) downloadBtn.style.display = 'none';
 
                 await connectStreamWebSocket();
 

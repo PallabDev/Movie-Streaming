@@ -45,6 +45,7 @@
 
         .gradient-text {
             background: linear-gradient(135deg, #818cf8 0%, #c084fc 100%);
+            background-clip: text;
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
         }
@@ -76,10 +77,27 @@
                 </div>
             </a>
 
-            <button onclick="openCreateModal()" class="glow-btn px-5 py-2.5 rounded-xl text-sm font-semibold text-white flex items-center gap-2">
-                <i class="fa-solid fa-plus text-xs"></i>
-                <span>Create Stream</span>
-            </button>
+            <div class="flex items-center gap-3">
+                <% if (typeof user !== 'undefined' && user) { %>
+                    <span class="text-xs font-mono text-slate-300 bg-slate-900 px-3 py-2 rounded-xl border border-white/10 hidden sm:inline-flex items-center gap-1.5">
+                        <i class="fa-solid fa-layer-group text-indigo-400"></i>
+                        <span>Quota: <strong><%= user.streamCount %></strong> / <strong><%= user.streamLimit %></strong></span>
+                    </span>
+                    <% if (user.role === 'admin') { %>
+                        <a href="/admin" class="px-4 py-2 rounded-xl bg-indigo-500/20 hover:bg-indigo-500/30 text-indigo-300 border border-indigo-500/40 text-xs font-semibold transition-colors flex items-center gap-1.5">
+                            <i class="fa-solid fa-shield-halved"></i>
+                            <span>Admin</span>
+                        </a>
+                    <% } %>
+                    <a href="/logout" class="px-3.5 py-2 rounded-xl bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/20 text-xs font-semibold transition-colors flex items-center gap-1.5">
+                        <i class="fa-solid fa-right-from-bracket"></i>
+                    </a>
+                <% } %>
+                <button onclick="openCreateModal()" class="glow-btn px-5 py-2.5 rounded-xl text-sm font-semibold text-white flex items-center gap-2">
+                    <i class="fa-solid fa-plus text-xs"></i>
+                    <span>Create Stream</span>
+                </button>
+            </div>
         </div>
     </header>
 

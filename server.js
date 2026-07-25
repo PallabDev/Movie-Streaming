@@ -7,11 +7,16 @@ import os from 'os';
 import { fileURLToPath } from 'url';
 import { spawn } from 'child_process';
 import { WebSocketServer } from 'ws';
-import SftpClient from 'ssh2-sftp-client';
 import { S3Client, PutObjectCommand, DeleteObjectCommand, ListObjectsV2Command } from '@aws-sdk/client-s3';
 import { EventEmitter } from 'events';
+import cookieParser from 'cookie-parser';
+import jwt from 'jsonwebtoken';
+import bcrypt from 'bcryptjs';
+import { db } from './db/index.js';
+import { users, streamSessions } from './db/schema.js';
+import { initDb } from './db/migrate.js';
+import { eq, desc, sql } from 'drizzle-orm';
 
-// Increase default max listeners to prevent SFTP event listener warnings
 EventEmitter.defaultMaxListeners = 50;
 
 const __filename = fileURLToPath(import.meta.url);
@@ -24,14 +29,7 @@ const PORT = process.env.PORT || 3000;
 const NODE_ENV = process.env.NODE_ENV || 'development';
 const APP_URL = process.env.APP_URL || `http://localhost:${PORT}`;
 const IS_PROD = NODE_ENV === 'production';
-
-// SFTP CDN Configuration
-const SFTP_HOST = process.env.SFTP_HOST;
-const SFTP_PORT = parseInt(process.env.SFTP_PORT || '22');
-const SFTP_USER = process.env.SFTP_USER;
-const SFTP_PASSWORD = process.env.SFTP_PASSWORD;
-const SFTP_BASE_PATH = process.env.SFTP_BASE_PATH;
-const SFTP_ENABLED = !!(SFTP_HOST && SFTP_USER && SFTP_PASSWORD && SFTP_BASE_PATH);
+const JWT_SECRET = process.env.JWT_SECRET || 'cowatch_super_secret_jwt_key_2026';
 
 // ExCloud S3 Object Storage CDN Configuration
 const S3_ENDPOINT = process.env.S3_ENDPOINT || 'https://buckets.excloud.dev';
@@ -40,207 +38,78 @@ const S3_BUCKET = process.env.S3_BUCKET || 'live';
 const S3_ACCESS_KEY = process.env.S3_ACCESS_KEY || 'EXCNLC2REYVL5FSFT57AQRKPP24TE';
 const S3_SECRET_KEY = process.env.S3_SECRET_KEY || 'DiVv1AV3CJI/Y58jkiDzqCyUI9osj3NXS1xXxCA3';
 const S3_PUBLIC_BASE_URL = process.env.S3_PUBLIC_BASE_URL || 'https://1834.objects.excloud.dev/public/live';
-const HLS_CDN_URL = process.env.HLS_CDN_URL || S3_PUBLIC_BASE_URL;
 const S3_ENABLED = !!(S3_ACCESS_KEY && S3_SECRET_KEY);
 
 // Directories setup
 const liveDir = path.join(__dirname, 'public', 'live');
-
 if (!fs.existsSync(liveDir)) {
     fs.mkdirSync(liveDir, { recursive: true });
 }
 
-// Configure EJS view engine
+// Configure Express Middlewares & Views
 app.set('view engine', 'ejs');
 app.set('views', path.join(__dirname, 'views'));
 
-// CORS Middleware for Express server (Allows cross-domain playback from anywhere)
 app.use((req, res, next) => {
     res.header('Access-Control-Allow-Origin', '*');
     res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, HEAD');
     res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Range');
-    if (req.method === 'OPTIONS') {
-        return res.sendStatus(200);
-    }
+    if (req.method === 'OPTIONS') return res.sendStatus(200);
     next();
 });
 
-// File-based HLS Playlist Delivery with Keep-Alive headers
 app.use(express.static(path.join(__dirname, 'public')));
-app.use('/live', express.static(liveDir, {
-    maxAge: '1h',
-    setHeaders: (res) => {
-        res.setHeader('Access-Control-Allow-Origin', '*');
-        res.setHeader('Connection', 'keep-alive');
-        res.setHeader('Keep-Alive', 'timeout=120, max=2000');
-    }
-}));
-
-// Middleware for parsing raw video/binary stream data up to 100MB per chunk
 app.use('/stream', express.raw({ type: '*/*', limit: '100mb' }));
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+app.use(cookieParser());
 
-// Live Status & Cleanups
-let isLiveStreamActive = false;
-let cleanupTimer = null;
-let cpuMonitorInterval = null;
-const CLEANUP_DELAY_MS = 10 * 60 * 1000;
+// Initialize Database schema and seed default Admin (watch@watch.in / HexWatch78)
+initDb().catch(console.error);
 
-// ─── SFTP CDN Sync Manager ─────────────────────────────────────────────────────
-let sftp = null;
-let sftpConnected = false;
-let sftpWatcher = null;
-const uploadQueue = new Map();
+// ─── Authentication Middlewares ──────────────────────────────────────────────
+function getAuthUser(req) {
+    const token = req.cookies.auth_token;
+    if (!token) return null;
+    try { return jwt.verify(token, JWT_SECRET); } catch (e) { return null; }
+}
 
-async function ensureSftpConnected() {
-    if (sftpConnected && sftp) return true;
+async function requireAuth(req, res, next) {
+    const userPayload = getAuthUser(req);
+    if (!userPayload) return res.redirect('/login');
     try {
-        sftp = new SftpClient();
-        if (sftp.client) {
-            sftp.client.setMaxListeners(100);
+        const dbUser = await db.select().from(users).where(eq(users.id, userPayload.id));
+        if (dbUser.length === 0 || (!dbUser[0].hasAccess && dbUser[0].role !== 'admin')) {
+            res.clearCookie('auth_token');
+            return res.redirect('/login?error=access_denied');
         }
-        await sftp.connect({
-            host: SFTP_HOST,
-            port: SFTP_PORT,
-            username: SFTP_USER,
-            password: SFTP_PASSWORD,
-            readyTimeout: 10000,
-            retries: 3
-        });
-        sftpConnected = true;
-        console.log(`📡 SFTP connected to ${SFTP_HOST}:${SFTP_PORT}`);
-        return true;
-    } catch (err) {
-        console.warn(`[SFTP] Connection failed: ${err.message}`);
-        sftpConnected = false;
-        sftp = null;
-        return false;
-    }
+        req.user = dbUser[0];
+        next();
+    } catch (e) { return res.redirect('/login'); }
 }
 
-async function disconnectSftp() {
-    if (sftp) {
-        try { await sftp.end(); } catch (e) { }
-        sftp = null;
-        sftpConnected = false;
-    }
-}
-
-async function cleanSftpFolder() {
-    if (!SFTP_ENABLED) return;
+async function requireAdmin(req, res, next) {
+    const userPayload = getAuthUser(req);
+    if (!userPayload) return res.redirect('/login');
     try {
-        const connected = await ensureSftpConnected();
-        if (!connected) return;
-
-        const exists = await sftp.exists(SFTP_BASE_PATH);
-        if (exists) {
-            const files = await sftp.list(SFTP_BASE_PATH);
-            for (const file of files) {
-                if (file.name.endsWith('.ts') || file.name.endsWith('.m3u8')) {
-                    try {
-                        await sftp.delete(`${SFTP_BASE_PATH}/${file.name}`);
-                    } catch (e) { }
-                }
-            }
-        } else {
-            await sftp.mkdir(SFTP_BASE_PATH, true);
+        const dbUser = await db.select().from(users).where(eq(users.id, userPayload.id));
+        if (dbUser.length === 0 || dbUser[0].role !== 'admin') {
+            return res.status(403).send('Forbidden: Admin access required');
         }
-
-        // Upload .htaccess with robust CORS 'always set' headers for Hostinger CDN
-        const htaccess = `# Allow all origins for HLS video streaming
-<IfModule mod_headers.c>
-    Header always set Access-Control-Allow-Origin "*"
-    Header always set Access-Control-Allow-Methods "GET, HEAD, OPTIONS"
-    Header always set Access-Control-Allow-Headers "Range, Origin, Content-Type, Accept"
-    Header always set Access-Control-Expose-Headers "Content-Length, Content-Range"
-</IfModule>
-
-# Correct MIME types for HLS
-<IfModule mod_mime.c>
-    AddType application/vnd.apple.mpegurl .m3u8
-    AddType video/mp2t .ts
-</IfModule>
-`;
-        await sftp.put(Buffer.from(htaccess), `${SFTP_BASE_PATH}/.htaccess`);
-        console.log('🧹 SFTP CDN folder cleaned + .htaccess CORS (Header always set) uploaded');
-    } catch (err) {
-        console.warn('[SFTP] Clean folder error:', err.message);
-    }
-}
-
-function queueSftpUpload(filename) {
-    if (!SFTP_ENABLED) return;
-    if (filename.endsWith('.tmp')) return;
-
-    if (uploadQueue.has(filename)) {
-        clearTimeout(uploadQueue.get(filename));
-    }
-
-    // Delay .m3u8 upload by 80ms to guarantee .ts segment files arrive on Hostinger CDN first
-    const delay = filename.endsWith('.m3u8') ? 80 : 10;
-
-    uploadQueue.set(filename, setTimeout(async () => {
-        uploadQueue.delete(filename);
-        const localPath = path.join(liveDir, filename);
-        const remotePath = `${SFTP_BASE_PATH}/${filename}`;
-
-        try {
-            const connected = await ensureSftpConnected();
-            if (!connected) return;
-
-            if (fs.existsSync(localPath)) {
-                const data = fs.readFileSync(localPath);
-                await sftp.put(Buffer.from(data), remotePath);
-            } else {
-                try { await sftp.delete(remotePath); } catch (e) { }
-            }
-        } catch (err) {
-            if (err.message && err.message.includes('No SFTP')) {
-                sftpConnected = false;
-                sftp = null;
-            }
-            console.warn(`[SFTP] Sync error (${filename}): ${err.message}`);
-        }
-    }, 50));
-}
-
-function startSftpWatcher() {
-    if (!SFTP_ENABLED) return;
-    if (sftpWatcher) { sftpWatcher.close(); sftpWatcher = null; }
-
-    sftpWatcher = fs.watch(liveDir, (eventType, filename) => {
-        if (!filename) return;
-        if (filename.endsWith('.ts') || filename.endsWith('.m3u8')) {
-            queueSftpUpload(filename);
-        }
-    });
-
-    sftpWatcher.on('error', (err) => {
-        console.warn('[SFTP Watcher] Error:', err.message);
-    });
-
-    console.log('👁️ SFTP file watcher started on liveDir');
-}
-
-function stopSftpWatcher() {
-    if (sftpWatcher) {
-        sftpWatcher.close();
-        sftpWatcher = null;
-    }
-    for (const timer of uploadQueue.values()) {
-        clearTimeout(timer);
-    }
-    uploadQueue.clear();
+        req.user = dbUser[0];
+        next();
+    } catch (e) { return res.status(403).send('Forbidden'); }
 }
 
 // ─── Multi-Stream Session Manager ──────────────────────────────────────────────
 const activeStreams = new Map();
 
-function getOrCreateStreamSession(streamKey, title = 'Live Stream') {
+function getOrCreateStreamSession(streamKey, title = 'Live Stream', hostUser = null) {
     if (!streamKey || streamKey === 'undefined') streamKey = 'default';
     if (activeStreams.has(streamKey)) {
         const session = activeStreams.get(streamKey);
         if (title && title !== 'Live Stream') session.title = title;
+        if (hostUser) { session.hostId = hostUser.id; session.hostName = hostUser.name; }
         return session;
     }
 
@@ -252,38 +121,51 @@ function getOrCreateStreamSession(streamKey, title = 'Live Stream') {
     const session = {
         streamKey,
         title,
+        hostId: hostUser ? hostUser.id : null,
+        hostName: hostUser ? hostUser.name : 'Host',
         createdAt: new Date(),
         isLive: false,
         liveDir: streamLiveDir,
         ffmpegProcess: null,
         s3Watcher: null,
         s3SegmentQueue: new Set(),
-        s3PlaylistQueue: new Set(),
         uploadedS3Segments: new Set(),
+        s3UploadLog: [], // Telemetry items: { timestamp, filename, is720p, is480p }
         isS3Uploading: false,
-        cleanupTimer: null
+        cleanupTimer: null,
+        oneHourTimer: null,
+        countedAgainstLimit: false
     };
 
     activeStreams.set(streamKey, session);
     return session;
 }
 
-// Initialize default stream on server startup
-getOrCreateStreamSession('default', 'Main Live Channel');
-
-// ─── ExCloud S3 Bucket Sync Manager ─────────────────────────────────────────────
+// ─── ExCloud S3 Bucket Sync & Telemetry Manager ──────────────────────────────────
 let s3Client = null;
 if (S3_ENABLED) {
     s3Client = new S3Client({
         endpoint: S3_ENDPOINT,
         region: S3_REGION,
-        credentials: {
-            accessKeyId: S3_ACCESS_KEY,
-            secretAccessKey: S3_SECRET_KEY
-        },
+        credentials: { accessKeyId: S3_ACCESS_KEY, secretAccessKey: S3_SECRET_KEY },
         forcePathStyle: true
     });
-    console.log(`📦 ExCloud S3 Bucket Storage Enabled (Endpoint: ${S3_ENDPOINT}, Bucket: ${S3_BUCKET})`);
+    console.log(`📦 ExCloud S3 Storage Enabled (${S3_ENDPOINT} / ${S3_BUCKET})`);
+}
+
+function getSessionS3Telemetry(session) {
+    if (!session || !session.s3UploadLog) return { chunksPerSec: '0.0', p720Count: 0, p480Count: 0 };
+    const now = Date.now();
+    const recentLogs = session.s3UploadLog.filter(item => now - item.timestamp < 5000);
+    const count720p = recentLogs.filter(item => item.is720p).length;
+    const count480p = recentLogs.filter(item => item.is480p).length;
+    const totalCount = recentLogs.length;
+    return {
+        chunksPerSec: (totalCount / 5).toFixed(1),
+        p720Count: count720p,
+        p480Count: count480p,
+        total: totalCount
+    };
 }
 
 async function uploadSingleSegment(session, filename) {
@@ -301,10 +183,16 @@ async function uploadSingleSegment(session, filename) {
             CacheControl: 'public, max-age=3600'
         }));
         session.uploadedS3Segments.add(filename);
-        console.log(`⚡ S3 Segment Synced [${session.streamKey}]: ${filename}`);
+
+        const now = Date.now();
+        const is720p = filename.includes('720p');
+        const is480p = filename.includes('480p');
+        session.s3UploadLog.push({ timestamp: now, filename, is720p, is480p });
+        session.s3UploadLog = session.s3UploadLog.filter(item => now - item.timestamp < 10000);
+
         return true;
     } catch (err) {
-        console.warn(`[S3 Segment Error ${session.streamKey}] ${filename}:`, err.message);
+        console.warn(`[S3 Upload Error ${session.streamKey}] ${filename}:`, err.message);
         return false;
     }
 }
@@ -318,7 +206,6 @@ async function processS3Queue(session) {
     session.s3SegmentQueue.clear();
 
     await Promise.all(segmentsToUpload.map(filename => uploadSingleSegment(session, filename)));
-
     session.isS3Uploading = false;
 
     if (session.s3SegmentQueue.size > 0) {
@@ -329,7 +216,7 @@ async function processS3Queue(session) {
 function startS3Watcher(session) {
     if (!S3_ENABLED) return;
     if (session.s3Watcher) { session.s3Watcher.close(); session.s3Watcher = null; }
-    console.log(`📡 Starting ExCloud S3 File Sync Watcher for [${session.streamKey}]...`);
+    console.log(`📡 Starting ExCloud S3 Telemetry Watcher for [${session.streamKey}]...`);
 
     try {
         const files = fs.readdirSync(session.liveDir);
@@ -349,12 +236,8 @@ function startS3Watcher(session) {
 }
 
 function stopS3Watcher(session) {
-    if (session.s3Watcher) {
-        session.s3Watcher.close();
-        session.s3Watcher = null;
-    }
+    if (session.s3Watcher) { session.s3Watcher.close(); session.s3Watcher = null; }
     session.s3SegmentQueue.clear();
-    session.s3PlaylistQueue.clear();
     session.uploadedS3Segments.clear();
 }
 
@@ -367,11 +250,9 @@ async function cleanS3Bucket(session) {
             for (const item of listRes.Contents) {
                 await s3Client.send(new DeleteObjectCommand({ Bucket: S3_BUCKET, Key: item.Key }));
             }
-            console.log(`🧹 ExCloud S3 Bucket folder cleaned for [${session.streamKey}]`);
+            console.log(`🧹 S3 Bucket folder cleaned for [${session.streamKey}]`);
         }
-    } catch (err) {
-        console.warn(`[S3 Clean Error ${session.streamKey}]:`, err.message);
-    }
+    } catch (err) { console.warn(`[S3 Clean Error ${session.streamKey}]:`, err.message); }
 }
 
 function clearLiveFolder(session) {
@@ -383,7 +264,7 @@ function clearLiveFolder(session) {
     }
 }
 
-// ─── WebSocket Servers (Status & High-Speed Stream Ingest) ─────────────────────
+// ─── WebSocket Servers (Status, Viewers Count & Telemetries) ───────────────────
 const wss = new WebSocketServer({ noServer: true });
 const streamWss = new WebSocketServer({ noServer: true });
 
@@ -406,21 +287,34 @@ server.on('upgrade', (request, socket, head) => {
         } else {
             socket.destroy();
         }
-    } catch (err) {
-        socket.destroy();
-    }
+    } catch (err) { socket.destroy(); }
 });
 
 wss.on('connection', (ws) => {
     const key = ws.streamKey || 'default';
     const session = activeStreams.get(key);
-    ws.send(JSON.stringify({ type: 'STATUS', live: !!(session && session.isLive), streamKey: key }));
+    broadcastStatus(session || getOrCreateStreamSession(key), !!(session && session.isLive));
+
+    ws.on('close', () => {
+        if (session) broadcastStatus(session, session.isLive);
+    });
     ws.on('error', (err) => console.warn(`[Status WS Error ${key}]:`, err.message));
 });
 
 function broadcastStatus(session, liveState) {
+    if (!session) return;
     session.isLive = liveState;
-    const msg = JSON.stringify({ type: 'STATUS', live: session.isLive, streamKey: session.streamKey });
+    const viewerCount = Array.from(wss.clients).filter(c => c.streamKey === session.streamKey && c.readyState === 1).length;
+    const telemetry = getSessionS3Telemetry(session);
+
+    const msg = JSON.stringify({
+        type: 'STATUS',
+        live: session.isLive,
+        streamKey: session.streamKey,
+        viewers: viewerCount,
+        s3Telemetry: telemetry
+    });
+
     for (const client of wss.clients) {
         if (client.streamKey === session.streamKey && client.readyState === 1) {
             client.send(msg);
@@ -430,8 +324,8 @@ function broadcastStatus(session, liveState) {
 
 streamWss.on('connection', (ws) => {
     const key = ws.streamKey || 'default';
-    console.log(`⚡ Host connected to High-Speed WebSocket Stream Ingest for [${key}]`);
-    
+    console.log(`⚡ Host connected to WebSocket Ingest for [${key}]`);
+
     ws.on('message', (data) => {
         const session = activeStreams.get(key);
         if (session && session.ffmpegProcess && session.ffmpegProcess.stdin && session.ffmpegProcess.stdin.writable) {
@@ -442,8 +336,18 @@ streamWss.on('connection', (ws) => {
         }
     });
     ws.on('error', (err) => console.warn(`[Stream WS Error ${key}]:`, err.message));
-    ws.on('close', () => console.log(`⚡ Host WebSocket Stream Ingest Disconnected for [${key}]`));
+    ws.on('close', () => console.log(`⚡ Host Disconnected for [${key}]`));
 });
+
+// Periodic S3 Upload Telemetry Console Logger
+setInterval(() => {
+    for (const session of activeStreams.values()) {
+        if (session.isLive) {
+            const telemetry = getSessionS3Telemetry(session);
+            console.log(`[Telemetry ${session.streamKey}] Speed: ${telemetry.chunksPerSec} chunks/sec | 720p: ${telemetry.p720Count} | 480p: ${telemetry.p480Count}`);
+        }
+    }
+}, 3000);
 
 // ─── FFmpeg Live Process Manager ────────────────────────────────────────────────
 function stopFfmpegLive(session) {
@@ -459,6 +363,7 @@ function stopFfmpegLive(session) {
         session.ffmpegProcess = null;
     }
     session.isLive = false;
+    if (session.oneHourTimer) { clearTimeout(session.oneHourTimer); session.oneHourTimer = null; }
 }
 
 async function startFfmpegLive(session) {
@@ -471,6 +376,18 @@ async function startFfmpegLive(session) {
     if (S3_ENABLED) {
         await cleanS3Bucket(session);
     }
+
+    // 1-Hour Stream Limit Timer: If stream runs > 1 hour (3600s), increment user stream count in DB!
+    session.countedAgainstLimit = false;
+    session.oneHourTimer = setTimeout(async () => {
+        console.log(`⏰ Stream [${session.streamKey}] reached 1 hour duration. Incrementing stream count for host ${session.hostId}...`);
+        if (session.hostId && !session.countedAgainstLimit) {
+            session.countedAgainstLimit = true;
+            try {
+                await db.update(users).set({ streamCount: sql`${users.streamCount} + 1` }).where(eq(users.id, session.hostId));
+            } catch (e) { console.error('Error updating user streamCount:', e); }
+        }
+    }, 3600 * 1000);
 
     const args = [
         '-y',
@@ -504,7 +421,7 @@ async function startFfmpegLive(session) {
         '-c:a:0', 'aac',
         '-b:a:0', '192k',
 
-        // 480p — Optimized 1.2Mbps stream (30fps, GOP 60 for identical segment sequence numbers)
+        // 480p — Optimized 1.2Mbps stream (30fps, GOP 60 for 1:1 segment lock-step alignment)
         '-map', '[v480out]',
         '-c:v:1', 'libx264',
         '-preset', 'ultrafast',
@@ -556,7 +473,7 @@ async function startFfmpegLive(session) {
                         const speedMatch = msg.match(/speed=\s*([\d.x]+)/);
                         const fps = fpsMatch ? parseFloat(fpsMatch[1]).toFixed(1) : '30.0';
                         const speed = speedMatch ? speedMatch[1] : '1.0x';
-                        console.log(`[Stream ${session.streamKey}] Speed: ${speed} | FPS: ${fps}`);
+                        console.log(`[FFmpeg ${session.streamKey}] Speed: ${speed} | FPS: ${fps}`);
                     }
                 }
             }
@@ -570,26 +487,146 @@ async function startFfmpegLive(session) {
     });
 }
 
-// ─── Routes ─────────────────────────────────────────────────────────────────────
+// ─── Authentication & User Routes ──────────────────────────────────────────────
 
-// Home Dashboard — List all active streams & create stream modal
-app.get('/', (req, res) => {
+app.get('/login', (req, res) => {
+    const user = getAuthUser(req);
+    if (user) return res.redirect('/');
+    res.render('login');
+});
+
+app.get('/logout', (req, res) => {
+    res.clearCookie('auth_token');
+    res.redirect('/login');
+});
+
+app.post('/api/auth/register', async (req, res) => {
+    try {
+        const { name, email, password } = req.body || {};
+        if (!name || !email || !password) {
+            return res.status(400).json({ success: false, error: 'All fields are required' });
+        }
+
+        const existing = await db.select().from(users).where(eq(users.email, email.toLowerCase().trim()));
+        if (existing.length > 0) {
+            return res.status(400).json({ success: false, error: 'Email already registered' });
+        }
+
+        const hashedPassword = await bcrypt.hash(password, 10);
+        await db.insert(users).values({
+            name: name.trim(),
+            email: email.toLowerCase().trim(),
+            password: hashedPassword,
+            role: 'user',
+            hasAccess: false,
+            streamLimit: 5,
+            streamCount: 0
+        });
+
+        res.json({ success: true, message: 'Account registered. Waiting for Admin approval.' });
+    } catch (err) { res.status(500).json({ success: false, error: err.message }); }
+});
+
+app.post('/api/auth/login', async (req, res) => {
+    try {
+        const { email, password } = req.body || {};
+        if (!email || !password) {
+            return res.status(400).json({ success: false, error: 'Email and password required' });
+        }
+
+        const dbUser = await db.select().from(users).where(eq(users.email, email.toLowerCase().trim()));
+        if (dbUser.length === 0) {
+            return res.status(400).json({ success: false, error: 'Invalid email or password' });
+        }
+
+        const user = dbUser[0];
+        const match = await bcrypt.compare(password, user.password);
+        if (!match) {
+            return res.status(400).json({ success: false, error: 'Invalid email or password' });
+        }
+
+        if (!user.hasAccess && user.role !== 'admin') {
+            return res.status(403).json({ success: false, error: 'Account pending Admin access approval.' });
+        }
+
+        const token = jwt.sign({ id: user.id, email: user.email, role: user.role, name: user.name }, JWT_SECRET, { expiresIn: '7d' });
+        res.cookie('auth_token', token, { httpOnly: true, maxAge: 7 * 24 * 3600 * 1000 });
+
+        res.json({ success: true, redirect: '/' });
+    } catch (err) { res.status(500).json({ success: false, error: err.message }); }
+});
+
+// Admin Panel Routes
+app.get('/admin', requireAdmin, async (req, res) => {
+    try {
+        const allUsers = await db.select().from(users).orderBy(desc(users.createdAt));
+        const activeList = Array.from(activeStreams.values()).map(s => {
+            const statusClients = Array.from(wss.clients).filter(c => c.streamKey === s.streamKey && c.readyState === 1);
+            return {
+                streamKey: s.streamKey,
+                title: s.title,
+                hostName: s.hostName || 'Host',
+                isLive: s.isLive,
+                viewerCount: statusClients.length,
+                s3Telemetry: getSessionS3Telemetry(s)
+            };
+        });
+        res.render('admin', { users: allUsers, activeStreams: activeList, currentUser: req.user });
+    } catch (err) { res.status(500).send('Admin error: ' + err.message); }
+});
+
+app.post('/api/admin/users/access', requireAdmin, async (req, res) => {
+    try {
+        const { userId, hasAccess } = req.body;
+        await db.update(users).set({ hasAccess: !!hasAccess }).where(eq(users.id, userId));
+        res.json({ success: true });
+    } catch (err) { res.status(500).json({ success: false, error: err.message }); }
+});
+
+app.post('/api/admin/users/limit', requireAdmin, async (req, res) => {
+    try {
+        const { userId, streamLimit } = req.body;
+        await db.update(users).set({ streamLimit: parseInt(streamLimit) }).where(eq(users.id, userId));
+        res.json({ success: true });
+    } catch (err) { res.status(500).json({ success: false, error: err.message }); }
+});
+
+app.post('/api/admin/users/reset-count', requireAdmin, async (req, res) => {
+    try {
+        const { userId } = req.body;
+        await db.update(users).set({ streamCount: 0 }).where(eq(users.id, userId));
+        res.json({ success: true });
+    } catch (err) { res.status(500).json({ success: false, error: err.message }); }
+});
+
+// ─── Application Core Routes ─────────────────────────────────────────────────────
+
+// Home Dashboard — Requires Auth
+app.get('/', requireAuth, (req, res) => {
     const streamsList = Array.from(activeStreams.values()).map(s => ({
         streamKey: s.streamKey,
         title: s.title,
         isLive: s.isLive || fs.existsSync(path.join(s.liveDir, 'master.m3u8')),
         createdAt: s.createdAt
     }));
-    res.render('home', { streams: streamsList });
+    res.render('home', { streams: streamsList, user: req.user });
 });
 
 // Create Stream API
-app.post('/api/streams/create', (req, res) => {
+app.post('/api/streams/create', requireAuth, async (req, res) => {
     let { title, streamKey } = req.body || {};
     if (!title) title = 'Untitled Live Movie Stream';
     if (!streamKey) streamKey = 'str_' + Math.random().toString(36).substring(2, 9);
 
-    const session = getOrCreateStreamSession(streamKey, title);
+    // Check monthly stream limit for normal users
+    if (req.user.role !== 'admin' && req.user.streamCount >= req.user.streamLimit) {
+        return res.status(403).json({
+            success: false,
+            error: `Monthly stream limit reached (${req.user.streamCount}/${req.user.streamLimit}). Contact Admin to increase limit.`
+        });
+    }
+
+    const session = getOrCreateStreamSession(streamKey, title, req.user);
     res.json({
         success: true,
         streamKey: session.streamKey,
@@ -597,43 +634,34 @@ app.post('/api/streams/create', (req, res) => {
     });
 });
 
-// List Streams API
-app.get('/api/streams', (req, res) => {
-    const streamsList = Array.from(activeStreams.values()).map(s => ({
-        streamKey: s.streamKey,
-        title: s.title,
-        isLive: s.isLive || fs.existsSync(path.join(s.liveDir, 'master.m3u8')),
-        createdAt: s.createdAt
-    }));
-    res.json({ success: true, streams: streamsList });
-});
-
-// Broadcaster Studio Route
-app.get(['/stream', '/stream/:streamKey'], (req, res) => {
+// Broadcaster Studio Route — Requires Auth
+app.get(['/stream', '/stream/:streamKey'], requireAuth, (req, res) => {
     const key = req.params.streamKey || 'default';
-    const session = getOrCreateStreamSession(key);
+    const session = getOrCreateStreamSession(key, 'Live Channel', req.user);
+
+    // Check monthly limit before broadcasting
+    if (req.user.role !== 'admin' && req.user.streamCount >= req.user.streamLimit) {
+        return res.status(403).send(`<h1>Monthly Stream Limit Reached</h1><p>You have used ${req.user.streamCount} out of ${req.user.streamLimit} streams allowed this month. Please contact your Admin.</p><a href="/">Back to Home</a>`);
+    }
+
     res.render('index', {
         title: `${session.title} - Broadcaster Studio`,
         streamKey: session.streamKey,
-        streamTitle: session.title
+        streamTitle: session.title,
+        user: req.user
     });
 });
 
 // Dynamic Express HLS Playlist Server — Serves .m3u8 instantly with zero CDN delay
-// Rewrites segment URLs to ExCloud S3 bucket CDN while filtering unverified S3 segments
 app.get(['/live-playlist/:streamKey/:playlist', '/live-playlist/:playlist'], (req, res) => {
     const streamKey = req.params.streamKey || 'default';
     const playlistName = req.params.playlist || 'master.m3u8';
 
     const session = activeStreams.get(streamKey);
-    if (!session) {
-        return res.status(404).send('#EXTM3U\n#EXT-X-ERROR: Stream session not found');
-    }
+    if (!session) return res.status(404).send('#EXTM3U\n#EXT-X-ERROR: Stream session not found');
 
     const playlistPath = path.join(session.liveDir, playlistName);
-    if (!fs.existsSync(playlistPath)) {
-        return res.status(404).send('#EXTM3U\n#EXT-X-ERROR: Playlist not generated yet');
-    }
+    if (!fs.existsSync(playlistPath)) return res.status(404).send('#EXTM3U\n#EXT-X-ERROR: Playlist not generated yet');
 
     try {
         const rawContent = fs.readFileSync(playlistPath, 'utf-8');
@@ -642,12 +670,8 @@ app.get(['/live-playlist/:streamKey/:playlist', '/live-playlist/:playlist'], (re
         res.setHeader('Pragma', 'no-cache');
         res.setHeader('Expires', '0');
 
-        if (playlistName === 'master.m3u8') {
-            return res.send(rawContent);
-        }
+        if (playlistName === 'master.m3u8') return res.send(rawContent);
 
-        // Variant playlist (stream_720p.m3u8, stream_480p.m3u8)
-        // Rewrite relative segment lines (stream_720p0.ts) to ExCloud S3 CDN absolute URLs
         const s3CdnBase = `${S3_PUBLIC_BASE_URL}/${streamKey}`;
         const lines = rawContent.split(/\r?\n/);
         const rewrittenLines = [];
@@ -655,7 +679,6 @@ app.get(['/live-playlist/:streamKey/:playlist', '/live-playlist/:playlist'], (re
         for (let i = 0; i < lines.length; i++) {
             const line = lines[i].trim();
             if (line.endsWith('.ts')) {
-                // If segment is not verified uploaded on S3 yet, omit it to prevent 404s!
                 if (S3_ENABLED && !session.uploadedS3Segments.has(line)) {
                     if (rewrittenLines.length > 0 && rewrittenLines[rewrittenLines.length - 1].startsWith('#EXTINF:')) {
                         rewrittenLines.pop();
@@ -670,12 +693,10 @@ app.get(['/live-playlist/:streamKey/:playlist', '/live-playlist/:playlist'], (re
         }
 
         return res.send(rewrittenLines.join('\n'));
-    } catch (err) {
-        return res.status(500).send('#EXTM3U\n#EXT-X-ERROR: Internal error reading playlist');
-    }
+    } catch (err) { return res.status(500).send('#EXTM3U\n#EXT-X-ERROR: Error reading playlist'); }
 });
 
-// Live Player Route (HLS Master Playlist served via Express)
+// Public Live Player Route (HLS Master Playlist served via Express)
 app.get(['/live', '/live/:streamKey'], (req, res) => {
     const key = req.params.streamKey || 'default';
     const session = getOrCreateStreamSession(key);
@@ -687,7 +708,7 @@ app.get(['/live', '/live/:streamKey'], (req, res) => {
     });
 });
 
-// Live Status Check
+// Live Status Check API
 app.get(['/live/status', '/live/status/:streamKey'], (req, res) => {
     const key = req.params.streamKey || req.query.streamKey || 'default';
     const session = activeStreams.get(key);
@@ -698,7 +719,9 @@ app.get(['/live/status', '/live/status/:streamKey'], (req, res) => {
 // Reset & Start Stream Process
 app.post(['/reset-stream', '/reset-stream/:streamKey'], async (req, res) => {
     const key = req.params.streamKey || req.body?.streamKey || 'default';
-    const session = getOrCreateStreamSession(key);
+    const user = getAuthUser(req);
+    const session = getOrCreateStreamSession(key, 'Live Stream', user);
+
     try {
         await startFfmpegLive(session);
         broadcastStatus(session, true);
@@ -718,23 +741,18 @@ app.post(['/stop-stream', '/stop-stream/:streamKey'], async (req, res) => {
     try {
         broadcastStatus(session, false);
         stopS3Watcher(session);
-        console.log(`🔴 Stream [${key}] stopped. Cleanup scheduled in 10 minutes.`);
+        console.log(`🔴 Stream [${key}] stopped.`);
 
         if (session.cleanupTimer) clearTimeout(session.cleanupTimer);
         session.cleanupTimer = setTimeout(async () => {
             console.log(`🧹 Purging HLS files for [${key}]...`);
             stopFfmpegLive(session);
             clearLiveFolder(session);
-            if (S3_ENABLED) {
-                await cleanS3Bucket(session);
-            }
-        }, CLEANUP_DELAY_MS);
+            if (S3_ENABLED) await cleanS3Bucket(session);
+        }, 10 * 60 * 1000);
 
         res.json({ success: true, message: `Stream [${key}] stopped.` });
-    } catch (err) {
-        console.error(`Error stopping stream ${key}:`, err);
-        res.status(500).json({ success: false, error: err.message });
-    }
+    } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 });
 
 // Binary Chunk Stream HTTP Fallback
@@ -762,7 +780,5 @@ app.use((err, req, res, next) => {
 
 server.listen(PORT, () => {
     console.log(`🚀 CoWatch Multi-Stream Platform running at ${APP_URL} (Port ${PORT})`);
-    if (S3_ENABLED) {
-        console.log(`📦 ExCloud S3 Multi-Stream CDN Base: ${S3_PUBLIC_BASE_URL}`);
-    }
+    if (S3_ENABLED) console.log(`📦 ExCloud S3 Multi-Stream CDN Base: ${S3_PUBLIC_BASE_URL}`);
 });

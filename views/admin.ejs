@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin Dashboard - CoWatch Studio</title>
+    <link rel="icon" type="image/png" href="/favicon.png">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        accent: '#6366f1',
+                        'dark-bg': '#090d16',
+                        'card-bg': 'rgba(15, 23, 42, 0.8)',
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        body {
+            background-color: #090d16;
+            background-image: 
+                radial-gradient(at 0% 0%, rgba(99, 102, 241, 0.15) 0px, transparent 50%),
+                radial-gradient(at 100% 100%, rgba(139, 92, 246, 0.12) 0px, transparent 50%);
+            font-family: 'Inter', system-ui, -apple-system, sans-serif;
+        }
+
+        .glass-card {
+            background: rgba(15, 23, 42, 0.8);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+        }
+
+        .gradient-text {
+            background: linear-gradient(135deg, #818cf8 0%, #c084fc 100%);
+            background-clip: text;
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .glow-btn {
+            background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%);
+            box-shadow: 0 4px 15px rgba(99, 102, 241, 0.4);
+            transition: all 0.2s ease;
+        }
+    </style>
+</head>
+<body class="min-h-screen text-slate-100 flex flex-col justify-between antialiased">
+
+    <!-- Header Navigation -->
+    <header class="w-full border-b border-white/10 bg-slate-950/60 backdrop-blur-md sticky top-0 z-40">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-20 flex items-center justify-between">
+            <a href="/" class="flex items-center gap-3">
+                <div class="w-10 h-10 rounded-xl bg-indigo-600/20 border border-indigo-500/30 flex items-center justify-center text-indigo-400 text-xl font-bold">
+                    <i class="fa-solid fa-shield-halved"></i>
+                </div>
+                <div>
+                    <span class="text-xl font-bold text-white tracking-tight">Admin <span class="gradient-text">Console</span></span>
+                    <span class="block text-[10px] text-indigo-400 font-mono tracking-wider uppercase">User Access & Stream Telemetries</span>
+                </div>
+            </a>
+
+            <div class="flex items-center gap-4">
+                <span class="text-xs font-semibold text-slate-300 bg-slate-800 px-3 py-1.5 rounded-xl border border-white/10 flex items-center gap-2">
+                    <i class="fa-solid fa-user-gear text-indigo-400"></i>
+                    <span><%= currentUser.name %></span>
+                </span>
+                <a href="/logout" class="px-4 py-2 rounded-xl bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/20 text-xs font-semibold transition-colors flex items-center gap-1.5">
+                    <i class="fa-solid fa-right-from-bracket"></i>
+                    <span>Logout</span>
+                </a>
+            </div>
+        </div>
+    </header>
+
+    <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-10 flex-1 w-full">
+        
+        <!-- Quick Stats Cards -->
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5 mb-10">
+            <div class="glass-card rounded-2xl p-5 flex items-center justify-between">
+                <div>
+                    <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Total Users</p>
+                    <h3 class="text-2xl font-bold text-white mt-1"><%= users.length %></h3>
+                </div>
+                <div class="w-12 h-12 rounded-xl bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center text-indigo-400 text-xl">
+                    <i class="fa-solid fa-users"></i>
+                </div>
+            </div>
+
+            <div class="glass-card rounded-2xl p-5 flex items-center justify-between">
+                <div>
+                    <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Pending Access</p>
+                    <h3 class="text-2xl font-bold text-amber-400 mt-1"><%= users.filter(u => !u.hasAccess).length %></h3>
+                </div>
+                <div class="w-12 h-12 rounded-xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-amber-400 text-xl">
+                    <i class="fa-solid fa-user-clock"></i>
+                </div>
+            </div>
+
+            <div class="glass-card rounded-2xl p-5 flex items-center justify-between">
+                <div>
+                    <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Active Streams</p>
+                    <h3 class="text-2xl font-bold text-emerald-400 mt-1"><%= activeStreams.length %></h3>
+                </div>
+                <div class="w-12 h-12 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400 text-xl">
+                    <i class="fa-solid fa-tower-cell"></i>
+                </div>
+            </div>
+
+            <div class="glass-card rounded-2xl p-5 flex items-center justify-between">
+                <div>
+                    <p class="text-xs font-semibold text-slate-400 uppercase tracking-wider">Cloud Storage</p>
+                    <h3 class="text-2xl font-bold text-indigo-300 mt-1">ExCloud S3</h3>
+                </div>
+                <div class="w-12 h-12 rounded-xl bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center text-indigo-400 text-xl">
+                    <i class="fa-solid fa-cloud"></i>
+                </div>
+            </div>
+        </div>
+
+        <!-- User Access & Streaming Quotas Section -->
+        <div class="glass-card rounded-2xl p-6 mb-10">
+            <div class="flex items-center justify-between mb-6">
+                <h2 class="text-lg font-bold text-white flex items-center gap-2">
+                    <i class="fa-solid fa-users-gear text-indigo-400"></i>
+                    <span>User Access & Streaming Quotas</span>
+                </h2>
+            </div>
+
+            <div class="overflow-x-auto">
+                <table class="w-full text-left text-sm text-slate-300">
+                    <thead class="text-xs uppercase bg-slate-900/80 text-slate-400 border-b border-white/10">
+                        <tr>
+                            <th class="px-4 py-3 rounded-l-xl">User</th>
+                            <th class="px-4 py-3">Role</th>
+                            <th class="px-4 py-3">Access Status</th>
+                            <th class="px-4 py-3">Monthly Stream Quota</th>
+                            <th class="px-4 py-3 text-right rounded-r-xl">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-white/5">
+                        <% users.forEach(function(u) { %>
+                            <tr class="hover:bg-slate-900/40 transition-colors">
+                                <td class="px-4 py-4">
+                                    <div class="font-bold text-white"><%= u.name %></div>
+                                    <div class="text-xs text-slate-400 font-mono"><%= u.email %></div>
+                                </td>
+                                <td class="px-4 py-4">
+                                    <% if (u.role === 'admin') { %>
+                                        <span class="px-2.5 py-1 rounded-full text-[10px] font-bold bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">ADMIN</span>
+                                    <% } else { %>
+                                        <span class="px-2.5 py-1 rounded-full text-[10px] font-semibold bg-slate-800 text-slate-300 border border-slate-700">USER</span>
+                                    <% } %>
+                                </td>
+                                <td class="px-4 py-4">
+                                    <% if (u.hasAccess) { %>
+                                        <span class="px-2.5 py-1 rounded-full text-[11px] font-semibold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 inline-flex items-center gap-1.5">
+                                            <i class="fa-solid fa-circle-check text-[9px]"></i> Granted
+                                        </span>
+                                    <% } else { %>
+                                        <span class="px-2.5 py-1 rounded-full text-[11px] font-semibold bg-amber-500/20 text-amber-400 border border-amber-500/30 inline-flex items-center gap-1.5">
+                                            <i class="fa-solid fa-clock text-[9px]"></i> Pending Approval
+                                        </span>
+                                    <% } %>
+                                </td>
+                                <td class="px-4 py-4">
+                                    <div class="font-mono text-xs">
+                                        <span class="text-white font-bold"><%= u.streamCount %></span> / <span class="text-slate-400"><%= u.streamLimit %></span> streams
+                                        <span class="text-[10px] text-slate-500 block">(Increments on 1+ hr streams)</span>
+                                    </div>
+                                </td>
+                                <td class="px-4 py-4 text-right space-x-2">
+                                    <% if (u.role !== 'admin') { %>
+                                        <button data-userid="<%= u.id %>" data-hasaccess="<%= u.hasAccess %>" onclick="toggleAccess(this.dataset.userid, this.dataset.hasaccess !== 'true')" class="px-3 py-1.5 rounded-lg text-xs font-semibold transition-all <%= u.hasAccess ? 'bg-amber-500/10 text-amber-400 hover:bg-amber-500/20 border border-amber-500/30' : 'bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30 border border-emerald-500/40' %>">
+                                            <%= u.hasAccess ? 'Revoke Access' : 'Approve Access' %>
+                                        </button>
+                                        <button data-userid="<%= u.id %>" data-nextlimit="<%= u.streamLimit + 5 %>" onclick="updateLimit(this.dataset.userid, this.dataset.nextlimit)" class="px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-indigo-300 border border-white/10">
+                                            +5 Quota
+                                        </button>
+                                        <button data-userid="<%= u.id %>" onclick="resetCount(this.dataset.userid)" class="px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-300 border border-white/10">
+                                            Reset Count
+                                        </button>
+                                    <% } else { %>
+                                        <span class="text-xs text-slate-500 italic">Full Access</span>
+                                    <% } %>
+                                </td>
+                            </tr>
+                        <% }); %>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Live Streams Telemetry Monitor -->
+        <div class="glass-card rounded-2xl p-6">
+            <h2 class="text-lg font-bold text-white mb-6 flex items-center gap-2">
+                <i class="fa-solid fa-chart-line text-indigo-400"></i>
+                <span>Live Streams Telemetry & Active Viewers</span>
+            </h2>
+
+            <div class="overflow-x-auto">
+                <table class="w-full text-left text-sm text-slate-300">
+                    <thead class="text-xs uppercase bg-slate-900/80 text-slate-400 border-b border-white/10">
+                        <tr>
+                            <th class="px-4 py-3">Stream Key / Title</th>
+                            <th class="px-4 py-3">Host</th>
+                            <th class="px-4 py-3">Status</th>
+                            <th class="px-4 py-3">Live Viewers</th>
+                            <th class="px-4 py-3">S3 Chunk Upload Telemetry</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-white/5">
+                        <% if (activeStreams.length === 0) { %>
+                            <tr>
+                                <td colspan="5" class="px-4 py-8 text-center text-slate-500 text-xs">
+                                    No active live stream sessions currently encoding.
+                                </td>
+                            </tr>
+                        <% } else { %>
+                            <% activeStreams.forEach(function(s) { %>
+                                <tr class="hover:bg-slate-900/40 transition-colors">
+                                    <td class="px-4 py-4">
+                                        <div class="font-bold text-white"><%= s.title %></div>
+                                        <div class="text-xs text-indigo-400 font-mono"><%= s.streamKey %></div>
+                                    </td>
+                                    <td class="px-4 py-4 text-xs text-slate-300">
+                                        <%= s.hostName || 'Host' %>
+                                    </td>
+                                    <td class="px-4 py-4">
+                                        <span class="px-2.5 py-1 rounded-full text-[10px] font-bold bg-red-500/20 text-red-400 border border-red-500/30 flex items-center gap-1.5 w-fit">
+                                            <span class="w-1.5 h-1.5 rounded-full bg-red-400 animate-ping"></span> LIVE
+                                        </span>
+                                    </td>
+                                    <td class="px-4 py-4">
+                                        <span class="font-bold text-indigo-300 text-sm flex items-center gap-1.5">
+                                            <i class="fa-solid fa-eye text-xs text-indigo-400"></i> <%= s.viewerCount || 0 %> Watching
+                                        </span>
+                                    </td>
+                                    <td class="px-4 py-4 text-xs font-mono text-slate-300">
+                                        <div>Upload Speed: <span class="text-emerald-400 font-bold"><%= s.s3Telemetry ? s.s3Telemetry.chunksPerSec : 0 %> chunks/sec</span></div>
+                                        <div class="text-[11px] text-slate-400">Ratio: 720p (<%= s.s3Telemetry ? s.s3Telemetry.p720Count : 0 %>) / 480p (<%= s.s3Telemetry ? s.s3Telemetry.p480Count : 0 %>)</div>
+                                    </td>
+                                </tr>
+                            <% }); %>
+                        <% } %>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+    </main>
+
+    <script>
+        async function toggleAccess(userId, hasAccess) {
+            try {
+                const res = await fetch('/api/admin/users/access', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ userId, hasAccess })
+                });
+                const data = await res.json();
+                if (data.success) location.reload();
+                else alert('Error: ' + data.error);
+            } catch (err) { alert('Network error: ' + err.message); }
+        }
+
+        async function updateLimit(userId, streamLimit) {
+            try {
+                const res = await fetch('/api/admin/users/limit', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ userId, streamLimit })
+                });
+                const data = await res.json();
+                if (data.success) location.reload();
+                else alert('Error: ' + data.error);
+            } catch (err) { alert('Network error: ' + err.message); }
+        }
+
+        async function resetCount(userId) {
+            try {
+                const res = await fetch('/api/admin/users/reset-count', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ userId })
+                });
+                const data = await res.json();
+                if (data.success) location.reload();
+                else alert('Error: ' + data.error);
+            } catch (err) { alert('Network error: ' + err.message); }
+        }
+    </script>
+</body>
+</html>
