@@ -512,11 +512,11 @@ async function startFfmpegLive(session, opts = {}) {
 
     if (!usePassthrough) {
         args.push(
-            // 720p H.264: high-quality 6 Mbps target (use ultrafast preset for realtime)
+            // 720p H.264: high-quality 4.5 Mbps target (use ultrafast preset for realtime)
             '-map', '[v720]', '-map', '[a720]',
             '-c:v:0', 'libx264', '-preset', 'ultrafast', '-tune:v:0', 'zerolatency',
             '-profile:v:0', 'main', '-pix_fmt:v:0', 'yuv420p',
-            '-b:v:0', '6000k', '-maxrate:v:0', '6000k', '-bufsize:v:0', '12000k',
+            '-b:v:0', '4500k', '-maxrate:v:0', '4500k', '-bufsize:v:0', '9000k',
             '-r:v:0', '30', '-g:v:0', '60', '-keyint_min:v:0', '60', '-sc_threshold:v:0', '0',
             '-x264-params:v:0', 'keyint=60:min-keyint=60:scenecut=0:bframes=0:rc-lookahead=0:ref=1',
             '-c:a:0', 'aac', '-b:a:0', '128k', '-ar:a:0', '48000', '-ac:a:0', '2'
