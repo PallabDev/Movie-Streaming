@@ -367,7 +367,16 @@ streamWss.on('connection', (ws) => {
         }
     });
     ws.on('error', (err) => console.warn(`[Stream WS Error ${key}]:`, err.message));
-    ws.on('close', () => console.log(`⚡ Host Disconnected for [${key}]`));
+    ws.on('close', () => {
+        console.log(`⚡ Host Disconnected for [${key}]. Killing FFmpeg process immediately...`);
+        const session = activeStreams.get(key);
+        if (session) {
+            stopFfmpegLive(session);
+            stopS3Watcher(session);
+            broadcastStatus(session, false);
+            broadcastAdminTelemetry();
+        }
+    });
 });
 
 // Periodic S3 Upload Telemetry Console & Admin Broadcast Logger
@@ -804,14 +813,15 @@ app.post(['/stop-stream', '/stop-stream/:streamKey'], async (req, res) => {
     if (!session) return res.json({ success: true });
 
     try {
-        broadcastStatus(session, false);
+        stopFfmpegLive(session);
         stopS3Watcher(session);
-        console.log(`🔴 Stream [${key}] stopped.`);
+        broadcastStatus(session, false);
+        broadcastAdminTelemetry();
+        console.log(`🔴 Stream [${key}] stopped and FFmpeg process killed immediately.`);
 
         if (session.cleanupTimer) clearTimeout(session.cleanupTimer);
         session.cleanupTimer = setTimeout(async () => {
-            console.log(`🧹 Purging HLS files for [${key}]...`);
-            stopFfmpegLive(session);
+            console.log(`🧹 Purging local HLS files for [${key}]...`);
             clearLiveFolder(session);
             if (S3_ENABLED) await cleanS3Bucket(session);
         }, 10 * 60 * 1000);

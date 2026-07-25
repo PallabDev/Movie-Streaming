@@ -674,8 +674,8 @@
                 streamWs = null;
             }
 
-            // Notify server that stream has ended and schedule 10-minute segment cleanup
-            fetch('/stop-stream', { method: 'POST' }).catch(err => console.warn('Error calling /stop-stream:', err));
+            // Notify server that stream has ended and kill FFmpeg immediately
+            fetch('/stop-stream/' + currentStreamKey, { method: 'POST' }).catch(err => console.warn('Error calling /stop-stream:', err));
 
             previewVideo.srcObject = null;
             previewVideo.classList.remove('active');
