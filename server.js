@@ -264,7 +264,27 @@ function stopCpuMonitor() {
 }
 
 // ─── WebSocket Servers (Status & High-Speed Stream Ingest) ─────────────────────
-const wss = new WebSocketServer({ server, path: '/status-ws' });
+const wss = new WebSocketServer({ noServer: true });
+const streamWss = new WebSocketServer({ noServer: true });
+
+server.on('upgrade', (request, socket, head) => {
+    try {
+        const { pathname } = new URL(request.url, `http://${request.headers.host || 'localhost'}`);
+        if (pathname === '/status-ws') {
+            wss.handleUpgrade(request, socket, head, (ws) => {
+                wss.emit('connection', ws, request);
+            });
+        } else if (pathname === '/stream-ws') {
+            streamWss.handleUpgrade(request, socket, head, (ws) => {
+                streamWss.emit('connection', ws, request);
+            });
+        } else {
+            socket.destroy();
+        }
+    } catch (err) {
+        socket.destroy();
+    }
+});
 
 wss.on('connection', (ws) => {
     ws.send(JSON.stringify({ type: 'STATUS', live: isLiveStreamActive }));
@@ -280,18 +300,18 @@ function broadcastStatus(liveState) {
 }
 
 // Ultra-low latency binary WebSocket stream ingest
-const streamWss = new WebSocketServer({ server, path: '/stream-ws' });
-
 streamWss.on('connection', (ws) => {
+    console.log('⚡ Host connected to High-Speed WebSocket Stream Ingest');
     ws.on('message', (data) => {
         if (ffmpegLiveProcess && ffmpegLiveProcess.stdin && ffmpegLiveProcess.stdin.writable) {
             try {
                 const buf = Buffer.isBuffer(data) ? data : Buffer.from(data);
                 ffmpegLiveProcess.stdin.write(buf);
-            } catch (e) {}
+            } catch (e) { }
         }
     });
     ws.on('error', (err) => console.warn('[Stream WS Error]:', err.message));
+    ws.on('close', () => console.log('⚡ Host WebSocket Stream Ingest Disconnected'));
 });
 
 // ─── FFmpeg Live Process ────────────────────────────────────────────────────────
@@ -320,7 +340,7 @@ function stopFfmpegLive() {
     }
 }
 
-// Start Single 720p Stream Generator (Discards corrupt frames & linearizes DTS timestamps)
+// Start High-Quality 720p Stream Generator (CRF + High Profile)
 async function startFfmpegLive() {
     if (cleanupTimer) { clearTimeout(cleanupTimer); cleanupTimer = null; }
 
@@ -333,7 +353,7 @@ async function startFfmpegLive() {
 
     const args = [
         '-y',
-        '-threads', '2',
+        '-threads', '0',
         '-fflags', '+genpts+discardcorrupt',
         '-probesize', '2M',
         '-analyzeduration', '1000000',
@@ -341,41 +361,40 @@ async function startFfmpegLive() {
         '-f', 'lavfi',
         '-i', 'anullsrc=channel_layout=stereo:sample_rate=48000',
 
-        // Dual-resolution filter graph (720p + 480p) with clean audio
+        // Dual-resolution filter graph — 720p@30fps + 480p@24fps
         '-filter_complex',
-        '[0:v]fps=30,format=yuv420p,split=2[v720in][v480in];' +
-        '[v720in]scale=1280:720[v720out];' +
-        '[v480in]scale=854:480[v480out];' +
+        '[0:v]format=yuv420p,split=2[v720in][v480in];' +
+        '[v720in]fps=30,scale=1280:720[v720out];' +
+        '[v480in]fps=24,scale=854:480[v480out];' +
         '[0:a][1:a]amix=inputs=2:duration=first:dropout_transition=0:normalize=0,aresample=async=1:first_pts=0,asplit=2[a720][a480]',
 
-        // 720p Rendition (2.5 Mbps HD)
+        // 720p — CRF quality, high profile, all cores
         '-map', '[v720out]',
         '-c:v:0', 'libx264',
         '-preset', 'ultrafast',
-        '-tune', 'zerolatency',
-        '-profile:v:0', 'main',
-        '-b:v:0', '2500k',
-        '-maxrate:v:0', '3000k',
-        '-bufsize:v:0', '5000k',
-        '-g:v:0', '30',
+        '-profile:v:0', 'high',
+        '-level:v:0', '4.1',
+        '-crf:v:0', '23',
+        '-maxrate:v:0', '4500k',
+        '-bufsize:v:0', '9000k',
+        '-g:v:0', '60',
         '-sc_threshold:v:0', '0',
-        '-x264-params:v:0', 'no-scenecut=1:open-gop=0:keyint=30:min-keyint=30',
+        '-x264-params:v:0', 'no-scenecut=1:open-gop=0:keyint=60:min-keyint=60:rc-lookahead=10',
         '-map', '[a720]',
         '-c:a:0', 'aac',
         '-b:a:0', '192k',
 
-        // 480p Rendition (1.0 Mbps SD)
+        // 480p — lightweight (baseline, CRF 28, 24fps)
         '-map', '[v480out]',
         '-c:v:1', 'libx264',
         '-preset', 'ultrafast',
-        '-tune', 'zerolatency',
-        '-profile:v:1', 'main',
-        '-b:v:1', '1000k',
+        '-profile:v:1', 'baseline',
+        '-crf:v:1', '28',
         '-maxrate:v:1', '1200k',
-        '-bufsize:v:1', '2000k',
-        '-g:v:1', '30',
+        '-bufsize:v:1', '2400k',
+        '-g:v:1', '48',
         '-sc_threshold:v:1', '0',
-        '-x264-params:v:1', 'no-scenecut=1:open-gop=0:keyint=30:min-keyint=30',
+        '-x264-params:v:1', 'no-scenecut=1:open-gop=0:keyint=48:min-keyint=48:rc-lookahead=0:bframes=0',
         '-map', '[a480]',
         '-c:a:1', 'aac',
         '-b:a:1', '96k',
@@ -391,7 +410,7 @@ async function startFfmpegLive() {
         path.join(liveDir, 'stream_%v.m3u8')
     ];
 
-    console.log('⚡ Spawning Dual-Quality (720p + 480p) Live Stream Generator...');
+    console.log('⚡ Spawning Dual-Quality (720p CRF + 480p Lite) Live Stream Generator...');
     ffmpegLiveProcess = spawn('ffmpeg', args);
 
     if (SFTP_ENABLED) {

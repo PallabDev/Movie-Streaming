@@ -439,13 +439,44 @@
         let streamWs = null;
 
         function connectStreamWebSocket() {
-            if (streamWs && (streamWs.readyState === WebSocket.OPEN || streamWs.readyState === WebSocket.CONNECTING)) return;
-            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-            const wsUrl = `${protocol}//${window.location.host}/stream-ws`;
-            streamWs = new WebSocket(wsUrl);
-            streamWs.binaryType = 'arraybuffer';
-            streamWs.onopen = () => console.log('⚡ High-Speed WebSocket Stream Ingest Connected');
-            streamWs.onerror = (err) => console.warn('Stream WebSocket error:', err);
+            return new Promise((resolve) => {
+                if (streamWs && streamWs.readyState === WebSocket.OPEN) {
+                    resolve();
+                    return;
+                }
+                if (streamWs) {
+                    try { streamWs.close(); } catch(e) {}
+                    streamWs = null;
+                }
+
+                const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+                const wsUrl = `${protocol}//${window.location.host}/stream-ws`;
+                streamWs = new WebSocket(wsUrl);
+                streamWs.binaryType = 'arraybuffer';
+
+                streamWs.onopen = () => {
+                    console.log('⚡ WebSocket Stream Ingest Connected');
+                    resolve();
+                };
+
+                streamWs.onerror = (err) => {
+                    console.warn('WebSocket stream error:', err);
+                    resolve(); // resolve anyway, sendChunk will use HTTP fallback
+                };
+
+                streamWs.onclose = () => {
+                    console.warn('WebSocket stream closed');
+                    // Auto-reconnect if still streaming
+                    if (mediaStream) {
+                        setTimeout(() => {
+                            connectStreamWebSocket();
+                        }, 500);
+                    }
+                };
+
+                // Timeout — don't block forever if WS fails to connect
+                setTimeout(resolve, 3000);
+            });
         }
 
         async function sendChunk(blob, index) {
@@ -454,6 +485,7 @@
                 if (streamWs && streamWs.readyState === WebSocket.OPEN) {
                     streamWs.send(arrayBuffer);
                 } else {
+                    // HTTP fallback only when WS is temporarily down
                     fetch('/stream', {
                         method: 'POST',
                         headers: {
@@ -479,7 +511,6 @@
             try {
                 // Clear server media folder for new recording session
                 await fetch('/reset-stream', { method: 'POST' });
-                connectStreamWebSocket();
                 chunkIndex = 0;
                 chunksBadge.textContent = 'Chunks Sent: 0';
                 downloadBtn.style.display = 'none';
@@ -501,6 +532,9 @@
                 };
 
                 mediaStream = await navigator.mediaDevices.getDisplayMedia(constraints);
+
+                // Connect WebSocket right after screen selection, before starting MediaRecorder
+                await connectStreamWebSocket();
 
                 // Set stream to video element
                 previewVideo.srcObject = mediaStream;
