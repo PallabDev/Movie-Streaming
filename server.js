@@ -750,14 +750,21 @@ app.get(['/live-playlist/:streamKey/:playlist', '/live-playlist/:playlist'], (re
 
     try {
         const isTs = playlistName.endsWith('.ts');
-        const rawContent = isTs ? fs.readFileSync(playlistPath) : fs.readFileSync(playlistPath, 'utf-8');
-        res.setHeader('Content-Type', isTs ? 'video/mp2t' : 'application/vnd.apple.mpegurl');
-        res.setHeader('Cache-Control', isTs ? 'public, max-age=3600' : 'no-cache, no-store, must-revalidate, max-age=0');
-        res.setHeader('Pragma', isTs ? 'public' : 'no-cache');
-        res.setHeader('Expires', isTs ? '3600' : '0');
+        if (isTs) {
+            res.setHeader('Content-Type', 'video/mp2t');
+            res.setHeader('Cache-Control', 'public, max-age=3600');
+            res.setHeader('Pragma', 'public');
+            res.setHeader('Expires', '3600');
+            res.setHeader('Access-Control-Allow-Origin', '*');
+            return res.sendFile(playlistPath);
+        }
+        const rawContent = fs.readFileSync(playlistPath, 'utf-8');
+        res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
+        res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate, max-age=0');
+        res.setHeader('Pragma', 'no-cache');
+        res.setHeader('Expires', '0');
         res.setHeader('Connection', 'keep-alive');
         res.setHeader('Keep-Alive', 'timeout=30, max=100');
-
         return res.send(rawContent);
     } catch (err) { return res.status(500).send('#EXTM3U\n#EXT-X-ERROR: Error reading playlist'); }
 });
