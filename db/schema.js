@@ -22,5 +22,11 @@ export const streamSessions = pgTable('stream_sessions', {
     endedAt: timestamp('ended_at'),
     durationSeconds: integer('duration_seconds').default(0),
     viewerCount: integer('viewer_count').default(0).notNull(),
+    peakViewers: integer('peak_viewers').default(0).notNull(),
+    totalChunks: integer('total_chunks').default(0).notNull(),
+    chunks1080p: integer('chunks_1080p').default(0).notNull(),
+    chunks720p: integer('chunks_720p').default(0).notNull(),
+    chunks480p: integer('chunks_480p').default(0).notNull(),
+    failureCount: integer('failure_count').default(0).notNull(),
     countedAgainstLimit: boolean('counted_against_limit').default(false).notNull()
 });

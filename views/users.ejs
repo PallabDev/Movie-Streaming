@@ -1,0 +1,410 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>User Telemetry & Analytics Accordion - CoWatch Admin</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #0b0f19;
+            color: #f3f4f6;
+        }
+        .glass-card {
+            background: rgba(17, 24, 39, 0.7);
+            backdrop-filter: blur(16px);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+        }
+        .accordion-content {
+            max-height: 0;
+            overflow: hidden;
+            transition: max-height 0.35s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+        .accordion-content.expanded {
+            max-height: 2500px;
+        }
+        .gradient-text {
+            background: linear-gradient(135deg, #6366f1 0%, #a855f7 50%, #ec4899 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+    </style>
+</head>
+<body class="min-h-screen flex flex-col">
+
+    <!-- Top Navbar -->
+    <header class="border-b border-white/10 glass-card sticky top-0 z-50">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+            <div class="flex items-center gap-3">
+                <a href="/" class="flex items-center gap-2 group">
+                    <div class="w-9 h-9 rounded-xl bg-gradient-to-tr from-indigo-600 to-purple-500 flex items-center justify-center font-bold text-white shadow-lg shadow-indigo-500/30 group-hover:scale-105 transition-transform">
+                        🎬
+                    </div>
+                    <span class="font-extrabold text-lg text-white tracking-wide">CoWatch <span class="gradient-text">Admin</span></span>
+                </a>
+            </div>
+
+            <nav class="flex items-center gap-2">
+                <a href="/admin" class="px-3.5 py-1.5 rounded-lg text-xs font-semibold text-slate-300 hover:text-white hover:bg-white/5 transition-all flex items-center gap-2">
+                    <i class="fa-solid fa-chart-line text-indigo-400"></i>
+                    <span>Dashboard</span>
+                </a>
+                <a href="/user" class="px-3.5 py-1.5 rounded-lg text-xs font-semibold bg-indigo-600/20 text-indigo-300 border border-indigo-500/30 flex items-center gap-2">
+                    <i class="fa-solid fa-users text-purple-400"></i>
+                    <span>User Telemetry Accordion</span>
+                </a>
+                <a href="/" class="px-3.5 py-1.5 rounded-lg text-xs font-semibold text-slate-300 hover:text-white hover:bg-white/5 transition-all flex items-center gap-2">
+                    <i class="fa-solid fa-house text-emerald-400"></i>
+                    <span>App Home</span>
+                </a>
+            </nav>
+        </div>
+    </header>
+
+    <!-- Main Container -->
+    <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 flex-1 w-full">
+        
+        <!-- Page Title & Global Summary Cards -->
+        <div class="mb-8 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+            <div>
+                <h1 class="text-2xl sm:text-3xl font-extrabold text-white flex items-center gap-3">
+                    <i class="fa-solid fa-address-book text-indigo-400"></i>
+                    <span>User Telemetry & Streaming Analytics</span>
+                </h1>
+                <p class="text-slate-400 text-sm mt-1">
+                    Expand any user accordion to monitor total stream minutes, audience reach, resolution chunks, and network failure metrics.
+                </p>
+            </div>
+            
+            <!-- Quick Filter Search -->
+            <div class="relative w-full md:w-72">
+                <i class="fa-solid fa-magnifying-glass absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400 text-xs"></i>
+                <input type="text" id="userSearchInput" onkeyup="filterUsers()" placeholder="Search by name or email..." 
+                       class="w-full bg-slate-900/90 border border-white/10 rounded-xl pl-9 pr-4 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500 transition-colors">
+            </div>
+        </div>
+
+        <!-- Global Summary Grid -->
+        <div class="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-8">
+            <div class="glass-card p-4 rounded-2xl">
+                <div class="text-xs text-slate-400 font-medium">Total Registered Users</div>
+                <div class="text-2xl font-black text-white mt-1"><%= usersList.length %></div>
+                <div class="text-[11px] text-indigo-400 mt-1"><i class="fa-solid fa-user-check"></i> <%= usersList.filter(u => u.hasAccess).length %> Active Access</div>
+            </div>
+
+            <div class="glass-card p-4 rounded-2xl">
+                <div class="text-xs text-slate-400 font-medium">Total Stream Duration</div>
+                <% 
+                    const globalSeconds = usersList.reduce((acc, u) => acc + (u.totalStreamSeconds || 0), 0);
+                    const globalMins = Math.round(globalSeconds / 60);
+                    const globalHrs = (globalSeconds / 3600).toFixed(1);
+                %>
+                <div class="text-2xl font-black text-emerald-400 mt-1"><%= globalMins %> <span class="text-xs font-normal text-slate-400">mins</span></div>
+                <div class="text-[11px] text-emerald-500 mt-1"><i class="fa-solid fa-clock"></i> <%= globalHrs %> Hours Total</div>
+            </div>
+
+            <div class="glass-card p-4 rounded-2xl">
+                <div class="text-xs text-slate-400 font-medium">Total Viewers Engaged</div>
+                <% const globalViewers = usersList.reduce((acc, u) => acc + (u.totalViewersCount || 0), 0); %>
+                <div class="text-2xl font-black text-purple-400 mt-1"><%= globalViewers %></div>
+                <div class="text-[11px] text-purple-400 mt-1"><i class="fa-solid fa-eye"></i> Across All Channels</div>
+            </div>
+
+            <div class="glass-card p-4 rounded-2xl">
+                <div class="text-xs text-slate-400 font-medium">Platform Reliability</div>
+                <% const globalFailures = usersList.reduce((acc, u) => acc + (u.failureCount || 0), 0); %>
+                <div class="text-2xl font-black <%= globalFailures > 0 ? 'text-amber-400' : 'text-emerald-400' %> mt-1">
+                    <%= globalFailures %> <span class="text-xs font-normal text-slate-400">Failures</span>
+                </div>
+                <div class="text-[11px] text-slate-400 mt-1"><i class="fa-solid fa-shield-halved"></i> Socket Drops & FFmpeg Errs</div>
+            </div>
+        </div>
+
+        <!-- Users Accordion Container -->
+        <div class="space-y-4" id="usersAccordionContainer">
+            <% if (usersList.length === 0) { %>
+                <div class="glass-card p-12 rounded-2xl text-center">
+                    <i class="fa-solid fa-users-slash text-4xl text-slate-600 mb-3"></i>
+                    <p class="text-slate-400 text-sm">No registered users found.</p>
+                </div>
+            <% } %>
+
+            <% usersList.forEach((u, index) => { %>
+                <div class="glass-card rounded-2xl overflow-hidden border border-white/10 user-accordion-item" data-search="<%= (u.name + ' ' + u.email).toLowerCase() %>">
+                    
+                    <!-- Accordion Header (Clickable Bar) -->
+                    <div onclick="toggleAccordion('<%= u.id %>')" class="p-4 sm:p-5 flex items-center justify-between cursor-pointer hover:bg-white/[0.03] transition-colors select-none">
+                        <div class="flex items-center gap-4 min-w-0">
+                            <!-- Avatar -->
+                            <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-500/20 to-purple-500/20 border border-indigo-500/30 flex items-center justify-center text-sm font-bold text-indigo-300 shrink-0">
+                                <%= u.name.charAt(0).toUpperCase() %>
+                            </div>
+
+                            <!-- Name, Email, Role & Access -->
+                            <div class="min-w-0">
+                                <div class="flex items-center gap-2 flex-wrap">
+                                    <span class="font-bold text-white text-base truncate"><%= u.name %></span>
+                                    
+                                    <% if (u.role === 'admin') { %>
+                                        <span class="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-purple-500/20 text-purple-300 border border-purple-500/30">ADMIN</span>
+                                    <% } else { %>
+                                        <span class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-slate-800 text-slate-400 border border-white/10">USER</span>
+                                    <% } %>
+
+                                    <% if (u.hasAccess) { %>
+                                        <span class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">Active</span>
+                                    <% } else { %>
+                                        <span class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-500/20 text-amber-400 border border-amber-500/30">Pending Approval</span>
+                                    <% } %>
+
+                                    <% if (u.isLiveNow) { %>
+                                        <span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-red-500/20 text-red-400 border border-red-500/40 animate-pulse">🔴 LIVE NOW</span>
+                                    <% } %>
+                                </div>
+                                <div class="text-xs text-slate-400 truncate mt-0.5"><%= u.email %></div>
+                            </div>
+                        </div>
+
+                        <!-- Quick Badges & Chevron -->
+                        <div class="flex items-center gap-3 shrink-0 ml-4">
+                            <div class="hidden sm:flex items-center gap-2">
+                                <span class="px-2.5 py-1 rounded-lg text-xs font-mono bg-slate-900/80 text-emerald-400 border border-emerald-500/20">
+                                    ⏱️ <%= u.totalStreamMinutes %> mins
+                                </span>
+                                <span class="px-2.5 py-1 rounded-lg text-xs font-mono bg-slate-900/80 text-purple-400 border border-purple-500/20">
+                                    👁️ <%= u.peakViewers %> peak
+                                </span>
+                                <span class="px-2.5 py-1 rounded-lg text-xs font-mono bg-slate-900/80 <%= u.failureCount > 0 ? 'text-amber-400 border-amber-500/30' : 'text-slate-400 border-white/10' %>">
+                                    ⚠️ <%= u.failureCount %> errs
+                                </span>
+                            </div>
+
+                            <div class="w-8 h-8 rounded-lg bg-slate-900/80 border border-white/10 flex items-center justify-center text-slate-400 transition-transform duration-200" id="arrow-<%= u.id %>">
+                                <i class="fa-solid fa-chevron-down text-xs"></i>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Accordion Content (Expandable Panel) -->
+                    <div id="content-<%= u.id %>" class="accordion-content border-t border-white/5 bg-slate-950/40">
+                        <div class="p-5 sm:p-6 space-y-6">
+
+                            <!-- Detailed Telemetry Grid -->
+                            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                                
+                                <!-- Card 1: Duration & Limit -->
+                                <div class="bg-slate-900/80 p-4 rounded-xl border border-white/5">
+                                    <div class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">⏱️ Streaming Duration</div>
+                                    <div class="text-xl font-bold text-emerald-400"><%= u.totalStreamMinutes %> <span class="text-xs text-slate-400 font-normal">Minutes</span></div>
+                                    <div class="text-xs text-slate-400 mt-1">Total Hours: <span class="text-slate-200 font-semibold"><%= u.totalStreamHours %> hrs</span></div>
+                                    <div class="text-xs text-slate-400 mt-1">Sessions Used: <span class="text-indigo-400 font-semibold"><%= u.streamCount %> / <%= u.streamLimit %></span></div>
+                                </div>
+
+                                <!-- Card 2: Viewership & Audience -->
+                                <div class="bg-slate-900/80 p-4 rounded-xl border border-white/5">
+                                    <div class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">👁️ Audience Reach</div>
+                                    <div class="text-xl font-bold text-purple-400"><%= u.peakViewers %> <span class="text-xs text-slate-400 font-normal">Peak Viewers</span></div>
+                                    <div class="text-xs text-slate-400 mt-1">Total Viewer Impressions: <span class="text-slate-200 font-semibold"><%= u.totalViewersCount %></span></div>
+                                    <div class="text-xs text-slate-400 mt-1">Total Streams: <span class="text-slate-200 font-semibold"><%= u.totalSessionsCount %></span></div>
+                                </div>
+
+                                <!-- Card 3: Video Chunks & Resolution -->
+                                <div class="bg-slate-900/80 p-4 rounded-xl border border-white/5">
+                                    <div class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">⚡ S3 Resolution Breakdown</div>
+                                    <div class="text-xl font-bold text-indigo-400"><%= u.totalChunks %> <span class="text-xs text-slate-400 font-normal">Total Chunks</span></div>
+                                    <div class="text-xs text-slate-400 mt-1.5 flex justify-between">
+                                        <span>1080p: <strong class="text-indigo-300"><%= u.chunks1080p %></strong></span>
+                                        <span>720p: <strong class="text-purple-300"><%= u.chunks720p %></strong></span>
+                                        <span>480p: <strong class="text-slate-300"><%= u.chunks480p %></strong></span>
+                                    </div>
+                                </div>
+
+                                <!-- Card 4: Failure Tracking -->
+                                <div class="bg-slate-900/80 p-4 rounded-xl border border-white/5">
+                                    <div class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">⚠️ Failure Tracking</div>
+                                    <div class="text-xl font-bold <%= u.failureCount > 0 ? 'text-amber-400' : 'text-emerald-400' %>">
+                                        <%= u.failureCount %> <span class="text-xs text-slate-400 font-normal">Errors Recorded</span>
+                                    </div>
+                                    <div class="text-xs text-slate-400 mt-1">Stability Rating: 
+                                        <span class="font-bold <%= u.failureCount === 0 ? 'text-emerald-400' : 'text-amber-400' %>">
+                                            <%= u.stabilityRating %>%
+                                        </span>
+                                    </div>
+                                    <div class="text-[11px] text-slate-500 mt-1">Includes WS drops & S3 upload retries</div>
+                                </div>
+
+                            </div>
+
+                            <!-- Stream Sessions History Table -->
+                            <div>
+                                <h4 class="text-xs font-bold uppercase text-slate-400 tracking-wider mb-3 flex items-center gap-2">
+                                    <i class="fa-solid fa-list-check text-indigo-400"></i>
+                                    <span>User Stream Sessions History (<%= u.sessions.length %>)</span>
+                                </h4>
+
+                                <% if (u.sessions.length === 0) { %>
+                                    <div class="text-xs text-slate-500 italic py-2">No stream history recorded for this user yet.</div>
+                                <% } else { %>
+                                    <div class="overflow-x-auto rounded-xl border border-white/5">
+                                        <table class="w-full text-left text-xs">
+                                            <thead class="bg-slate-900 text-slate-400 uppercase font-semibold text-[10px] tracking-wider">
+                                                <tr>
+                                                    <th class="px-3.5 py-2.5">Title / Key</th>
+                                                    <th class="px-3.5 py-2.5">Started At</th>
+                                                    <th class="px-3.5 py-2.5">Duration</th>
+                                                    <th class="px-3.5 py-2.5">Peak Viewers</th>
+                                                    <th class="px-3.5 py-2.5">Total Chunks</th>
+                                                    <th class="px-3.5 py-2.5">Failures</th>
+                                                    <th class="px-3.5 py-2.5">Status</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody class="divide-y divide-white/5 text-slate-300">
+                                                <% u.sessions.forEach(sess => { %>
+                                                    <tr class="hover:bg-white/[0.02]">
+                                                        <td class="px-3.5 py-2.5 font-medium text-white">
+                                                            <div><%= sess.title %></div>
+                                                            <div class="text-[10px] font-mono text-slate-500"><%= sess.streamKey %></div>
+                                                        </td>
+                                                        <td class="px-3.5 py-2.5 text-slate-400">
+                                                            <%= new Date(sess.startedAt).toLocaleString() %>
+                                                        </td>
+                                                        <td class="px-3.5 py-2.5 font-mono text-emerald-400">
+                                                            <%= Math.round((sess.durationSeconds || 0) / 60) %> mins
+                                                        </td>
+                                                        <td class="px-3.5 py-2.5 font-mono text-purple-400">
+                                                            <%= sess.peakViewers || sess.viewerCount || 0 %>
+                                                        </td>
+                                                        <td class="px-3.5 py-2.5 font-mono text-indigo-300">
+                                                            <%= sess.totalChunks || 0 %>
+                                                        </td>
+                                                        <td class="px-3.5 py-2.5 font-mono <%= sess.failureCount > 0 ? 'text-amber-400 font-bold' : 'text-slate-500' %>">
+                                                            <%= sess.failureCount || 0 %>
+                                                        </td>
+                                                        <td class="px-3.5 py-2.5">
+                                                            <% if (sess.isLive) { %>
+                                                                <span class="px-2 py-0.5 rounded text-[10px] font-bold bg-red-500/20 text-red-400 border border-red-500/30">LIVE</span>
+                                                            <% } else { %>
+                                                                <span class="px-2 py-0.5 rounded text-[10px] bg-slate-800 text-slate-400">Ended</span>
+                                                            <% } %>
+                                                        </td>
+                                                    </tr>
+                                                <% }); %>
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                <% } %>
+                            </div>
+
+                            <!-- Admin Controls Action Bar -->
+                            <div class="pt-4 border-t border-white/5 flex items-center justify-between flex-wrap gap-3">
+                                <div class="flex items-center gap-3">
+                                    <!-- Toggle Access -->
+                                    <button onclick="toggleUserAccess('<%= u.id %>', <%= !u.hasAccess %>)" 
+                                            class="px-3 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 <%= u.hasAccess ? 'bg-amber-500/10 text-amber-400 hover:bg-amber-500/20 border border-amber-500/20' : 'bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 border border-emerald-500/20' %>">
+                                        <i class="fa-solid <%= u.hasAccess ? 'fa-user-xmark' : 'fa-user-check' %>"></i>
+                                        <span><%= u.hasAccess ? 'Revoke Access' : 'Approve Access' %></span>
+                                    </button>
+
+                                    <!-- Reset Stream Count -->
+                                    <button onclick="resetUserCount('<%= u.id %>')" 
+                                            class="px-3 py-1.5 rounded-lg text-xs font-semibold bg-indigo-500/10 hover:bg-indigo-500/20 text-indigo-300 border border-indigo-500/20 transition-all flex items-center gap-1.5">
+                                        <i class="fa-solid fa-rotate-left"></i>
+                                        <span>Reset Stream Count</span>
+                                    </button>
+                                </div>
+
+                                <!-- Adjust Stream Limit -->
+                                <div class="flex items-center gap-2">
+                                    <span class="text-xs text-slate-400">Stream Limit:</span>
+                                    <input type="number" id="limit-input-<%= u.id %>" value="<%= u.streamLimit %>" min="1" max="99999"
+                                           class="w-16 bg-slate-900 border border-white/10 rounded-lg px-2 py-1 text-xs font-mono text-center text-white focus:outline-none focus:border-indigo-500">
+                                    <button onclick="updateUserLimit('<%= u.id %>')" 
+                                            class="px-2.5 py-1 rounded-lg text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-200 border border-white/10 transition-all">
+                                        Save
+                                    </button>
+                                </div>
+                            </div>
+
+                        </div>
+                    </div>
+
+                </div>
+            <% }); %>
+        </div>
+
+    </main>
+
+    <script>
+        function toggleAccordion(userId) {
+            const content = document.getElementById(`content-${userId}`);
+            const arrow = document.getElementById(`arrow-${userId}`);
+            
+            if (content.classList.contains('expanded')) {
+                content.classList.remove('expanded');
+                arrow.style.transform = 'rotate(0deg)';
+            } else {
+                content.classList.add('expanded');
+                arrow.style.transform = 'rotate(180deg)';
+            }
+        }
+
+        function filterUsers() {
+            const query = document.getElementById('userSearchInput').value.toLowerCase().trim();
+            const items = document.querySelectorAll('.user-accordion-item');
+
+            items.forEach(item => {
+                const searchText = item.dataset.search || '';
+                if (searchText.includes(query)) {
+                    item.style.display = 'block';
+                } else {
+                    item.style.display = 'none';
+                }
+            });
+        }
+
+        async function toggleUserAccess(userId, hasAccess) {
+            try {
+                const res = await fetch('/api/admin/users/access', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ userId, hasAccess })
+                });
+                const data = await res.json();
+                if (data.success) location.reload();
+                else alert('Error: ' + data.error);
+            } catch (err) { alert('Network error: ' + err.message); }
+        }
+
+        async function resetUserCount(userId) {
+            if (!confirm('Reset monthly stream count for this user?')) return;
+            try {
+                const res = await fetch('/api/admin/users/reset-count', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ userId })
+                });
+                const data = await res.json();
+                if (data.success) location.reload();
+                else alert('Error: ' + data.error);
+            } catch (err) { alert('Network error: ' + err.message); }
+        }
+
+        async function updateUserLimit(userId) {
+            const streamLimit = document.getElementById(`limit-input-${userId}`).value;
+            try {
+                const res = await fetch('/api/admin/users/limit', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ userId, streamLimit })
+                });
+                const data = await res.json();
+                if (data.success) alert('Stream limit updated!');
+                else alert('Error: ' + data.error);
+            } catch (err) { alert('Network error: ' + err.message); }
+        }
+    </script>
+</body>
+</html>

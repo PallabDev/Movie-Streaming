@@ -7,7 +7,7 @@ import os from 'os';
 import { fileURLToPath } from 'url';
 import { spawn } from 'child_process';
 import { WebSocketServer } from 'ws';
-import { S3Client, PutObjectCommand, DeleteObjectCommand, ListObjectsV2Command } from '@aws-sdk/client-s3';
+import { S3Client, PutObjectCommand, DeleteObjectCommand, DeleteObjectsCommand, ListObjectsV2Command } from '@aws-sdk/client-s3';
 import { EventEmitter } from 'events';
 import cookieParser from 'cookie-parser';
 import jwt from 'jsonwebtoken';
@@ -154,14 +154,16 @@ if (S3_ENABLED) {
 }
 
 function getSessionS3Telemetry(session) {
-    if (!session || !session.s3UploadLog) return { chunksPerSec: '0.0', p720Count: 0, p480Count: 0 };
+    if (!session || !session.s3UploadLog) return { chunksPerSec: '0.0', p1080Count: 0, p720Count: 0, p480Count: 0 };
     const now = Date.now();
     const recentLogs = session.s3UploadLog.filter(item => now - item.timestamp < 5000);
+    const count1080p = recentLogs.filter(item => item.is1080p).length;
     const count720p = recentLogs.filter(item => item.is720p).length;
     const count480p = recentLogs.filter(item => item.is480p).length;
     const totalCount = recentLogs.length;
     return {
         chunksPerSec: (totalCount / 5).toFixed(1),
+        p1080Count: count1080p,
         p720Count: count720p,
         p480Count: count480p,
         total: totalCount
@@ -185,14 +187,22 @@ async function uploadSingleSegment(session, filename) {
         session.uploadedS3Segments.add(filename);
 
         const now = Date.now();
+        const is1080p = filename.includes('1080p');
         const is720p = filename.includes('720p');
         const is480p = filename.includes('480p');
-        session.s3UploadLog.push({ timestamp: now, filename, is720p, is480p });
+
+        if (is1080p) session.chunks1080pCount = (session.chunks1080pCount || 0) + 1;
+        else if (is720p) session.chunks720pCount = (session.chunks720pCount || 0) + 1;
+        else if (is480p) session.chunks480pCount = (session.chunks480pCount || 0) + 1;
+        session.totalChunksCount = (session.totalChunksCount || 0) + 1;
+
+        session.s3UploadLog.push({ timestamp: now, filename, is1080p, is720p, is480p });
         session.s3UploadLog = session.s3UploadLog.filter(item => now - item.timestamp < 10000);
 
         return true;
     } catch (err) {
         console.warn(`[S3 Upload Error ${session.streamKey}] ${filename}:`, err.message);
+        session.failureCount = (session.failureCount || 0) + 1;
         return false;
     }
 }
@@ -241,18 +251,56 @@ function stopS3Watcher(session) {
     session.uploadedS3Segments.clear();
 }
 
+const cleaningS3Streams = new Set();
+
 async function cleanS3Bucket(session) {
-    if (!S3_ENABLED || !s3Client) return;
+    if (!S3_ENABLED || !s3Client || !session?.streamKey) return;
+    const streamKey = session.streamKey;
+    if (cleaningS3Streams.has(streamKey)) return;
+    cleaningS3Streams.add(streamKey);
+
     try {
-        const prefix = `${session.streamKey}/`;
-        const listRes = await s3Client.send(new ListObjectsV2Command({ Bucket: S3_BUCKET, Prefix: prefix }));
-        if (listRes.Contents && listRes.Contents.length > 0) {
-            for (const item of listRes.Contents) {
-                await s3Client.send(new DeleteObjectCommand({ Bucket: S3_BUCKET, Key: item.Key }));
+        const prefix = `${streamKey}/`;
+        let continuationToken = undefined;
+        let totalDeleted = 0;
+
+        do {
+            const listRes = await s3Client.send(new ListObjectsV2Command({
+                Bucket: S3_BUCKET,
+                Prefix: prefix,
+                ContinuationToken: continuationToken
+            }));
+
+            if (listRes.Contents && listRes.Contents.length > 0) {
+                const objectsToDelete = listRes.Contents.map(item => ({ Key: item.Key }));
+                try {
+                    await s3Client.send(new DeleteObjectsCommand({
+                        Bucket: S3_BUCKET,
+                        Delete: {
+                            Objects: objectsToDelete,
+                            Quiet: true
+                        }
+                    }));
+                } catch (batchErr) {
+                    console.warn(`[S3 Batch Delete Warning ${streamKey}], falling back to parallel deletes:`, batchErr.message);
+                    await Promise.all(objectsToDelete.map(obj =>
+                        s3Client.send(new DeleteObjectCommand({ Bucket: S3_BUCKET, Key: obj.Key })).catch(() => {})
+                    ));
+                }
+                totalDeleted += listRes.Contents.length;
             }
-            console.log(`🧹 S3 Bucket folder cleaned for [${session.streamKey}]`);
+
+            continuationToken = listRes.IsTruncated ? listRes.NextContinuationToken : undefined;
+        } while (continuationToken);
+
+        if (totalDeleted > 0) {
+            console.log(`🧹 S3 Bucket folder cleaned for [${streamKey}]: ${totalDeleted} objects purged.`);
         }
-    } catch (err) { console.warn(`[S3 Clean Error ${session.streamKey}]:`, err.message); }
+    } catch (err) {
+        console.warn(`[S3 Clean Error ${session.streamKey}]:`, err.message);
+    } finally {
+        cleaningS3Streams.delete(streamKey);
+    }
 }
 
 function clearLiveFolder(session) {
@@ -357,24 +405,50 @@ streamWss.on('connection', (ws) => {
     const key = ws.streamKey || 'default';
     console.log(`⚡ Host connected to WebSocket Ingest for [${key}]`);
 
+    const session = activeStreams.get(key);
+    if (session) {
+        if (session.disconnectTimer) {
+            console.log(`🔄 Host reconnected to WebSocket Ingest for [${key}]! Cancelled 90-second grace timer.`);
+            clearTimeout(session.disconnectTimer);
+            session.disconnectTimer = null;
+        }
+        broadcastStatus(session, true);
+        broadcastAdminTelemetry();
+    }
+
     ws.on('message', (data) => {
         const session = activeStreams.get(key);
-        if (session && session.ffmpegProcess && session.ffmpegProcess.stdin && session.ffmpegProcess.stdin.writable) {
-            try {
-                const buf = Buffer.isBuffer(data) ? data : Buffer.from(data);
-                session.ffmpegProcess.stdin.write(buf);
-            } catch (e) { }
+        if (session) {
+            if (session.disconnectTimer) {
+                clearTimeout(session.disconnectTimer);
+                session.disconnectTimer = null;
+            }
+            if (session.ffmpegProcess && session.ffmpegProcess.stdin && session.ffmpegProcess.stdin.writable) {
+                try {
+                    const buf = Buffer.isBuffer(data) ? data : Buffer.from(data);
+                    session.ffmpegProcess.stdin.write(buf);
+                } catch (e) { }
+            }
         }
     });
-    ws.on('error', (err) => console.warn(`[Stream WS Error ${key}]:`, err.message));
-    ws.on('close', () => {
-        console.log(`⚡ Host Disconnected for [${key}]. Killing FFmpeg process immediately...`);
+    ws.on('error', (err) => {
+        console.warn(`[Stream WS Error ${key}]:`, err.message);
         const session = activeStreams.get(key);
-        if (session) {
-            stopFfmpegLive(session);
-            stopS3Watcher(session);
-            broadcastStatus(session, false);
-            broadcastAdminTelemetry();
+        if (session) session.failureCount = (session.failureCount || 0) + 1;
+    });
+    ws.on('close', () => {
+        console.log(`⚠️ Host WebSocket disconnected for [${key}]. Keeping FFmpeg process alive for 90s reconnection window...`);
+        const session = activeStreams.get(key);
+        if (session && session.isLive) {
+            if (session.disconnectTimer) clearTimeout(session.disconnectTimer);
+            session.disconnectTimer = setTimeout(() => {
+                console.log(`🛑 90-second reconnection window expired for [${key}]. Stopping FFmpeg process...`);
+                stopFfmpegLive(session);
+                stopS3Watcher(session);
+                broadcastStatus(session, false);
+                broadcastAdminTelemetry();
+                session.disconnectTimer = null;
+            }, 90 * 1000);
         }
     });
 });
@@ -385,13 +459,17 @@ setInterval(() => {
     for (const session of activeStreams.values()) {
         if (session.isLive) {
             const telemetry = getSessionS3Telemetry(session);
-            console.log(`[Telemetry ${session.streamKey}] Speed: ${telemetry.chunksPerSec} chunks/sec | 720p: ${telemetry.p720Count} | 480p: ${telemetry.p480Count}`);
+            console.log(`[Telemetry ${session.streamKey}] Speed: ${telemetry.chunksPerSec} chunks/sec | 1080p: ${telemetry.p1080Count} | 720p: ${telemetry.p720Count} | 480p: ${telemetry.p480Count}`);
         }
     }
 }, 1500);
 
 // ─── FFmpeg Live Process Manager ────────────────────────────────────────────────
 function stopFfmpegLive(session) {
+    if (session.disconnectTimer) {
+        clearTimeout(session.disconnectTimer);
+        session.disconnectTimer = null;
+    }
     if (session.ffmpegProcess) {
         try {
             if (session.ffmpegProcess.stdin) {
@@ -441,41 +519,56 @@ async function startFfmpegLive(session) {
         '-i', 'anullsrc=channel_layout=stereo:sample_rate=48000',
 
         '-filter_complex',
-        '[0:v]format=yuv420p,split=2[v720in][v480in];' +
-        '[v720in]fps=30,scale=1280:720[v720out];' +
-        '[v480in]fps=30,scale=854:480[v480out];' +
-        '[0:a][1:a]amix=inputs=2:duration=first:dropout_transition=0:normalize=0,aresample=async=1:first_pts=0,asplit=2[a720][a480]',
+        '[0:v]format=yuv420p,fps=30,split=2[v1080out][v720in];' +
+        '[v720in]scale=1280:720:flags=bilinear,split=2[v720out][v480in];' +
+        '[v480in]scale=854:480:flags=bilinear[v480out];' +
+        '[0:a][1:a]amix=inputs=2:duration=first:dropout_transition=0:normalize=0,aresample=async=1:first_pts=0,asplit=3[a1080][a720][a480]',
 
-        // 720p — Optimized 3Mbps stream for ultra-fast S3 uploads (30fps, GOP 60, zero lookahead)
-        '-map', '[v720out]',
+        // 1080p — High Quality 6.5Mbps stream (30fps, GOP 60)
+        '-map', '[v1080out]',
         '-c:v:0', 'libx264',
         '-preset', 'ultrafast',
         '-profile:v:0', 'high',
-        '-level:v:0', '4.1',
-        '-crf:v:0', '25',
-        '-maxrate:v:0', '3000k',
-        '-bufsize:v:0', '6000k',
+        '-level:v:0', '4.2',
+        '-crf:v:0', '21',
+        '-maxrate:v:0', '6500k',
+        '-bufsize:v:0', '13000k',
         '-g:v:0', '60',
         '-sc_threshold:v:0', '0',
         '-x264-params:v:0', 'no-scenecut=1:open-gop=0:keyint=60:min-keyint=60:rc-lookahead=0:bframes=0',
-        '-map', '[a720]',
+        '-map', '[a1080]',
         '-c:a:0', 'aac',
         '-b:a:0', '192k',
 
-        // 480p — Optimized 1.2Mbps stream (30fps, GOP 60 for 1:1 segment lock-step alignment)
-        '-map', '[v480out]',
+        // 720p — High Quality 3.5Mbps stream (30fps, GOP 60)
+        '-map', '[v720out]',
         '-c:v:1', 'libx264',
         '-preset', 'ultrafast',
-        '-profile:v:1', 'baseline',
-        '-crf:v:1', '28',
-        '-maxrate:v:1', '1200k',
-        '-bufsize:v:1', '2400k',
+        '-profile:v:1', 'main',
+        '-crf:v:1', '23',
+        '-maxrate:v:1', '3500k',
+        '-bufsize:v:1', '7000k',
         '-g:v:1', '60',
         '-sc_threshold:v:1', '0',
         '-x264-params:v:1', 'no-scenecut=1:open-gop=0:keyint=60:min-keyint=60:rc-lookahead=0:bframes=0',
-        '-map', '[a480]',
+        '-map', '[a720]',
         '-c:a:1', 'aac',
-        '-b:a:1', '128k',
+        '-b:a:1', '160k',
+
+        // 480p — Optimized 1.5Mbps stream (30fps, GOP 60)
+        '-map', '[v480out]',
+        '-c:v:2', 'libx264',
+        '-preset', 'ultrafast',
+        '-profile:v:2', 'baseline',
+        '-crf:v:2', '26',
+        '-maxrate:v:2', '1500k',
+        '-bufsize:v:2', '3000k',
+        '-g:v:2', '60',
+        '-sc_threshold:v:2', '0',
+        '-x264-params:v:2', 'no-scenecut=1:open-gop=0:keyint=60:min-keyint=60:rc-lookahead=0:bframes=0',
+        '-map', '[a480]',
+        '-c:a:2', 'aac',
+        '-b:a:2', '128k',
 
         '-f', 'hls',
         '-hls_time', '2',
@@ -483,7 +576,7 @@ async function startFfmpegLive(session) {
         '-hls_flags', 'delete_segments+omit_endlist+independent_segments',
         '-hls_segment_type', 'mpegts',
         '-master_pl_name', 'master.m3u8',
-        '-var_stream_map', 'v:0,a:0,name:720p v:1,a:1,name:480p',
+        '-var_stream_map', 'v:0,a:0,name:1080p v:1,a:1,name:720p v:2,a:2,name:480p',
         path.join(session.liveDir, 'stream_%v.m3u8')
     ];
 
@@ -638,6 +731,110 @@ app.post('/api/admin/users/reset-count', requireAdmin, async (req, res) => {
         await db.update(users).set({ streamCount: 0 }).where(eq(users.id, userId));
         res.json({ success: true });
     } catch (err) { res.status(500).json({ success: false, error: err.message }); }
+});
+
+// Admin User Telemetry Accordion Route
+app.get(['/user', '/users'], requireAdmin, async (req, res) => {
+    try {
+        const allUsers = await db.select().from(users).orderBy(desc(users.createdAt));
+        const allDbSessions = await db.select().from(streamSessions).orderBy(desc(streamSessions.startedAt));
+
+        // Group database sessions by host_id
+        const userSessionsMap = new Map();
+        for (const s of allDbSessions) {
+            if (!s.hostId) continue;
+            if (!userSessionsMap.has(s.hostId)) userSessionsMap.set(s.hostId, []);
+            userSessionsMap.get(s.hostId).push(s);
+        }
+
+        const usersListWithTelemetry = allUsers.map(u => {
+            const dbSessions = userSessionsMap.get(u.id) || [];
+            
+            // Check active live streams for this user
+            const activeUserStreams = Array.from(activeStreams.values()).filter(s => s.hostId === u.id);
+            const isLiveNow = activeUserStreams.some(s => s.isLive);
+
+            // Combine DB sessions + active live sessions
+            const sessions = [...dbSessions];
+            for (const activeS of activeUserStreams) {
+                if (!sessions.some(s => s.streamKey === activeS.streamKey)) {
+                    const statusClients = Array.from(wss.clients).filter(c => c.streamKey === activeS.streamKey && c.readyState === 1);
+                    sessions.unshift({
+                        id: 'live_' + activeS.streamKey,
+                        streamKey: activeS.streamKey,
+                        title: activeS.title,
+                        isLive: activeS.isLive,
+                        startedAt: activeS.createdAt || new Date(),
+                        durationSeconds: Math.floor((Date.now() - (activeS.createdAt || Date.now())) / 1000),
+                        viewerCount: statusClients.length,
+                        peakViewers: Math.max(statusClients.length, activeS.peakViewersCount || 0),
+                        totalChunks: activeS.uploadedS3Segments ? activeS.uploadedS3Segments.size : 0,
+                        chunks1080p: activeS.chunks1080pCount || 0,
+                        chunks720p: activeS.chunks720pCount || 0,
+                        chunks480p: activeS.chunks480pCount || 0,
+                        failureCount: activeS.failureCount || 0
+                    });
+                }
+            }
+
+            // Calculate aggregations
+            let totalStreamSeconds = 0;
+            let totalViewersCount = 0;
+            let peakViewers = 0;
+            let totalChunks = 0;
+            let chunks1080p = 0;
+            let chunks720p = 0;
+            let chunks480p = 0;
+            let failureCount = 0;
+
+            for (const s of sessions) {
+                const dur = s.durationSeconds || 0;
+                totalStreamSeconds += dur;
+                const v = s.viewerCount || 0;
+                const peakV = s.peakViewers || v;
+                totalViewersCount += v;
+                if (peakV > peakViewers) peakViewers = peakV;
+
+                totalChunks += (s.totalChunks || 0);
+                chunks1080p += (s.chunks1080p || 0);
+                chunks720p += (s.chunks720p || 0);
+                chunks480p += (s.chunks480p || 0);
+                failureCount += (s.failureCount || 0);
+            }
+
+            const totalStreamMinutes = Math.round(totalStreamSeconds / 60);
+            const totalStreamHours = (totalStreamSeconds / 3600).toFixed(1);
+
+            // Stability Rating
+            let stabilityRating = 100;
+            if (sessions.length > 0 && failureCount > 0) {
+                stabilityRating = Math.max(0, Math.round(100 - (failureCount * 2.5)));
+            }
+
+            return {
+                ...u,
+                isLiveNow,
+                totalStreamSeconds,
+                totalStreamMinutes,
+                totalStreamHours,
+                totalSessionsCount: sessions.length,
+                totalViewersCount,
+                peakViewers,
+                totalChunks,
+                chunks1080p,
+                chunks720p,
+                chunks480p,
+                failureCount,
+                stabilityRating,
+                sessions
+            };
+        });
+
+        res.render('users', { usersList: usersListWithTelemetry, currentUser: req.user });
+    } catch (err) {
+        console.error('User telemetry route error:', err);
+        res.status(500).send('User telemetry error: ' + err.message);
+    }
 });
 
 // ─── Application Core Routes ─────────────────────────────────────────────────────
@@ -838,11 +1035,25 @@ app.post(['/stream', '/stream/:streamKey'], (req, res) => {
     res.status(200).json({ success: true, chunkIndex });
 
     const session = activeStreams.get(key);
-    if (session && session.ffmpegProcess && session.ffmpegProcess.stdin && session.ffmpegProcess.stdin.writable) {
-        try {
-            const buf = Buffer.isBuffer(req.body) ? req.body : Buffer.from(req.body);
-            session.ffmpegProcess.stdin.write(buf);
-        } catch (e) { }
+    if (session) {
+        if (session.disconnectTimer) {
+            console.log(`🔄 Incoming HTTP chunk stream for [${key}] during network drop! Refreshing 90-second grace timer.`);
+            clearTimeout(session.disconnectTimer);
+            session.disconnectTimer = setTimeout(() => {
+                console.log(`🛑 90-second reconnection window expired for [${key}]. Stopping FFmpeg process...`);
+                stopFfmpegLive(session);
+                stopS3Watcher(session);
+                broadcastStatus(session, false);
+                broadcastAdminTelemetry();
+                session.disconnectTimer = null;
+            }, 90 * 1000);
+        }
+        if (session.ffmpegProcess && session.ffmpegProcess.stdin && session.ffmpegProcess.stdin.writable) {
+            try {
+                const buf = Buffer.isBuffer(req.body) ? req.body : Buffer.from(req.body);
+                session.ffmpegProcess.stdin.write(buf);
+            } catch (e) { }
+        }
     }
 });
 

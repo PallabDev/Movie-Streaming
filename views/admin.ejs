@@ -65,7 +65,11 @@
                 </div>
             </a>
 
-            <div class="flex items-center gap-4">
+            <div class="flex items-center gap-3">
+                <a href="/user" class="px-3.5 py-1.5 rounded-xl bg-purple-500/10 hover:bg-purple-500/20 text-purple-300 border border-purple-500/30 text-xs font-semibold transition-colors flex items-center gap-2">
+                    <i class="fa-solid fa-users text-purple-400"></i>
+                    <span>User Telemetry Accordion</span>
+                </a>
                 <span class="text-xs font-semibold text-slate-300 bg-slate-800 px-3 py-1.5 rounded-xl border border-white/10 flex items-center gap-2">
                     <i class="fa-solid fa-user-gear text-indigo-400"></i>
                     <span><%= currentUser.name %></span>
@@ -250,7 +254,7 @@
                                     </td>
                                     <td class="px-4 py-4 text-xs font-mono text-slate-300" id="telemetry-cell-<%= s.streamKey %>">
                                         <div>Upload Speed: <span class="text-emerald-400 font-bold"><%= s.s3Telemetry ? s.s3Telemetry.chunksPerSec : '0.0' %> chunks/sec</span></div>
-                                        <div class="text-[11px] text-slate-400">Ratio: 720p (<%= s.s3Telemetry ? s.s3Telemetry.p720Count : 0 %>) / 480p (<%= s.s3Telemetry ? s.s3Telemetry.p480Count : 0 %>)</div>
+                                        <div class="text-[11px] text-slate-400">Ratio: 1080p (<%= s.s3Telemetry ? (s.s3Telemetry.p1080Count || 0) : 0 %>) / 720p (<%= s.s3Telemetry ? s.s3Telemetry.p720Count : 0 %>) / 480p (<%= s.s3Telemetry ? s.s3Telemetry.p480Count : 0 %>)</div>
                                     </td>
                                     <td class="px-4 py-4 text-right">
                                         <button data-streamkey="<%= s.streamKey %>" onclick="deleteStream(this.dataset.streamkey)" class="px-3 py-1.5 rounded-lg text-xs font-semibold bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/20 transition-all flex items-center gap-1.5 ml-auto">
@@ -369,7 +373,7 @@
                 if (telemetryCell && s.s3Telemetry) {
                     telemetryCell.innerHTML = `
                         <div>Upload Speed: <span class="text-emerald-400 font-bold">${s.s3Telemetry.chunksPerSec || '0.0'} chunks/sec</span></div>
-                        <div class="text-[11px] text-slate-400">Ratio: 720p (${s.s3Telemetry.p720Count || 0}) / 480p (${s.s3Telemetry.p480Count || 0})</div>
+                        <div class="text-[11px] text-slate-400">Ratio: 1080p (${s.s3Telemetry.p1080Count || 0}) / 720p (${s.s3Telemetry.p720Count || 0}) / 480p (${s.s3Telemetry.p480Count || 0})</div>
                     `;
                 }
                 if (statusCell) {
