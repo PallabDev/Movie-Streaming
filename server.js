@@ -222,7 +222,7 @@ function broadcastAdminTelemetry() {
             streamKey: s.streamKey,
             title: s.title,
             hostName: s.hostName || 'Host',
-        isLive: s.isLive,
+            isLive: s.isLive,
             viewerCount: statusClients.length
         };
     });
@@ -304,8 +304,8 @@ function broadcastToQuality(session, quality, data) {
 function getTotalViewerCount(session) {
     if (!session || !session.qualityViewers) return 0;
     return (session.qualityViewers['1080p']?.size || 0) +
-           (session.qualityViewers['720p']?.size || 0) +
-           (session.qualityViewers['480p']?.size || 0);
+        (session.qualityViewers['720p']?.size || 0) +
+        (session.qualityViewers['480p']?.size || 0);
 }
 
 viewWss.on('connection', (ws) => {
@@ -340,11 +340,11 @@ viewWss.on('connection', (ws) => {
                     ws.currentQuality = newQ;
                     console.log(`🔀 Viewer switched quality: [${key}] ${oldQ} → ${newQ}`);
                     if (session.initSegments[newQ]) {
-                        try { ws.send(session.initSegments[newQ]); } catch (e) {}
+                        try { ws.send(session.initSegments[newQ]); } catch (e) { }
                     }
                 }
             }
-        } catch (e) {}
+        } catch (e) { }
     });
 
     ws.on('close', () => {
@@ -418,22 +418,22 @@ async function startFfmpegLive(session) {
         '[v480src]scale=854:480:flags=fast_bilinear,setsar=1[v480];' +
         '[0:a][1:a]amix=inputs=2:duration=first:dropout_transition=0:normalize=0,aresample=async=1:first_pts=0,asplit=2[a720][a480]',
 
-        // 720p H.264: sized for stable 2-second downloads on this VPS.
+        // 720p H.264: high-quality 6 Mbps target (use fast preset for good quality with >1x speed on typical servers)
         '-map', '[v720]', '-map', '[a720]',
-        '-c:v:0', 'libx264', '-preset', 'veryfast', '-tune:v:0', 'zerolatency',
+        '-c:v:0', 'libx264', '-preset', 'fast', '-tune:v:0', 'zerolatency',
         '-profile:v:0', 'main', '-pix_fmt:v:0', 'yuv420p',
-        '-b:v:0', '2800k', '-maxrate:v:0', '3000k', '-bufsize:v:0', '1500k',
+        '-b:v:0', '6000k', '-maxrate:v:0', '6000k', '-bufsize:v:0', '12000k',
         '-r:v:0', '30', '-g:v:0', '60', '-keyint_min:v:0', '60', '-sc_threshold:v:0', '0',
-        '-x264-params:v:0', 'keyint=60:min-keyint=60:scenecut=0:bframes=0:rc-lookahead=0:ref=1',
+        '-x264-params:v:0', 'keyint=60:min-keyint=60:scenecut=0:bframes=0:rc-lookahead=0:ref=2',
         '-c:a:0', 'aac', '-b:a:0', '128k', '-ar:a:0', '48000', '-ac:a:0', '2',
 
-        // 480p H.264 fallback for slower viewers.
+        // 480p H.264 fallback for slower viewers at 2 Mbps
         '-map', '[v480]', '-map', '[a480]',
-        '-c:v:1', 'libx264', '-preset', 'veryfast', '-tune:v:1', 'zerolatency',
+        '-c:v:1', 'libx264', '-preset', 'fast', '-tune:v:1', 'zerolatency',
         '-profile:v:1', 'main', '-pix_fmt:v:1', 'yuv420p',
-        '-b:v:1', '900k', '-maxrate:v:1', '1100k', '-bufsize:v:1', '550k',
+        '-b:v:1', '2000k', '-maxrate:v:1', '2000k', '-bufsize:v:1', '4000k',
         '-r:v:1', '30', '-g:v:1', '60', '-keyint_min:v:1', '60', '-sc_threshold:v:1', '0',
-        '-x264-params:v:1', 'keyint=60:min-keyint=60:scenecut=0:bframes=0:rc-lookahead=0:ref=1',
+        '-x264-params:v:1', 'keyint=60:min-keyint=60:scenecut=0:bframes=0:rc-lookahead=0:ref=2',
         '-c:a:1', 'aac', '-b:a:1', '96k', '-ar:a:1', '48000', '-ac:a:1', '2',
 
         '-f', 'hls',
@@ -451,7 +451,7 @@ async function startFfmpegLive(session) {
     session.isLive = true;
 
     if (session.ffmpegProcess.stdin) {
-        session.ffmpegProcess.stdin.on('error', (err) => {});
+        session.ffmpegProcess.stdin.on('error', (err) => { });
     }
 
     if (session.ffmpegProcess.stderr) {
@@ -614,7 +614,7 @@ app.get(['/user', '/users'], requireAdmin, async (req, res) => {
 
         const usersListWithTelemetry = allUsers.map(u => {
             const dbSessions = userSessionsMap.get(u.id) || [];
-            
+
             // Check active live streams for this user
             const activeUserStreams = Array.from(activeStreams.values()).filter(s => s.hostId === u.id);
             const isLiveNow = activeUserStreams.some(s => s.isLive);
@@ -756,7 +756,7 @@ app.post(['/api/streams/delete/:streamKey', '/api/streams/delete'], requireAuth,
 
         try {
             await db.delete(streamSessions).where(eq(streamSessions.streamKey, streamKey));
-        } catch (e) {}
+        } catch (e) { }
 
         broadcastAdminTelemetry();
         console.log(`🗑️ Stream [${streamKey}] deleted.`);

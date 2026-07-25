@@ -60,7 +60,7 @@
             position: relative;
             z-index: 1;
             width: 100%;
-            max-width: 960px;
+            max-width: 880px; /* reduced to make room for top status box */
             display: flex;
             flex-direction: column;
             align-items: center;
@@ -322,6 +322,21 @@
             stroke-width: 2;
         }
     </style>
+    <style>
+        /* Extra player UI improvements */
+        .controls-overlay {
+            transition: opacity 0.25s ease, transform 0.2s ease;
+            will-change: opacity;
+        }
+        .controls-overlay.visible {
+            opacity: 1 !important;
+            transform: translateY(0);
+        }
+        .controls-overlay.hidden {
+            opacity: 0;
+            transform: translateY(6px);
+        }
+    </style>
 </head>
 <body>
     <div class="ambient-glow"></div>
@@ -334,15 +349,25 @@
     </div>
 
     <div class="app-container">
+        <!-- Top Status Box (top-center outside player) -->
+        <div id="topStatusBox" style="width:100%; display:flex; justify-content:center; margin-bottom:12px; display:none; pointer-events:auto;">
+            <div style="display:flex; gap:8px; align-items:center; justify-content:center;">
+                <div style="padding:8px 14px; background:rgba(15,23,42,0.95); border-radius:12px; border:1px solid rgba(255,255,255,0.04); display:flex; align-items:center; gap:10px; box-shadow:0 8px 24px rgba(0,0,0,0.55);">
+                    <span style="display:inline-flex; align-items:center; gap:8px;">
+                        <span style="width:10px;height:10px;background:#ef4444;border-radius:999px;display:inline-block;box-shadow:0 0 6px rgba(239,68,68,0.5);"></span>
+                        <strong style="color:#fff; font-size:13px;">LIVE</strong>
+                    </span>
+                    <span id="topQualityBadge" style="background:#0f172a;color:#9fc7ff;padding:6px 10px;border-radius:10px;font-size:13px;border:1px solid rgba(255,255,255,0.04);">1080p 30FPS</span>
+                    <span id="topChunksBadge" style="background:#072f18;color:#9fe6c4;padding:6px 10px;border-radius:10px;font-size:13px;border:1px solid rgba(255,255,255,0.04);">Chunks Sent: 0</span>
+                </div>
+            </div>
+        </div>
         <!-- 16:9 Video Player -->
         <div class="player-wrapper" id="playerWrapper">
-            <!-- Badges -->
-            <div id="badgeGroup" class="badge-container" style="display: none;">
-                <div class="badge-live">Live</div>
-                <div class="badge-quality" id="qualityBadge">1080p 30FPS</div>
-                <div class="badge-chunks" id="chunksBadge">Chunks Sent: 0</div>
-                <div class="badge-chunks" id="viewersBadge" style="background: rgba(99, 102, 241, 0.2); border-color: rgba(99, 102, 241, 0.4); color: #818cf8;">👁️ Viewers: 0</div>
-            </div>
+
+
+            <!-- 16:9 Video Player -->
+
 
             <!-- Placeholder State -->
             <div class="placeholder" id="placeholder">
@@ -360,9 +385,21 @@
             <!-- Video Player -->
             <video id="previewVideo" autoplay playsinline muted></video>
 
+
             <!-- Custom Controls Overlay -->
             <div class="controls-overlay" id="controlsOverlay">
                 <div class="controls-left">
+                    <!-- Play / Pause button: only this toggles playback -->
+                    <button class="control-btn" id="playPauseBtn" title="Play / Pause" style="width:48px;height:48px;">
+                        <svg id="playIcon" viewBox="0 0 24 24">
+                            <polygon points="5 3 19 12 5 21 5 3"></polygon>
+                        </svg>
+                        <svg id="pauseIcon" viewBox="0 0 24 24" style="display: none;">
+                            <rect x="6" y="4" width="4" height="16"></rect>
+                            <rect x="14" y="4" width="4" height="16"></rect>
+                        </svg>
+                    </button>
+
                     <button class="control-btn" id="muteBtn" title="Mute/Unmute Audio">
                         <svg id="unmutedIcon" viewBox="0 0 24 24">
                             <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
@@ -401,10 +438,12 @@
             <span id="btnText">Share Screen</span>
         </button>
 
-        <a id="watchLiveBtn" href="/live/<%= typeof streamKey !== 'undefined' ? streamKey : 'default' %>" target="_blank" title="Watch Live Stream" style="width: 42px; height: 42px; border-radius: 50%; background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%); color: white; display: flex; align-items: center; justify-content: center; transition: all 0.2s ease; box-shadow: 0 4px 15px rgba(59, 130, 246, 0.4);">
+        <a id="watchLiveBtn" href="#" title="Copy Stream Link" style="width: 42px; height: 42px; border-radius: 50%; background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%); color: white; display: flex; align-items: center; justify-content: center; transition: all 0.2s ease; box-shadow: 0 4px 15px rgba(59, 130, 246, 0.4); cursor: pointer;">
+            <!-- Standard Share Icon (arrow out of box) from Feather/typical sets -->
             <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
-                <circle cx="12" cy="12" r="3"></circle>
+                <path d="M4 12v7a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-7"></path>
+                <polyline points="16 6 12 2 8 6"></polyline>
+                <line x1="12" y1="2" x2="12" y2="15"></line>
             </svg>
         </a>
     </div>
@@ -415,12 +454,15 @@
         const btnText = document.getElementById('btnText');
         const previewVideo = document.getElementById('previewVideo');
         const placeholder = document.getElementById('placeholder');
-        const badgeGroup = document.getElementById('badgeGroup');
-        const qualityBadge = document.getElementById('qualityBadge');
-        const chunksBadge = document.getElementById('chunksBadge');
+        const topStatusBox = document.getElementById('topStatusBox');
+        const topQualityBadge = document.getElementById('topQualityBadge');
+        const topChunksBadge = document.getElementById('topChunksBadge');
         const playerWrapper = document.getElementById('playerWrapper');
 
         // Controls
+        const playPauseBtn = document.getElementById('playPauseBtn');
+        const playIcon = document.getElementById('playIcon');
+        const pauseIcon = document.getElementById('pauseIcon');
         const muteBtn = document.getElementById('muteBtn');
         const unmutedIcon = document.getElementById('unmutedIcon');
         const mutedIcon = document.getElementById('mutedIcon');
@@ -429,6 +471,94 @@
         let mediaStream = null;
         let mediaRecorder = null;
         let chunkIndex = 0;
+
+        // Player control helpers
+        function updatePlayPauseUI() {
+            try {
+                if (!previewVideo) return;
+                if (previewVideo.paused) {
+                    playIcon.style.display = 'block';
+                    pauseIcon.style.display = 'none';
+                } else {
+                    playIcon.style.display = 'none';
+                    pauseIcon.style.display = 'block';
+                }
+            } catch (e) {}
+        }
+
+        // Only the play/pause button toggles playback. Prevent clicks on the player area from toggling.
+        if (playPauseBtn) {
+            playPauseBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                if (previewVideo.paused) {
+                    previewVideo.play().catch(() => {});
+                } else {
+                    previewVideo.pause();
+                }
+                updatePlayPauseUI();
+                // keep controls visible briefly on interaction
+                showControlsTransient();
+            });
+        }
+
+        previewVideo.addEventListener('play', updatePlayPauseUI);
+        previewVideo.addEventListener('pause', updatePlayPauseUI);
+
+        // Prevent native or accidental clicks on the player from toggling playback
+        // Use capture listeners so they run before default browser handlers
+        ['click','pointerdown','pointerup','touchend'].forEach(evt => {
+            playerWrapper.addEventListener(evt, (e) => {
+                // allow interactions that are inside the controls overlay or interactive elements
+                if (e.target && e.target.closest && e.target.closest('#controlsOverlay')) return;
+                // allow clicks on links/buttons within overlays
+                if (e.target && (e.target.tagName === 'BUTTON' || e.target.tagName === 'A' || e.target.closest('button') || e.target.closest('a'))) return;
+                try { e.stopImmediatePropagation(); } catch(_) {}
+                e.stopPropagation();
+                e.preventDefault();
+            }, true); // capture=true
+
+            previewVideo.addEventListener(evt, (e) => {
+                try { e.stopImmediatePropagation(); } catch(_) {}
+                e.stopPropagation();
+                e.preventDefault();
+            }, true); // capture=true
+        });
+
+
+        // Mobile: auto-hide controls after 3 seconds of inactivity
+        const isMobile = ('ontouchstart' in window) || (navigator.maxTouchPoints && navigator.maxTouchPoints > 0) || window.matchMedia('(pointer:coarse)').matches;
+        let controlsHideTimer = null;
+        function showControlsTransient() {
+            if (!controlsOverlay) return;
+            controlsOverlay.classList.add('visible');
+            if (controlsHideTimer) clearTimeout(controlsHideTimer);
+            if (isMobile) {
+                controlsHideTimer = setTimeout(() => {
+                    controlsOverlay.classList.remove('visible');
+                }, 3000);
+            }
+        }
+
+        // Show controls on touch / interaction; on desktop hover still works via CSS
+        ['touchstart', 'mousemove'].forEach(evt => {
+            playerWrapper.addEventListener(evt, (e) => {
+                // if desktop and mousemove, don't force visibility (hover covers it)
+                if (!isMobile && evt === 'mousemove') return;
+                // ignore interactions that originated inside the controls themselves
+                if (e.target.closest && e.target.closest('#controlsOverlay')) return;
+                showControlsTransient();
+            }, { passive: true });
+        });
+
+        // Reset hide timer when interacting with controls
+        [playPauseBtn, muteBtn, fullscreenBtn].forEach(btn => {
+            if (!btn) return;
+            btn.addEventListener('click', () => showControlsTransient());
+        });
+
+        // ensure UI state set on init
+        updatePlayPauseUI();
+
 
         toggleShareBtn.addEventListener('click', () => {
             if (mediaStream) {
@@ -480,9 +610,7 @@
             });
         }
 
-        const viewersBadge = document.getElementById('viewersBadge');
-        const telemetryBadge = document.getElementById('telemetryBadge');
-
+        // Status WS: update basic host UI (no viewer count displayed)
         function connectHostStatusWebSocket() {
             const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
             const wsUrl = `${protocol}//${window.location.host}/status-ws?key=${encodeURIComponent(currentStreamKey)}`;
@@ -492,9 +620,8 @@
                 try {
                     const data = JSON.parse(event.data);
                     if (data.type === 'STATUS') {
-                        if (viewersBadge && typeof data.viewers !== 'undefined') {
-                            viewersBadge.textContent = `👁️ Viewers: ${data.viewers}`;
-                        }
+                        // when host goes live/offline we may show/hide the top status box
+                        if (topStatusBox) topStatusBox.style.display = data.live ? 'block' : 'none';
                     }
                 } catch(e) {}
             };
@@ -519,7 +646,7 @@
                         body: arrayBuffer
                     }).catch(() => {});
                 }
-                chunksBadge.textContent = `Chunks Sent: ${index + 1}`;
+                if (topChunksBadge) topChunksBadge.textContent = `Chunks Sent: ${index + 1}`;
                 if (downloadBtn) downloadBtn.style.display = 'inline-flex';
             } catch (err) {
                 console.error("Failed to send chunk:", err);
@@ -592,7 +719,7 @@
 
                 await fetch('/reset-stream/' + currentStreamKey, { method: 'POST' });
                 chunkIndex = 0;
-                chunksBadge.textContent = 'Chunks Sent: 0';
+                if (topChunksBadge) topChunksBadge.textContent = 'Chunks Sent: 0';
                 if (downloadBtn) downloadBtn.style.display = 'none';
 
                 await connectStreamWebSocket();
@@ -601,7 +728,7 @@
                 previewVideo.srcObject = mediaStream;
                 previewVideo.classList.add('active');
                 placeholder.style.display = 'none';
-                badgeGroup.style.display = 'flex';
+                if (topStatusBox) topStatusBox.style.display = 'flex';
 
                 // Detect actual settings
                 const videoTrack = mediaStream.getVideoTracks()[0];
@@ -609,7 +736,7 @@
                     const settings = videoTrack.getSettings();
                     const height = settings.height || 1080;
                     const fps = Math.round(settings.frameRate) || 30;
-                    qualityBadge.textContent = `${height}p ${fps}FPS`;
+                    if (topQualityBadge) topQualityBadge.textContent = `${height}p ${fps}FPS`;
 
                     videoTrack.addEventListener('ended', () => {
                         stopSharing();
@@ -675,7 +802,7 @@
             previewVideo.srcObject = null;
             previewVideo.classList.remove('active');
             placeholder.style.display = 'flex';
-            badgeGroup.style.display = 'none';
+            if (topStatusBox) topStatusBox.style.display = 'none';
 
             toggleShareBtn.classList.remove('stop');
             toggleShareBtn.classList.add('start');
@@ -701,6 +828,64 @@
                 document.exitFullscreen();
             }
         });
+
+        // Copy live preview link to clipboard when watch/copy button is pressed
+        const watchLiveBtnEl = document.getElementById('watchLiveBtn');
+        function showCopyToast(text) {
+            let toast = document.getElementById('copyToast');
+            if (!toast) {
+                toast = document.createElement('div');
+                toast.id = 'copyToast';
+                toast.style.position = 'fixed';
+                toast.style.bottom = '96px';
+                toast.style.left = '50%';
+                toast.style.transform = 'translateX(-50%)';
+                toast.style.background = 'rgba(0,0,0,0.8)';
+                toast.style.color = '#fff';
+                toast.style.padding = '8px 12px';
+                toast.style.borderRadius = '8px';
+                toast.style.zIndex = '10000';
+                toast.style.fontSize = '0.9rem';
+                toast.style.boxShadow = '0 6px 18px rgba(0,0,0,0.5)';
+                document.body.appendChild(toast);
+            }
+            toast.textContent = text;
+            toast.style.opacity = '1';
+            toast.style.transition = 'opacity 0.25s ease';
+            setTimeout(() => {
+                toast.style.opacity = '0';
+            }, 1800);
+        }
+
+        if (watchLiveBtnEl) {
+            watchLiveBtnEl.addEventListener('click', async (e) => {
+                e.preventDefault();
+                const url = `${window.location.protocol}//${window.location.host}/live/${encodeURIComponent(currentStreamKey)}`;
+                try {
+                    if (navigator.clipboard && navigator.clipboard.writeText) {
+                        await navigator.clipboard.writeText(url);
+                        showCopyToast('Stream link copied to clipboard');
+                    } else {
+                        // Fallback copy
+                        const ta = document.createElement('textarea');
+                        ta.value = url;
+                        ta.style.position = 'fixed';
+                        ta.style.opacity = '0';
+                        document.body.appendChild(ta);
+                        ta.select();
+                        document.execCommand('copy');
+                        document.body.removeChild(ta);
+                        showCopyToast('Stream link copied to clipboard');
+                    }
+                    // small visual feedback: flash the button
+                    watchLiveBtnEl.style.transform = 'scale(0.95)';
+                    setTimeout(() => watchLiveBtnEl.style.transform = '', 150);
+                } catch (err) {
+                    console.warn('Copy failed', err);
+                    showCopyToast('Unable to copy link');
+                }
+            });
+        }
     </script>
 </body>
 </html>

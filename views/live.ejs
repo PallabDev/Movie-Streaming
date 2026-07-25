@@ -3,7 +3,9 @@
 
 <head>
     <meta charset="UTF-8">
-    <title><%= stream.title %> | CoWatch Player</title>
+    <title>
+        <%= stream.title %> | CoWatch Player
+    </title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <link rel="icon" type="image/png" href="/favicon.png">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
@@ -33,13 +35,15 @@
         }
     </script>
     <style>
+        /* Center play button and improved controls transitions */
         :root {
             --progress-bg: #2a323b;
             --progress-fill: #82A3A1;
             --value: 100%;
         }
 
-        html, body {
+        html,
+        body {
             margin: 0;
             padding: 0;
             width: 100%;
@@ -97,6 +101,42 @@
             box-shadow: 0 10px 25px rgba(0, 0, 0, 0.5);
         }
 
+        /* Make quality menu more compact on small/mobile screens */
+        @media (max-width: 640px) {
+            .sh-quality-menu {
+                bottom: 3.25rem;
+                /* slightly higher above bottom controls */
+                right: 0.75rem;
+                /* bring it closer to gear button */
+                min-width: 120px;
+                padding: 0.25rem;
+                border-radius: 10px;
+                box-shadow: 0 6px 18px rgba(0, 0, 0, 0.5);
+                font-size: 0.85rem;
+            }
+
+            /* Target Tailwind generated class 'text-[10px]' — escape square brackets for plain CSS */
+            .sh-quality-menu>.text-\[10px\] {
+                font-size: 0.7rem;
+                padding: 0.35rem 0.5rem;
+            }
+
+            .sh-quality-item {
+                padding: 0.35rem 0.6rem;
+                font-size: 0.82rem;
+                border-radius: 8px;
+            }
+
+            .sh-quality-item span {
+                display: inline-block;
+            }
+
+            .sh-quality-item i.fa-check {
+                margin-left: 6px;
+                font-size: 0.72rem;
+            }
+        }
+
         .sh-quality-menu.active {
             display: block;
         }
@@ -123,6 +163,11 @@
             color: #818cf8;
             background: rgba(99, 102, 241, 0.15);
         }
+
+        /* Smooth controls hide transition */
+        #sh-controls {
+            transition: opacity 0.22s ease, transform 0.18s ease;
+        }
     </style>
 </head>
 
@@ -131,49 +176,63 @@
     <div class="sh-player group" id="sh-player-container">
 
         <!-- HTML5 Video Element -->
-        <video id="sh-video" class="w-full h-full object-contain cursor-pointer" playsinline webkit-playsinline autoplay></video>
+        <video id="sh-video" class="w-full h-full object-contain cursor-pointer" playsinline webkit-playsinline
+            autoplay></video>
+
 
         <!-- Loading Spinner -->
-        <div id="sh-loading" class="absolute inset-0 flex items-center justify-center bg-black/60 backdrop-blur-sm z-30 pointer-events-none transition-opacity duration-300">
+        <div id="sh-loading"
+            class="absolute inset-0 flex items-center justify-center bg-black/60 backdrop-blur-sm z-30 pointer-events-none transition-opacity duration-300">
             <div class="flex flex-col items-center gap-3">
-                <div class="w-12 h-12 border-4 border-indigo-500/30 border-t-indigo-500 rounded-full animate-spin"></div>
+                <div class="w-12 h-12 border-4 border-indigo-500/30 border-t-indigo-500 rounded-full animate-spin">
+                </div>
                 <span class="text-xs font-semibold text-slate-300 tracking-wider uppercase">Loading Stream...</span>
             </div>
         </div>
 
         <!-- Stream Offline Overlay -->
-        <div id="offline-screen" class="absolute inset-0 bg-slate-950 flex flex-col items-center justify-center p-6 text-center z-40" style="display: none;">
-            <div class="w-16 h-16 rounded-2xl bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center text-indigo-400 text-2xl mb-4">
+        <div id="offline-screen"
+            class="absolute inset-0 bg-slate-950 flex flex-col items-center justify-center p-6 text-center z-40"
+            style="display: none;">
+            <div
+                class="w-16 h-16 rounded-2xl bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center text-indigo-400 text-2xl mb-4">
                 <i class="fa-solid fa-satellite-dish animate-pulse"></i>
             </div>
             <h2 class="text-2xl font-bold text-white mb-2">Stream Offline</h2>
             <p class="text-slate-400 text-xs max-w-sm mb-6">
                 The broadcaster is currently offline or reconnecting. The player will automatically resume when live.
             </p>
-            <button onclick="checkStreamStatus()" class="px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs transition-all shadow-lg shadow-indigo-600/30 flex items-center gap-2">
+            <button onclick="checkStreamStatus()"
+                class="px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs transition-all shadow-lg shadow-indigo-600/30 flex items-center gap-2">
                 <i class="fa-solid fa-rotate-right"></i>
                 <span>Refresh Status</span>
             </button>
         </div>
 
         <!-- Top Header Info Bar -->
-        <div id="top-header" class="absolute top-0 left-0 right-0 p-4 sm:p-6 bg-gradient-to-b from-black/80 via-black/40 to-transparent flex items-center justify-between z-20 pointer-events-none transition-all duration-300">
+        <div id="top-header"
+            class="absolute top-0 left-0 right-0 p-4 sm:p-6 bg-gradient-to-b from-black/80 via-black/40 to-transparent flex items-center justify-between z-20 pointer-events-none transition-all duration-300">
             <div class="flex items-center gap-2 pointer-events-auto">
-                <span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-red-500/20 text-red-400 border border-red-500/30 flex items-center gap-1">
+                <span
+                    class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-red-500/20 text-red-400 border border-red-500/30 flex items-center gap-1">
                     <span class="w-1.5 h-1.5 rounded-full bg-red-400 animate-ping"></span> LIVE
                 </span>
-                <span id="quality-badge" class="px-2 py-0.5 rounded text-[10px] font-mono bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">Auto</span>
+                <span id="quality-badge"
+                    class="px-2 py-0.5 rounded text-[10px] font-mono bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">Auto</span>
             </div>
         </div>
 
         <!-- Custom Player Controls Bar -->
-        <div id="sh-controls" class="absolute bottom-0 left-0 right-0 p-4 sm:p-6 bg-gradient-to-t from-black/90 via-black/50 to-transparent z-20 flex flex-col gap-3 transition-all duration-300">
+        <div id="sh-controls"
+            class="absolute bottom-0 left-0 right-0 p-4 sm:p-6 bg-gradient-to-t from-black/90 via-black/50 to-transparent z-20 flex flex-col gap-3 transition-all duration-300">
             <div class="flex items-center justify-between">
                 <div class="flex items-center gap-3">
-                    <button id="sh-play-btn" class="w-10 h-10 rounded-xl bg-white/10 hover:bg-white/20 text-white flex items-center justify-center text-base transition-colors">
+                    <button id="sh-play-btn"
+                        class="w-10 h-10 rounded-xl bg-white/10 hover:bg-white/20 text-white flex items-center justify-center text-base transition-colors">
                         <i class="fa-solid fa-play" id="sh-play-icon"></i>
                     </button>
-                    <button id="sh-mute-btn" class="w-10 h-10 rounded-xl bg-white/10 hover:bg-white/20 text-white flex items-center justify-center text-base transition-colors">
+                    <button id="sh-mute-btn"
+                        class="w-10 h-10 rounded-xl bg-white/10 hover:bg-white/20 text-white flex items-center justify-center text-base transition-colors">
                         <i class="fa-solid fa-volume-high" id="sh-mute-icon"></i>
                     </button>
                     <span id="sh-current-time" class="text-xs font-mono text-slate-300 font-semibold">00:00</span>
@@ -181,13 +240,17 @@
 
                 <div class="flex items-center gap-3 relative">
                     <!-- Quality Gear Button -->
-                    <button id="sh-quality-btn" class="w-10 h-10 rounded-xl bg-white/10 hover:bg-white/20 text-white flex items-center justify-center text-base transition-colors" title="Quality Settings">
+                    <button id="sh-quality-btn"
+                        class="w-10 h-10 rounded-xl bg-white/10 hover:bg-white/20 text-white flex items-center justify-center text-base transition-colors"
+                        title="Quality Settings">
                         <i class="fa-solid fa-gear"></i>
                     </button>
 
                     <!-- Quality Dropdown Menu -->
                     <div id="sh-quality-menu" class="sh-quality-menu">
-                        <div class="text-[10px] font-bold text-slate-400 uppercase tracking-wider px-3 py-1 mb-1 border-b border-white/10">Video Quality</div>
+                        <div
+                            class="text-[10px] font-bold text-slate-400 uppercase tracking-wider px-3 py-1 mb-1 border-b border-white/10">
+                            Video Quality</div>
                         <div class="sh-quality-item selected" data-quality="auto" onclick="setQuality('auto')">
                             <span>Auto (ABR)</span>
                             <i class="fa-solid fa-check text-xs"></i>
@@ -203,7 +266,8 @@
                     </div>
 
                     <!-- Fullscreen Button -->
-                    <button id="sh-full-btn" class="w-10 h-10 rounded-xl bg-white/10 hover:bg-white/20 text-white flex items-center justify-center text-base transition-colors">
+                    <button id="sh-full-btn"
+                        class="w-10 h-10 rounded-xl bg-white/10 hover:bg-white/20 text-white flex items-center justify-center text-base transition-colors">
                         <i class="fa-solid fa-expand"></i>
                     </button>
                 </div>
@@ -213,273 +277,299 @@
     </div>
 
     <script>
-        (function () {
-            const player = document.getElementById('sh-player-container');
-            const video = document.getElementById('sh-video');
-            const playBtn = document.getElementById('sh-play-btn');
-            const playIcon = document.getElementById('sh-play-icon');
-            const muteBtn = document.getElementById('sh-mute-btn');
-            const muteIcon = document.getElementById('sh-mute-icon');
-            const currentTimeEl = document.getElementById('sh-current-time');
-            const fullBtn = document.getElementById('sh-full-btn');
-            const loadingSpinner = document.getElementById('sh-loading');
-            const controls = document.getElementById('sh-controls');
-            const topHeader = document.getElementById('top-header');
-            const offlineScreen = document.getElementById('offline-screen');
-            const qualityBtn = document.getElementById('sh-quality-btn');
-            const qualityMenu = document.getElementById('sh-quality-menu');
-            const qualityBadge = document.getElementById('quality-badge');
+            (function () {
+                const player = document.getElementById('sh-player-container');
+                const video = document.getElementById('sh-video');
+                const playBtn = document.getElementById('sh-play-btn');
+                const playIcon = document.getElementById('sh-play-icon');
+                const muteBtn = document.getElementById('sh-mute-btn');
+                const muteIcon = document.getElementById('sh-mute-icon');
+                const currentTimeEl = document.getElementById('sh-current-time');
+                const fullBtn = document.getElementById('sh-full-btn');
+                const loadingSpinner = document.getElementById('sh-loading');
+                const controls = document.getElementById('sh-controls');
+                const topHeader = document.getElementById('top-header');
+                const offlineScreen = document.getElementById('offline-screen');
+                const qualityBtn = document.getElementById('sh-quality-btn');
+                const qualityMenu = document.getElementById('sh-quality-menu');
+                const qualityBadge = document.getElementById('quality-badge');
 
-            const currentStreamKey = '<%= typeof streamKey !== "undefined" ? streamKey : "default" %>';
-            const masterUrl = `/live-playlist/${encodeURIComponent(currentStreamKey)}/master.m3u8`;
+                const currentStreamKey = '<%= typeof streamKey !== "undefined" ? streamKey : "default" %>';
+                const masterUrl = `/live-playlist/${encodeURIComponent(currentStreamKey)}/master.m3u8`;
 
-            let hls = null;
-            let statusWs = null;
-            let controlsTimeout = null;
+                let hls = null;
+                let statusWs = null;
+                let controlsTimeout = null;
 
-            function showControls() {
-                controls.style.opacity = '1';
-                controls.style.pointerEvents = 'auto';
-                if (topHeader) topHeader.style.opacity = '1';
-                resetControlsTimer();
-            }
-
-            function hideControls() {
-                if (!video.paused) {
-                    controls.style.opacity = '0';
-                    controls.style.pointerEvents = 'none';
-                    if (topHeader) topHeader.style.opacity = '0';
-                    qualityMenu.classList.remove('active');
+                function showControls() {
+                    controls.style.opacity = '1';
+                    controls.style.pointerEvents = 'auto';
+                    if (topHeader) topHeader.style.opacity = '1';
+                    resetControlsTimer();
                 }
-            }
 
-            function resetControlsTimer() {
-                if (controlsTimeout) clearTimeout(controlsTimeout);
-                controlsTimeout = setTimeout(hideControls, 3000);
-            }
+                function hideControls() {
+                    if (!video.paused) {
+                        controls.style.opacity = '0';
+                        controls.style.pointerEvents = 'none';
+                        if (topHeader) topHeader.style.opacity = '0';
+                        qualityMenu.classList.remove('active');
+                    }
+                }
 
-            player.addEventListener('mousemove', showControls);
-            player.addEventListener('touchstart', showControls, { passive: true });
-            player.addEventListener('touchmove', showControls, { passive: true });
-            player.addEventListener('click', showControls);
+                function resetControlsTimer() {
+                    if (controlsTimeout) clearTimeout(controlsTimeout);
+                    controlsTimeout = setTimeout(hideControls, 3000);
+                }
 
-            function showOffline() {
-                offlineScreen.style.display = 'flex';
-                hideLoading();
-                if (hls) { hls.destroy(); hls = null; }
-                video.pause();
-                updatePlayIcon();
-            }
+                player.addEventListener('mousemove', showControls);
+                player.addEventListener('touchstart', showControls, { passive: true });
+                player.addEventListener('touchmove', showControls, { passive: true });
+                player.addEventListener('click', showControls);
 
-            function hideOffline() {
-                offlineScreen.style.display = 'none';
-            }
+                function showOffline() {
+                    offlineScreen.style.display = 'flex';
+                    hideLoading();
+                    if (hls) { hls.destroy(); hls = null; }
+                    video.pause();
+                    updatePlayIcon();
+                }
 
-            function showLoading() {
-                loadingSpinner.style.display = 'flex';
-            }
+                function hideOffline() {
+                    offlineScreen.style.display = 'none';
+                }
 
-            function hideLoading() {
-                loadingSpinner.style.display = 'none';
-            }
+                function showLoading() {
+                    loadingSpinner.style.display = 'flex';
+                }
 
-            function initHlsPlayer() {
-                if (hls) { hls.destroy(); hls = null; }
-                showLoading();
-                hideOffline();
+                function hideLoading() {
+                    loadingSpinner.style.display = 'none';
+                }
 
-                if (Hls.isSupported()) {
-                    hls = new Hls({
-                        enableWorker: true,
-                        lowLatencyMode: false,
-                        liveSyncDurationCount: 3,
-                        liveMaxLatencyDurationCount: 8,
-                        backBufferLength: 60,
-                        maxBufferLength: 30,
-                        maxMaxBufferLength: 60,
-                        manifestLoadingTimeOut: 10000,
-                        manifestLoadingMaxRetry: 10,
-                        manifestLoadingRetryDelay: 500,
-                        levelLoadingTimeOut: 10000,
-                        levelLoadingMaxRetry: 10,
-                        levelLoadingRetryDelay: 500,
-                        fragLoadingTimeOut: 10000,
-                        fragLoadingMaxRetry: 10,
-                        fragLoadingRetryDelay: 500
-                    });
+                function initHlsPlayer() {
+                    if (hls) { hls.destroy(); hls = null; }
+                    showLoading();
+                    hideOffline();
 
-                    hls.loadSource(masterUrl);
-                    hls.attachMedia(video);
+                    if (Hls.isSupported()) {
+                        hls = new Hls({
+                            enableWorker: true,
+                            lowLatencyMode: false,
+                            liveSyncDurationCount: 3,
+                            liveMaxLatencyDurationCount: 8,
+                            backBufferLength: 60,
+                            maxBufferLength: 30,
+                            maxMaxBufferLength: 60,
+                            manifestLoadingTimeOut: 10000,
+                            manifestLoadingMaxRetry: 10,
+                            manifestLoadingRetryDelay: 500,
+                            levelLoadingTimeOut: 10000,
+                            levelLoadingMaxRetry: 10,
+                            levelLoadingRetryDelay: 500,
+                            fragLoadingTimeOut: 10000,
+                            fragLoadingMaxRetry: 10,
+                            fragLoadingRetryDelay: 500
+                        });
 
-                    hls.on(Hls.Events.MANIFEST_PARSED, (event, data) => {
-                        hideOffline();
-                        hideLoading();
-                        showControls();
-                        video.play().then(() => updatePlayIcon()).catch(() => updatePlayIcon());
-                    });
+                        hls.loadSource(masterUrl);
+                        hls.attachMedia(video);
 
-                    hls.on(Hls.Events.LEVEL_SWITCHED, (event, data) => {
-                        const level = hls.levels[data.level];
-                        if (level && qualityBadge) {
-                            qualityBadge.textContent = `${level.height || '1080'}p ${hls.autoLevelEnabled ? '(Auto)' : ''}`;
-                        }
-                    });
+                        hls.on(Hls.Events.MANIFEST_PARSED, (event, data) => {
+                            hideOffline();
+                            hideLoading();
+                            showControls();
+                            video.play().then(() => updatePlayIcon()).catch(() => updatePlayIcon());
+                        });
 
-                    hls.on(Hls.Events.ERROR, (event, data) => {
-                        if (data.fatal) {
-                            switch (data.type) {
-                                case Hls.ErrorTypes.NETWORK_ERROR:
-                                    console.warn('Network error, retrying HLS manifest...');
-                                    setTimeout(() => { if (hls) hls.loadSource(masterUrl); }, 1000);
-                                    break;
-                                case Hls.ErrorTypes.MEDIA_ERROR:
-                                    console.warn('Media error, recovering...');
-                                    hls.recoverMediaError();
-                                    break;
-                                default:
-                                    showOffline();
-                                    break;
+                        hls.on(Hls.Events.LEVEL_SWITCHED, (event, data) => {
+                            const level = hls.levels[data.level];
+                            if (level && qualityBadge) {
+                                qualityBadge.textContent = `${level.height || '1080'}p ${hls.autoLevelEnabled ? '(Auto)' : ''}`;
                             }
+                        });
+
+                        hls.on(Hls.Events.ERROR, (event, data) => {
+                            if (data.fatal) {
+                                switch (data.type) {
+                                    case Hls.ErrorTypes.NETWORK_ERROR:
+                                        console.warn('Network error, retrying HLS manifest...');
+                                        setTimeout(() => { if (hls) hls.loadSource(masterUrl); }, 1000);
+                                        break;
+                                    case Hls.ErrorTypes.MEDIA_ERROR:
+                                        console.warn('Media error, recovering...');
+                                        hls.recoverMediaError();
+                                        break;
+                                    default:
+                                        showOffline();
+                                        break;
+                                }
+                            }
+                        });
+                    } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+                        video.src = masterUrl;
+                        video.play().then(() => updatePlayIcon()).catch(() => updatePlayIcon());
+                    }
+                }
+
+                window.setQuality = function (targetHeight) {
+                    if (!hls || !hls.levels) return;
+                    if (targetHeight === 'auto' || targetHeight === -1) {
+                        hls.currentLevel = -1; // Auto ABR
+                    } else {
+                        const foundIndex = hls.levels.findIndex(l =>
+                            l.height === targetHeight ||
+                            (targetHeight === 1080 && l.height >= 1000) ||
+                            (targetHeight === 720 && l.height >= 700 && l.height < 1000) ||
+                            (targetHeight === 480 && l.height < 700)
+                        );
+                        if (foundIndex !== -1) {
+                            hls.currentLevel = foundIndex;
                         }
-                    });
-                } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-                    video.src = masterUrl;
-                    video.play().then(() => updatePlayIcon()).catch(() => updatePlayIcon());
-                }
-            }
+                    }
 
-            window.setQuality = function (targetHeight) {
-                if (!hls || !hls.levels) return;
-                if (targetHeight === 'auto' || targetHeight === -1) {
-                    hls.currentLevel = -1; // Auto ABR
-                } else {
-                    const foundIndex = hls.levels.findIndex(l => 
-                        l.height === targetHeight || 
-                        (targetHeight === 1080 && l.height >= 1000) || 
-                        (targetHeight === 720 && l.height >= 700 && l.height < 1000) || 
-                        (targetHeight === 480 && l.height < 700)
-                    );
-                    if (foundIndex !== -1) {
-                        hls.currentLevel = foundIndex;
+                    const items = document.querySelectorAll('.sh-quality-item');
+                    items.forEach(i => { i.classList.remove('selected'); const c = i.querySelector('.fa-check'); if (c) c.classList.add('hidden'); });
+                    const sel = document.querySelector(`[data-quality="${targetHeight}"]`);
+                    if (sel) { sel.classList.add('selected'); const c = sel.querySelector('.fa-check'); if (c) c.classList.remove('hidden'); }
+                    qualityMenu.classList.remove('active');
+                };
+
+                qualityBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    showControls();
+                    qualityMenu.classList.toggle('active');
+                });
+
+                document.addEventListener('click', () => {
+                    qualityMenu.classList.remove('active');
+                });
+
+                function formatTime(sec) {
+                    if (!sec || !isFinite(sec)) return '00:00';
+                    const s = Math.floor(sec % 60);
+                    const m = Math.floor(sec / 60);
+                    return String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0');
+                }
+
+                function updatePlayIcon() {
+                    if (video.paused) {
+                        playIcon.className = 'fa-solid fa-play';
+                        playBtn.setAttribute('aria-label', 'Play');
+                    } else {
+                        playIcon.className = 'fa-solid fa-pause';
+                        playBtn.setAttribute('aria-label', 'Pause');
                     }
                 }
 
-                const items = document.querySelectorAll('.sh-quality-item');
-                items.forEach(i => { i.classList.remove('selected'); const c = i.querySelector('.fa-check'); if (c) c.classList.add('hidden'); });
-                const sel = document.querySelector(`[data-quality="${targetHeight}"]`);
-                if (sel) { sel.classList.add('selected'); const c = sel.querySelector('.fa-check'); if (c) c.classList.remove('hidden'); }
-                qualityMenu.classList.remove('active');
-            };
+                // Play/Pause button: only this toggles playback
+                playBtn.addEventListener('click', () => {
+                    if (video.paused) video.play();
+                    else video.pause();
+                    updatePlayIcon();
+                    // ensure controls remain visible briefly after interaction
+                    showControls();
+                });
 
-            qualityBtn.addEventListener('click', (e) => {
-                e.stopPropagation();
-                showControls();
-                qualityMenu.classList.toggle('active');
-            });
+                // Remove native click-to-toggle behavior: prevent clicks on player/video from toggling playback
+                ['click', 'pointerdown', 'pointerup', 'touchend', 'touchstart'].forEach(evt => {
+                    player.addEventListener(evt, (e) => {
+                        // allow interactions inside controls or quality menu
+                        if (e.target && e.target.closest && (e.target.closest('#sh-controls') || e.target.closest('#sh-quality-menu') || e.target.closest('#sh-quality-btn'))) return;
+                        // allow clicks on control buttons
+                        if (e.target && (e.target.tagName === 'BUTTON' || e.target.tagName === 'A' || e.target.closest('button') || e.target.closest('a'))) return;
+                        // On touchstart or pointerdown (touch), we still want to show controls but prevent native play/pause toggling
+                        if (evt === 'touchstart' || (evt === 'pointerdown' && e.pointerType === 'touch')) {
+                            try { showControls(); } catch (err) { }
+                        }
+                        try { e.stopImmediatePropagation(); } catch (e) { }
+                        e.stopPropagation();
+                        e.preventDefault();
+                    }, true); // capture
 
-            document.addEventListener('click', () => {
-                qualityMenu.classList.remove('active');
-            });
+                    video.addEventListener(evt, (e) => {
+                        try { e.stopImmediatePropagation(); } catch (e) { }
+                        e.stopPropagation();
+                        e.preventDefault();
+                    }, true);
+                });
 
-            function formatTime(sec) {
-                if (!sec || !isFinite(sec)) return '00:00';
-                const s = Math.floor(sec % 60);
-                const m = Math.floor(sec / 60);
-                return String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0');
-            }
+                // initialize center visibility state is not needed since there is no center button
 
-            function updatePlayIcon() {
-                if (video.paused) {
-                    playIcon.className = 'fa-solid fa-play';
-                    playBtn.setAttribute('aria-label', 'Play');
-                } else {
-                    playIcon.className = 'fa-solid fa-pause';
-                    playBtn.setAttribute('aria-label', 'Pause');
-                }
-            }
+                muteBtn.addEventListener('click', () => {
+                    video.muted = !video.muted;
+                    muteIcon.className = video.muted ? 'fa-solid fa-volume-xmark' : 'fa-solid fa-volume-high';
+                });
 
-            playBtn.addEventListener('click', () => {
-                if (video.paused) video.play();
-                else video.pause();
-                updatePlayIcon();
-            });
+                video.addEventListener('timeupdate', () => {
+                    currentTimeEl.textContent = formatTime(video.currentTime || 0);
+                });
 
-            video.addEventListener('click', () => {
-                if (video.paused) video.play();
-                else video.pause();
-                updatePlayIcon();
-            });
+                // Keep UI in sync with playback state
+                video.addEventListener('play', () => { updatePlayIcon(); hideLoading(); });
+                video.addEventListener('pause', () => { updatePlayIcon(); showControls(); });
 
-            muteBtn.addEventListener('click', () => {
-                video.muted = !video.muted;
-                muteIcon.className = video.muted ? 'fa-solid fa-volume-xmark' : 'fa-solid fa-volume-high';
-            });
-
-            video.addEventListener('timeupdate', () => {
-                currentTimeEl.textContent = formatTime(video.currentTime || 0);
-            });
-
-            async function toggleFullscreen() {
-                if (document.fullscreenElement || document.webkitFullscreenElement) {
-                    try {
-                        if (document.exitFullscreen) await document.exitFullscreen();
-                        else if (document.webkitExitFullscreen) await document.webkitExitFullscreen();
-                    } catch (e) {}
-                    if (screen.orientation && typeof screen.orientation.unlock === 'function') {
-                        try { screen.orientation.unlock(); } catch (e) {}
-                    }
-                } else {
-                    try {
-                        if (player.requestFullscreen) await player.requestFullscreen();
-                        else if (player.webkitRequestFullscreen) await player.webkitRequestFullscreen();
-                    } catch (e) {}
-                    if (screen.orientation && typeof screen.orientation.lock === 'function') {
-                        try { await screen.orientation.lock('landscape'); } catch (e) {}
+                async function toggleFullscreen() {
+                    if (document.fullscreenElement || document.webkitFullscreenElement) {
+                        try {
+                            if (document.exitFullscreen) await document.exitFullscreen();
+                            else if (document.webkitExitFullscreen) await document.webkitExitFullscreen();
+                        } catch (e) { }
+                        if (screen.orientation && typeof screen.orientation.unlock === 'function') {
+                            try { screen.orientation.unlock(); } catch (e) { }
+                        }
+                    } else {
+                        try {
+                            if (player.requestFullscreen) await player.requestFullscreen();
+                            else if (player.webkitRequestFullscreen) await player.webkitRequestFullscreen();
+                        } catch (e) { }
+                        if (screen.orientation && typeof screen.orientation.lock === 'function') {
+                            try { await screen.orientation.lock('landscape'); } catch (e) { }
+                        }
                     }
                 }
-            }
 
-            fullBtn.addEventListener('click', toggleFullscreen);
+                fullBtn.addEventListener('click', toggleFullscreen);
 
-            function connectStatusWebSocket() {
-                const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-                const wsUrl = `${protocol}//${window.location.host}/status-ws?key=${encodeURIComponent(currentStreamKey)}&role=viewer`;
-                statusWs = new WebSocket(wsUrl);
+                function connectStatusWebSocket() {
+                    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+                    const wsUrl = `${protocol}//${window.location.host}/status-ws?key=${encodeURIComponent(currentStreamKey)}&role=viewer`;
+                    statusWs = new WebSocket(wsUrl);
 
-                statusWs.onmessage = (event) => {
-                    try {
-                        const data = JSON.parse(event.data);
-                        if (data.type === 'STATUS') {
+                    statusWs.onmessage = (event) => {
+                        try {
+                            const data = JSON.parse(event.data);
+                            if (data.type === 'STATUS') {
+                                if (data.live) {
+                                    hideOffline();
+                                    if (!hls) initHlsPlayer();
+                                } else {
+                                    showOffline();
+                                }
+                            }
+                        } catch (err) { }
+                    };
+
+                    statusWs.onclose = () => setTimeout(connectStatusWebSocket, 3000);
+                }
+
+                window.checkStreamStatus = function () {
+                    showLoading();
+                    fetch('/live/status/' + currentStreamKey)
+                        .then(res => res.json())
+                        .then(data => {
                             if (data.live) {
-                                hideOffline();
-                                if (!hls) initHlsPlayer();
+                                initHlsPlayer();
                             } else {
                                 showOffline();
                             }
-                        }
-                    } catch (err) {}
+                        })
+                        .catch(() => showOffline());
                 };
 
-                statusWs.onclose = () => setTimeout(connectStatusWebSocket, 3000);
-            }
-
-            window.checkStreamStatus = function () {
-                showLoading();
-                fetch('/live/status/' + currentStreamKey)
-                    .then(res => res.json())
-                    .then(data => {
-                        if (data.live) {
-                            initHlsPlayer();
-                        } else {
-                            showOffline();
-                        }
-                    })
-                    .catch(() => showOffline());
-            };
-
-            connectStatusWebSocket();
-            checkStreamStatus();
-        })();
+                connectStatusWebSocket();
+                checkStreamStatus();
+            })();
     </script>
 </body>
 
