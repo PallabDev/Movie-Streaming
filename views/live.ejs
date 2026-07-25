@@ -200,13 +200,9 @@ html, body {
       <!-- Quality Settings Popup Menu -->
       <div class="sh-quality-menu" id="sh-quality-menu">
         <div class="text-xs font-semibold text-slate-400 px-2 py-1 mb-1 uppercase tracking-wider">Quality</div>
-        <div class="sh-quality-item selected" id="quality-auto" onclick="setQuality(-1)">
-          <span>Auto (720p)</span>
-          <i class="fas fa-check text-xs hidden" id="check-auto"></i>
-        </div>
-        <div class="sh-quality-item" id="quality-720" onclick="setQuality(720)">
+        <div class="sh-quality-item selected" id="quality-720" onclick="setQuality(720)">
           <span>720p HD (30fps)</span>
-          <i class="fas fa-check text-xs hidden" id="check-720"></i>
+          <i class="fas fa-check text-xs" id="check-720"></i>
         </div>
       </div>
 
@@ -327,6 +323,9 @@ html, body {
   let scrubbing = false;
   let controlsTimeout = null;
   let pollInterval = null;
+  let hlsRetryCount = 0;
+  let hlsRetryTimer = null;
+  const MAX_HLS_RETRIES = 15;
 
   function showOffline() {
     offlineScreen.style.display = 'flex';
@@ -379,7 +378,12 @@ html, body {
         const data = JSON.parse(event.data);
         if (data.type === 'STATUS') {
           if (data.live) {
-            initHlsPlayer();
+            // Delay HLS init to give FFmpeg time to generate the first segment
+            showLoading();
+            hideOffline();
+            setTimeout(() => {
+              initHlsPlayer();
+            }, 4000);
           } else {
             showOffline();
           }
@@ -400,33 +404,40 @@ html, body {
 
   function initHlsPlayer() {
     const streamUrl = '<%= hlsBaseUrl %>/master.m3u8';
+
+    // Clear any pending retry timer
+    if (hlsRetryTimer) { clearTimeout(hlsRetryTimer); hlsRetryTimer = null; }
     
     if (Hls.isSupported()) {
       if (hls) {
         hls.destroy();
+        hls = null;
       }
 
       hls = new Hls({
-        liveSyncDurationCount: 6,          // 12-second live sync buffer cushion
-        liveMaxLatencyDurationCount: 15,   // Up to 30s latency tolerance before jumping
+        liveSyncDurationCount: 4,          // 8-second live sync buffer cushion
+        liveMaxLatencyDurationCount: 10,   // Up to 20s latency tolerance before jumping
         maxLiveSyncPlaybackRate: 1.0,      // Never pitch shift or speed up audio
         enableWorker: true,
         lowLatencyMode: false,
         progressive: true,                 // Enable progressive chunk streaming
-        backBufferLength: 60,              // Keep 60s back-buffer
-        maxBufferLength: 60,               // Pre-download up to 60 seconds ahead in memory
-        maxMaxBufferLength: 120,           // Allow buffer growth up to 120 seconds
-        startLevel: -1,
-        abrEwmaDefaultEstimate: 8000000,
-        abrBandWidthUpFactor: 0.7,
-        abrBandWidthFactor: 0.8,
-        abrMaxWithRealBitrate: true
+        backBufferLength: 30,              // Keep 30s back-buffer
+        maxBufferLength: 30,               // Pre-download up to 30 seconds ahead
+        maxMaxBufferLength: 60,            // Allow buffer growth up to 60 seconds
+        startLevel: 0,
+        manifestLoadingTimeOut: 5000,
+        manifestLoadingMaxRetry: 3,
+        manifestLoadingRetryDelay: 2000,
+        levelLoadingTimeOut: 5000,
+        levelLoadingMaxRetry: 5,
+        levelLoadingRetryDelay: 1000
       });
 
       hls.loadSource(streamUrl);
       hls.attachMedia(video);
 
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
+        hlsRetryCount = 0;
         hideOffline();
         hideLoading();
         video.play().then(() => {
@@ -441,11 +452,33 @@ html, body {
         if (data.fatal) {
           console.warn('HLS Fatal Error:', data.type, data.details);
           if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
-            setTimeout(() => hls.startLoad(), 1000);
+            // master.m3u8 might not exist yet — retry with backoff
+            hlsRetryCount++;
+            if (hlsRetryCount <= MAX_HLS_RETRIES) {
+              console.log(`[HLS] Retry ${hlsRetryCount}/${MAX_HLS_RETRIES} in 2s (waiting for FFmpeg to generate segments)...`);
+              showLoading();
+              hls.destroy();
+              hls = null;
+              hlsRetryTimer = setTimeout(() => {
+                initHlsPlayer();
+              }, 2000);
+            } else {
+              console.warn('[HLS] Max retries reached, showing offline');
+              hlsRetryCount = 0;
+              showOffline();
+            }
           } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
             hls.recoverMediaError();
           } else {
-            setTimeout(checkStreamStatus, 2000);
+            hlsRetryCount++;
+            if (hlsRetryCount <= MAX_HLS_RETRIES) {
+              hls.destroy();
+              hls = null;
+              hlsRetryTimer = setTimeout(() => initHlsPlayer(), 2000);
+            } else {
+              hlsRetryCount = 0;
+              showOffline();
+            }
           }
         }
       });
@@ -460,41 +493,19 @@ html, body {
     }
   }
 
-  // Quality Selection Handler for Immediate Quality Switching
+  // Quality Selection Handler (single 720p stream)
   window.setQuality = function (targetHeight) {
+    // Single-stream: always level 0
     if (hls && hls.levels && hls.levels.length > 0) {
-      if (targetHeight === -1) {
-        hls.currentLevel = -1;
-        hls.nextLevel = -1;
-        hls.loadLevel = -1;
-      } else {
-        let index = hls.levels.findIndex(lvl => lvl.height === targetHeight);
-        if (index === -1) {
-          index = hls.levels.findIndex(lvl => lvl.attrs && lvl.attrs.NAME && lvl.attrs.NAME.includes(targetHeight + 'p'));
-        }
-        if (index === -1) {
-          if (targetHeight === 720) index = hls.levels.length - 1;
-          else if (targetHeight === 480) index = 0;
-        }
-        if (index !== -1) {
-          hls.currentLevel = index;
-          hls.nextLevel = index;
-          hls.loadLevel = index;
-        }
-      }
+      hls.currentLevel = 0;
+      hls.nextLevel = 0;
+      hls.loadLevel = 0;
     }
     
     // Update UI highlights
     const items = document.querySelectorAll('.sh-quality-item');
     items.forEach(item => item.classList.remove('selected'));
-
-    if (targetHeight === -1) {
-      document.getElementById('quality-auto').classList.add('selected');
-    } else if (targetHeight === 720) {
-      document.getElementById('quality-720').classList.add('selected');
-    } else if (targetHeight === 480) {
-      document.getElementById('quality-480').classList.add('selected');
-    }
+    document.getElementById('quality-720').classList.add('selected');
 
     qualityMenu.classList.remove('active');
   };
@@ -661,7 +672,7 @@ html, body {
     if (offlineScreen.style.display !== 'none') {
       checkStreamStatus();
     }
-  }, 2000);
+  }, 5000);
 })();
 </script>
 </body>

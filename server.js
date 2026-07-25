@@ -333,85 +333,48 @@ async function startFfmpegLive() {
 
     const args = [
         '-y',
-        '-threads', '4',
+        '-threads', '2',
         '-fflags', '+genpts+discardcorrupt',
-        '-probesize', '5M',
-        '-analyzeduration', '2000000',
+        '-probesize', '2M',
+        '-analyzeduration', '1000000',
         '-i', 'pipe:0',
         '-f', 'lavfi',
         '-i', 'anullsrc=channel_layout=stereo:sample_rate=48000',
 
-        // Multi-resolution filter graph (1080p, 720p, 480p) + Robust Audio Resampler Split
+        // Single 720p stream — lightweight for VPS
         '-filter_complex',
-        '[0:v]fps=30,format=yuv420p,split=3[v1080in][v720in][v480in];' +
-        '[v1080in]copy[v1080out];' +
-        '[v720in]scale=1280:720[v720out];' +
-        '[v480in]scale=854:480[v480out];' +
-        '[0:a][1:a]amix=inputs=2:duration=first:dropout_transition=0,aresample=async=1000:first_pts=0,asplit=3[a1080][a720][a480]',
+        '[0:v]fps=30,scale=1280:720,format=yuv420p[vout];' +
+        '[0:a][1:a]amix=inputs=2:duration=first:dropout_transition=0,aresample=async=1000:first_pts=0[aout]',
 
-        // 1080p Rendition (6.0 Mbps High Quality)
-        '-map', '[v1080out]',
-        '-c:v:0', 'libx264',
-        '-threads:v:0', '2',
+        // 720p Video (2.5 Mbps — VPS-friendly)
+        '-map', '[vout]',
+        '-c:v', 'libx264',
         '-preset', 'ultrafast',
         '-tune', 'zerolatency',
-        '-profile:v:0', 'high',
-        '-b:v:0', '6000k',
-        '-maxrate:v:0', '7000k',
-        '-bufsize:v:0', '12000k',
-        '-g:v:0', '30',
-        '-sc_threshold:v:0', '0',
-        '-x264-params:v:0', 'no-scenecut=1:open-gop=0:keyint=30:min-keyint=30',
-        '-map', '[a1080]',
-        '-c:a:0', 'aac',
-        '-b:a:0', '192k',
+        '-profile:v', 'main',
+        '-b:v', '2500k',
+        '-maxrate', '3000k',
+        '-bufsize', '5000k',
+        '-g', '30',
+        '-sc_threshold', '0',
+        '-x264-params', 'no-scenecut=1:open-gop=0:keyint=30:min-keyint=30',
 
-        // 720p Rendition (4.0 Mbps Medium Quality)
-        '-map', '[v720out]',
-        '-c:v:1', 'libx264',
-        '-threads:v:1', '2',
-        '-preset', 'ultrafast',
-        '-tune', 'zerolatency',
-        '-profile:v:1', 'main',
-        '-b:v:1', '4000k',
-        '-maxrate:v:1', '4800k',
-        '-bufsize:v:1', '8000k',
-        '-g:v:1', '30',
-        '-sc_threshold:v:1', '0',
-        '-x264-params:v:1', 'no-scenecut=1:open-gop=0:keyint=30:min-keyint=30',
-        '-map', '[a720]',
-        '-c:a:1', 'aac',
-        '-b:a:1', '128k',
-
-        // 480p Rendition (1.5 Mbps Mobile Quality)
-        '-map', '[v480out]',
-        '-c:v:2', 'libx264',
-        '-threads:v:2', '2',
-        '-preset', 'ultrafast',
-        '-tune', 'zerolatency',
-        '-profile:v:2', 'main',
-        '-b:v:2', '1500k',
-        '-maxrate:v:2', '1800k',
-        '-bufsize:v:2', '3000k',
-        '-g:v:2', '30',
-        '-sc_threshold:v:2', '0',
-        '-x264-params:v:2', 'no-scenecut=1:open-gop=0:keyint=30:min-keyint=30',
-        '-map', '[a480]',
-        '-c:a:2', 'aac',
-        '-b:a:2', '96k',
+        // Audio (128 kbps AAC)
+        '-map', '[aout]',
+        '-c:a', 'aac',
+        '-b:a', '128k',
 
         // HLS Packaging Config
         '-f', 'hls',
-        '-hls_time', '1',
-        '-hls_list_size', '60',
+        '-hls_time', '2',
+        '-hls_list_size', '30',
         '-hls_flags', 'delete_segments+omit_endlist+independent_segments',
         '-hls_segment_type', 'mpegts',
-        '-master_pl_name', 'master.m3u8',
-        '-var_stream_map', 'v:0,a:0,name:1080p v:1,a:1,name:720p v:2,a:2,name:480p',
-        path.join(liveDir, 'stream_%v.m3u8')
+        '-hls_segment_filename', path.join(liveDir, 'stream_%03d.ts'),
+        path.join(liveDir, 'master.m3u8')
     ];
 
-    console.log('⚡ Spawning Triple-Quality (1080p / 720p / 480p) Multi-Rendition Live Generator...');
+    console.log('⚡ Spawning Single 720p VPS-Friendly Live Stream Generator...');
     ffmpegLiveProcess = spawn('ffmpeg', args);
 
     if (SFTP_ENABLED) {
