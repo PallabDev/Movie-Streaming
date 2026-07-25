@@ -700,8 +700,8 @@
                 enableBackgroundKeepAlive();
                 const constraints = {
                     video: {
-                        width: { ideal: 1920, max: 1920 },
-                        height: { ideal: 1080, max: 1080 },
+                        width: { ideal: 1280, max: 1280 },
+                        height: { ideal: 720, max: 720 },
                         frameRate: { ideal: 30, max: 30 }
                     },
                     audio: {
@@ -752,10 +752,22 @@
                     }
                 }
 
+                // Prefer H.264-capable mime types when available so server passthrough can be used.
+                // Try a few options, then fall back to webm vp8/opus if H.264 isn't supported.
+                let preferredMime = null;
+                const h264Options = [
+                    'video/mp4;codecs="avc1.42E01E, mp4a.40.2"',
+                    'video/webm;codecs="h264,opus"',
+                ];
+                for (const m of h264Options) {
+                    try { if (MediaRecorder.isTypeSupported(m)) { preferredMime = m; break; } } catch(e) {}
+                }
+                if (!preferredMime) preferredMime = mimeType; // mimeType chosen earlier (vp8/vp9/webm fallback)
+
                 mediaRecorder = new MediaRecorder(mediaStream, {
-                    mimeType: mimeType,
-                    audioBitsPerSecond: 192000, // 192 kbps Opus audio
-                    videoBitsPerSecond: 8000000 // 8 Mbps 1080p capture
+                    mimeType: preferredMime,
+                    audioBitsPerSecond: 128000, // 128 kbps audio to match HLS audio bitrate
+                    videoBitsPerSecond: 6000000 // 6 Mbps target for 720p
                 });
 
                 mediaRecorder.ondataavailable = (event) => {

@@ -248,8 +248,66 @@ streamWss.on('connection', (ws) => {
             session.disconnectTimer = null;
         }
         session.isLive = true;
+        // prepare a small probe buffer for initial incoming chunks
+        session._probeBuffer = session._probeBuffer || { chunks: [], size: 0, probed: false };
+        session._probeTimeout = session._probeTimeout || null;
+
         broadcastStatus(session, true);
         broadcastAdminTelemetry();
+    }
+
+    function runProbeNow() {
+        try {
+            if (!session || session._probeBuffer.probed) return;
+            session._probeBuffer.probed = true;
+            if (session._probeTimeout) { clearTimeout(session._probeTimeout); session._probeTimeout = null; }
+
+            const buf = Buffer.concat(session._probeBuffer.chunks || []);
+            if (buf.length < 256) return; // insufficient data to probe
+
+            const tmpPath = path.join(session.liveDir, 'probe_init.bin');
+            try { fs.writeFileSync(tmpPath, buf); } catch (e) { console.warn('Failed to write probe tmp file', e); }
+
+            // Run ffprobe synchronously on the saved init segment
+            let is720h264 = false;
+            try {
+                const probe = spawnSync('ffprobe', ['-v', 'error', '-select_streams', 'v:0', '-show_entries', 'stream=codec_name,width,height', '-of', 'json', tmpPath], { encoding: 'utf8' });
+                if (probe && probe.stdout) {
+                    const info = JSON.parse(probe.stdout);
+                    const s = info.streams && info.streams[0];
+                    if (s && s.codec_name && s.width && s.height) {
+                        const w = parseInt(s.width || 0, 10);
+                        const h = parseInt(s.height || 0, 10);
+                        const codec = (s.codec_name || '').toLowerCase();
+                        if (codec === 'h264' && ((w === 1280 && h === 720) || (w === 720 && h === 1280))) {
+                            is720h264 = true;
+                        }
+                    }
+                }
+            } catch (e) { console.warn('ffprobe failed', e); }
+
+            try { if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath); } catch (e) {}
+
+            if (is720h264) {
+                console.log(`🔎 Probe: input appears to be H.264 720p for [${key}] — restarting FFmpeg with passthrough`);
+                (async () => {
+                    try {
+                        stopFfmpegLive(session);
+                        await startFfmpegLive(session, { passthrough: true });
+                        // write the previously buffered data into the new ffmpeg stdin so it can continue
+                        if (session.ffmpegProcess && session.ffmpegProcess.stdin && session._probeBuffer.chunks.length) {
+                            try {
+                                for (const c of session._probeBuffer.chunks) session.ffmpegProcess.stdin.write(c);
+                            } catch (e) { }
+                        }
+                    } catch (e) { console.warn('Failed to restart ffmpeg with passthrough', e); }
+                })();
+            }
+
+            // free memory
+            session._probeBuffer.chunks = [];
+            session._probeBuffer.size = 0;
+        } catch (e) { console.warn('runProbeNow error', e); }
     }
 
     ws.on('message', (data) => {
@@ -259,14 +317,34 @@ streamWss.on('connection', (ws) => {
                 clearTimeout(session.disconnectTimer);
                 session.disconnectTimer = null;
             }
+
+            const buf = Buffer.isBuffer(data) ? data : Buffer.from(data);
+
+            // Collect initial probe buffer (first ~256KB or 2s)
+            try {
+                if (session._probeBuffer && !session._probeBuffer.probed) {
+                    session._probeBuffer.chunks.push(buf);
+                    session._probeBuffer.size = (session._probeBuffer.size || 0) + buf.length;
+                    // if size exceeds threshold trigger probe immediately
+                    if (session._probeBuffer.size > 256 * 1024) {
+                        runProbeNow();
+                    } else {
+                        // schedule probe after 2s from first chunk
+                        if (!session._probeTimeout) {
+                            session._probeTimeout = setTimeout(runProbeNow, 2000);
+                        }
+                    }
+                }
+            } catch (e) { }
+
             if (session.ffmpegProcess && session.ffmpegProcess.stdin && session.ffmpegProcess.stdin.writable) {
                 try {
-                    const buf = Buffer.isBuffer(data) ? data : Buffer.from(data);
                     session.ffmpegProcess.stdin.write(buf);
                 } catch (e) { }
             }
         }
     });
+
     ws.on('error', (err) => {
         console.warn(`[Stream WS Error ${key}]:`, err.message);
         const session = activeStreams.get(key);
