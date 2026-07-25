@@ -228,6 +228,13 @@ async function processS3Queue(session) {
     const segmentsToUpload = Array.from(session.s3SegmentQueue);
     session.s3SegmentQueue.clear();
 
+    // Prioritize 1080p segments first so high-res stream is uploaded immediately
+    segmentsToUpload.sort((a, b) => {
+        if (a.includes('1080p') && !b.includes('1080p')) return -1;
+        if (!a.includes('1080p') && b.includes('1080p')) return 1;
+        return 0;
+    });
+
     await Promise.all(segmentsToUpload.map(filename => uploadSingleSegment(session, filename)));
     session.isS3Uploading = false;
 
@@ -537,15 +544,15 @@ async function startFfmpegLive(session) {
         '[v480in]scale=854:480:flags=bilinear[v480out];' +
         '[0:a][1:a]amix=inputs=2:duration=first:dropout_transition=0:normalize=0,aresample=async=1:first_pts=0,asplit=3[a1080][a720][a480]',
 
-        // 1080p — High Quality 6.5Mbps stream (30fps, GOP 60)
+        // 1080p — Optimized 4.5Mbps stream (30fps, GOP 60)
         '-map', '[v1080out]',
         '-c:v:0', 'libx264',
         '-preset', 'ultrafast',
         '-profile:v:0', 'high',
         '-level:v:0', '4.2',
-        '-crf:v:0', '21',
-        '-maxrate:v:0', '6500k',
-        '-bufsize:v:0', '13000k',
+        '-crf:v:0', '23',
+        '-maxrate:v:0', '4500k',
+        '-bufsize:v:0', '4500k',
         '-g:v:0', '60',
         '-sc_threshold:v:0', '0',
         '-x264-params:v:0', 'no-scenecut=1:open-gop=0:keyint=60:min-keyint=60:rc-lookahead=0:bframes=0',
@@ -553,35 +560,35 @@ async function startFfmpegLive(session) {
         '-c:a:0', 'aac',
         '-b:a:0', '192k',
 
-        // 720p — High Quality 3.5Mbps stream (30fps, GOP 60)
+        // 720p — Optimized 2.5Mbps stream (30fps, GOP 60)
         '-map', '[v720out]',
         '-c:v:1', 'libx264',
         '-preset', 'ultrafast',
         '-profile:v:1', 'main',
-        '-crf:v:1', '23',
-        '-maxrate:v:1', '3500k',
-        '-bufsize:v:1', '7000k',
+        '-crf:v:1', '24',
+        '-maxrate:v:1', '2500k',
+        '-bufsize:v:1', '2500k',
         '-g:v:1', '60',
         '-sc_threshold:v:1', '0',
         '-x264-params:v:1', 'no-scenecut=1:open-gop=0:keyint=60:min-keyint=60:rc-lookahead=0:bframes=0',
         '-map', '[a720]',
         '-c:a:1', 'aac',
-        '-b:a:1', '160k',
+        '-b:a:1', '128k',
 
-        // 480p — Optimized 1.5Mbps stream (30fps, GOP 60)
+        // 480p — Optimized 1.2Mbps stream (30fps, GOP 60)
         '-map', '[v480out]',
         '-c:v:2', 'libx264',
         '-preset', 'ultrafast',
         '-profile:v:2', 'baseline',
         '-crf:v:2', '26',
-        '-maxrate:v:2', '1500k',
-        '-bufsize:v:2', '3000k',
+        '-maxrate:v:2', '1200k',
+        '-bufsize:v:2', '1200k',
         '-g:v:2', '60',
         '-sc_threshold:v:2', '0',
         '-x264-params:v:2', 'no-scenecut=1:open-gop=0:keyint=60:min-keyint=60:rc-lookahead=0:bframes=0',
         '-map', '[a480]',
         '-c:a:2', 'aac',
-        '-b:a:2', '128k',
+        '-b:a:2', '96k',
 
         '-f', 'hls',
         '-hls_time', '2',
@@ -936,6 +943,17 @@ app.get(['/stream', '/stream/:streamKey'], requireAuth, (req, res) => {
     });
 });
 
+// Express Local Live File Fallback — Serves segment instantly if S3 upload is in-progress
+app.get('/live-file/:streamKey/:filename', (req, res) => {
+    const { streamKey, filename } = req.params;
+    const filePath = path.join(liveDir, streamKey, filename);
+    if (!fs.existsSync(filePath)) return res.status(404).send('File not found');
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Content-Type', 'video/mp2t');
+    res.setHeader('Cache-Control', 'public, max-age=3600');
+    res.sendFile(filePath);
+});
+
 // Dynamic Express HLS Playlist Server — Serves .m3u8 instantly with zero CDN delay
 app.get(['/live-playlist/:streamKey/:playlist', '/live-playlist/:playlist'], (req, res) => {
     const streamKey = req.params.streamKey || 'default';
@@ -963,14 +981,14 @@ app.get(['/live-playlist/:streamKey/:playlist', '/live-playlist/:playlist'], (re
         for (let i = 0; i < lines.length; i++) {
             const line = lines[i].trim();
             if (line.endsWith('.ts')) {
-                if (S3_ENABLED && !session.uploadedS3Segments.has(line)) {
-                    if (rewrittenLines.length > 0 && rewrittenLines[rewrittenLines.length - 1].startsWith('#EXTINF:')) {
-                        rewrittenLines.pop();
-                    }
-                    continue;
+                let segmentUrl;
+                if (S3_ENABLED && session.uploadedS3Segments.has(line)) {
+                    segmentUrl = `${s3CdnBase}/${line}`;
+                } else {
+                    // Fallback to Express local file serving while S3 upload completes in background
+                    segmentUrl = `/live-file/${streamKey}/${line}`;
                 }
-                const cdnUrl = S3_ENABLED ? `${s3CdnBase}/${line}` : line;
-                rewrittenLines.push(cdnUrl);
+                rewrittenLines.push(segmentUrl);
             } else {
                 rewrittenLines.push(line);
             }
