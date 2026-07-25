@@ -157,7 +157,7 @@
         </div>
 
         <!-- Top Header Info Bar -->
-        <div class="absolute top-0 left-0 right-0 p-4 sm:p-6 bg-gradient-to-b from-black/80 via-black/40 to-transparent flex items-center justify-between z-20 pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity duration-300">
+        <div id="top-header" class="absolute top-0 left-0 right-0 p-4 sm:p-6 bg-gradient-to-b from-black/80 via-black/40 to-transparent flex items-center justify-between z-20 pointer-events-none transition-all duration-300">
             <div class="flex items-center gap-2 pointer-events-auto">
                 <span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-red-500/20 text-red-400 border border-red-500/30 flex items-center gap-1">
                     <span class="w-1.5 h-1.5 rounded-full bg-red-400 animate-ping"></span> LIVE
@@ -167,7 +167,7 @@
         </div>
 
         <!-- Custom Player Controls Bar -->
-        <div id="sh-controls" class="absolute bottom-0 left-0 right-0 p-4 sm:p-6 bg-gradient-to-t from-black/90 via-black/50 to-transparent z-20 flex flex-col gap-3 transition-all duration-300 opacity-0 group-hover:opacity-100">
+        <div id="sh-controls" class="absolute bottom-0 left-0 right-0 p-4 sm:p-6 bg-gradient-to-t from-black/90 via-black/50 to-transparent z-20 flex flex-col gap-3 transition-all duration-300">
             <div class="flex items-center justify-between">
                 <div class="flex items-center gap-3">
                     <button id="sh-play-btn" class="w-10 h-10 rounded-xl bg-white/10 hover:bg-white/20 text-white flex items-center justify-center text-base transition-colors">
@@ -188,19 +188,19 @@
                     <!-- Quality Dropdown Menu -->
                     <div id="sh-quality-menu" class="sh-quality-menu">
                         <div class="text-[10px] font-bold text-slate-400 uppercase tracking-wider px-3 py-1 mb-1 border-b border-white/10">Video Quality</div>
-                        <div class="sh-quality-item selected" data-quality="auto" onclick="setQuality(-1)">
+                        <div class="sh-quality-item selected" data-quality="auto" onclick="setQuality('auto')">
                             <span>Auto (ABR)</span>
                             <i class="fa-solid fa-check text-xs"></i>
                         </div>
-                        <div class="sh-quality-item" data-quality="0" onclick="setQuality(0)">
+                        <div class="sh-quality-item" data-quality="1080" onclick="setQuality(1080)">
                             <span>1080p HD</span>
                             <i class="fa-solid fa-check text-xs hidden"></i>
                         </div>
-                        <div class="sh-quality-item" data-quality="1" onclick="setQuality(1)">
+                        <div class="sh-quality-item" data-quality="720" onclick="setQuality(720)">
                             <span>720p HD</span>
                             <i class="fa-solid fa-check text-xs hidden"></i>
                         </div>
-                        <div class="sh-quality-item" data-quality="2" onclick="setQuality(2)">
+                        <div class="sh-quality-item" data-quality="480" onclick="setQuality(480)">
                             <span>480p SD</span>
                             <i class="fa-solid fa-check text-xs hidden"></i>
                         </div>
@@ -228,10 +228,10 @@
             const fullBtn = document.getElementById('sh-full-btn');
             const loadingSpinner = document.getElementById('sh-loading');
             const controls = document.getElementById('sh-controls');
+            const topHeader = document.getElementById('top-header');
             const offlineScreen = document.getElementById('offline-screen');
             const qualityBtn = document.getElementById('sh-quality-btn');
             const qualityMenu = document.getElementById('sh-quality-menu');
-            const viewersCountPill = document.getElementById('viewers-count-pill');
             const qualityBadge = document.getElementById('quality-badge');
 
             const currentStreamKey = '<%= typeof streamKey !== "undefined" ? streamKey : "default" %>';
@@ -239,6 +239,33 @@
 
             let hls = null;
             let statusWs = null;
+            let controlsTimeout = null;
+
+            function showControls() {
+                controls.style.opacity = '1';
+                controls.style.pointerEvents = 'auto';
+                if (topHeader) topHeader.style.opacity = '1';
+                resetControlsTimer();
+            }
+
+            function hideControls() {
+                if (!video.paused) {
+                    controls.style.opacity = '0';
+                    controls.style.pointerEvents = 'none';
+                    if (topHeader) topHeader.style.opacity = '0';
+                    qualityMenu.classList.remove('active');
+                }
+            }
+
+            function resetControlsTimer() {
+                if (controlsTimeout) clearTimeout(controlsTimeout);
+                controlsTimeout = setTimeout(hideControls, 3000);
+            }
+
+            player.addEventListener('mousemove', showControls);
+            player.addEventListener('touchstart', showControls, { passive: true });
+            player.addEventListener('touchmove', showControls, { passive: true });
+            player.addEventListener('click', showControls);
 
             function showOffline() {
                 offlineScreen.style.display = 'flex';
@@ -291,6 +318,7 @@
                     hls.on(Hls.Events.MANIFEST_PARSED, (event, data) => {
                         hideOffline();
                         hideLoading();
+                        showControls();
                         video.play().then(() => updatePlayIcon()).catch(() => updatePlayIcon());
                     });
 
@@ -324,19 +352,32 @@
                 }
             }
 
-            window.setQuality = function (levelIndex) {
-                if (!hls) return;
-                hls.currentLevel = levelIndex; // -1 for Auto, 0 for 1080p, 1 for 720p, 2 for 480p
+            window.setQuality = function (targetHeight) {
+                if (!hls || !hls.levels) return;
+                if (targetHeight === 'auto' || targetHeight === -1) {
+                    hls.currentLevel = -1; // Auto ABR
+                } else {
+                    const foundIndex = hls.levels.findIndex(l => 
+                        l.height === targetHeight || 
+                        (targetHeight === 1080 && l.height >= 1000) || 
+                        (targetHeight === 720 && l.height >= 700 && l.height < 1000) || 
+                        (targetHeight === 480 && l.height < 700)
+                    );
+                    if (foundIndex !== -1) {
+                        hls.currentLevel = foundIndex;
+                    }
+                }
 
                 const items = document.querySelectorAll('.sh-quality-item');
                 items.forEach(i => { i.classList.remove('selected'); const c = i.querySelector('.fa-check'); if (c) c.classList.add('hidden'); });
-                const sel = document.querySelector(`[data-quality="${levelIndex === -1 ? 'auto' : levelIndex}"]`);
+                const sel = document.querySelector(`[data-quality="${targetHeight}"]`);
                 if (sel) { sel.classList.add('selected'); const c = sel.querySelector('.fa-check'); if (c) c.classList.remove('hidden'); }
                 qualityMenu.classList.remove('active');
             };
 
             qualityBtn.addEventListener('click', (e) => {
                 e.stopPropagation();
+                showControls();
                 qualityMenu.classList.toggle('active');
             });
 
@@ -413,9 +454,6 @@
                     try {
                         const data = JSON.parse(event.data);
                         if (data.type === 'STATUS') {
-                            if (viewersCountPill && typeof data.viewers !== 'undefined') {
-                                viewersCountPill.textContent = `👁️ ${data.viewers} Viewer${data.viewers === 1 ? '' : 's'}`;
-                            }
                             if (data.live) {
                                 hideOffline();
                                 if (!hls) initHlsPlayer();
