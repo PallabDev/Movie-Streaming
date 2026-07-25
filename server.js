@@ -327,14 +327,33 @@ viewWss.on('connection', (ws) => {
 
     broadcastStatus(session, session.isLive);
 
+    ws.on('message', (msg) => {
+        try {
+            const parsed = JSON.parse(msg);
+            if (parsed.type === 'CHANGE_QUALITY' && parsed.quality) {
+                const oldQ = ws.currentQuality || quality;
+                const newQ = parsed.quality;
+                if (oldQ !== newQ) {
+                    if (session.qualityViewers[oldQ]) session.qualityViewers[oldQ].delete(ws);
+                    if (!session.qualityViewers[newQ]) session.qualityViewers[newQ] = new Set();
+                    session.qualityViewers[newQ].add(ws);
+                    ws.currentQuality = newQ;
+                    console.log(`🔀 Viewer switched quality: [${key}] ${oldQ} → ${newQ}`);
+                    if (session.initSegments[newQ]) {
+                        try { ws.send(session.initSegments[newQ]); } catch (e) {}
+                    }
+                }
+            }
+        } catch (e) {}
+    });
+
     ws.on('close', () => {
-        session.qualityViewers[quality].delete(ws);
-        console.log(`👁 Viewer disconnected from [${key}] ${quality} (${getTotalViewerCount(session)} total)`);
+        const currentQ = ws.currentQuality || quality;
+        if (session.qualityViewers[currentQ]) session.qualityViewers[currentQ].delete(ws);
+        console.log(`👁 Viewer disconnected from [${key}] ${currentQ} (${getTotalViewerCount(session)} total)`);
         broadcastStatus(session, session.isLive);
     });
-    ws.on('error', (err) => {
-        session.qualityViewers[quality].delete(ws);
-    });
+    ws.on('error', (err) => console.warn(`[Viewer WS Error ${key}]:`, err.message));
 });
 
 setInterval(() => {
@@ -369,7 +388,7 @@ async function startFfmpegLive(session) {
     stopFfmpegLive(session);
     clearLiveFolder(session);
 
-    // 1-Hour Stream Limit Timer: If stream runs > 1 hour (3600s), increment user stream count in DB!
+    // 1-Hour Stream Limit Timer
     session.countedAgainstLimit = false;
     session.oneHourTimer = setTimeout(async () => {
         console.log(`⏰ Stream [${session.streamKey}] reached 1 hour duration. Incrementing stream count for host ${session.hostId}...`);
@@ -380,6 +399,8 @@ async function startFfmpegLive(session) {
             } catch (e) { console.error('Error updating user streamCount:', e); }
         }
     }, 3600 * 1000);
+
+    const hlsDir = session.liveDir.replace(/\\/g, '/');
 
     const args = [
         '-y',
@@ -425,13 +446,13 @@ async function startFfmpegLive(session) {
         '-hls_time', '2',
         '-hls_list_size', '10',
         '-hls_flags', 'delete_segments+independent_segments',
-        '-hls_segment_filename', path.join(session.liveDir, 'stream_%v%d.ts'),
+        '-hls_segment_filename', `${hlsDir}/stream_%v%d.ts`,
         '-master_pl_name', 'master.m3u8',
         '-var_stream_map', 'v:0,a:0,name:1080p v:1,a:1,name:720p v:2,a:2,name:480p',
-        path.join(session.liveDir, 'stream_%v.m3u8')
+        `${hlsDir}/stream_%v.m3u8`
     ];
 
-    console.log(`⚡ Spawning Live HLS Stream Generator for [${session.streamKey}]...`);
+    console.log(`⚡ Spawning Live Stream Generator for [${session.streamKey}]...`);
     session.ffmpegProcess = spawn('ffmpeg', args, { stdio: ['pipe', 'pipe', 'pipe'] });
     session.isLive = true;
 
@@ -456,6 +477,8 @@ async function startFfmpegLive(session) {
                         const speed = speedMatch ? speedMatch[1] : '1.0x';
                         console.log(`[FFmpeg ${session.streamKey}] Speed: ${speed} | FPS: ${fps}`);
                     }
+                } else if (msg.includes('Error') || msg.includes('Invalid') || msg.includes('failed')) {
+                    console.error(`[FFmpeg Error ${session.streamKey}]:`, msg);
                 }
             }
         });

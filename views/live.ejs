@@ -48,10 +48,6 @@
             background: #000000;
         }
 
-        .sh-progress-bar {
-            background: linear-gradient(90deg, #6366f1, #4f46e5);
-        }
-
         .sh-player {
             width: 100%;
             max-width: 100%;
@@ -162,19 +158,11 @@
 
         <!-- Top Header Info Bar -->
         <div class="absolute top-0 left-0 right-0 p-4 sm:p-6 bg-gradient-to-b from-black/80 via-black/40 to-transparent flex items-center justify-between z-20 pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity duration-300">
-            <div class="flex items-center gap-3 pointer-events-auto">
-                <a href="/" class="w-9 h-9 rounded-xl bg-slate-900/80 border border-white/10 flex items-center justify-center text-slate-300 hover:text-white transition-colors">
-                    <i class="fa-solid fa-arrow-left text-sm"></i>
-                </a>
-                <div>
-                    <h1 class="text-sm sm:text-base font-bold text-white tracking-tight line-clamp-1"><%= stream.title %></h1>
-                    <div class="flex items-center gap-2 mt-0.5">
-                        <span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-red-500/20 text-red-400 border border-red-500/30 flex items-center gap-1">
-                            <span class="w-1.5 h-1.5 rounded-full bg-red-400 animate-ping"></span> LIVE
-                        </span>
-                        <span id="viewers-count-pill" class="text-[11px] text-slate-300 font-medium">👁️ 0 Viewers</span>
-                    </div>
-                </div>
+            <div class="flex items-center gap-2 pointer-events-auto">
+                <span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-red-500/20 text-red-400 border border-red-500/30 flex items-center gap-1">
+                    <span class="w-1.5 h-1.5 rounded-full bg-red-400 animate-ping"></span> LIVE
+                </span>
+                <span id="quality-badge" class="px-2 py-0.5 rounded text-[10px] font-mono bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">Auto</span>
             </div>
         </div>
 
@@ -204,15 +192,15 @@
                             <span>Auto (ABR)</span>
                             <i class="fa-solid fa-check text-xs"></i>
                         </div>
-                        <div class="sh-quality-item" data-quality="1080" onclick="setQuality(0)">
+                        <div class="sh-quality-item" data-quality="0" onclick="setQuality(0)">
                             <span>1080p HD</span>
                             <i class="fa-solid fa-check text-xs hidden"></i>
                         </div>
-                        <div class="sh-quality-item" data-quality="720" onclick="setQuality(1)">
+                        <div class="sh-quality-item" data-quality="1" onclick="setQuality(1)">
                             <span>720p HD</span>
                             <i class="fa-solid fa-check text-xs hidden"></i>
                         </div>
-                        <div class="sh-quality-item" data-quality="480" onclick="setQuality(2)">
+                        <div class="sh-quality-item" data-quality="2" onclick="setQuality(2)">
                             <span>480p SD</span>
                             <i class="fa-solid fa-check text-xs hidden"></i>
                         </div>
@@ -244,12 +232,13 @@
             const qualityBtn = document.getElementById('sh-quality-btn');
             const qualityMenu = document.getElementById('sh-quality-menu');
             const viewersCountPill = document.getElementById('viewers-count-pill');
+            const qualityBadge = document.getElementById('quality-badge');
 
             const currentStreamKey = '<%= typeof streamKey !== "undefined" ? streamKey : "default" %>';
             const masterUrl = `/live-playlist/${encodeURIComponent(currentStreamKey)}/master.m3u8`;
 
             let hls = null;
-            let controlsTimeout = null;
+            let statusWs = null;
 
             function showOffline() {
                 offlineScreen.style.display = 'flex';
@@ -299,10 +288,17 @@
                     hls.loadSource(masterUrl);
                     hls.attachMedia(video);
 
-                    hls.on(Hls.Events.MANIFEST_PARSED, () => {
+                    hls.on(Hls.Events.MANIFEST_PARSED, (event, data) => {
                         hideOffline();
                         hideLoading();
                         video.play().then(() => updatePlayIcon()).catch(() => updatePlayIcon());
+                    });
+
+                    hls.on(Hls.Events.LEVEL_SWITCHED, (event, data) => {
+                        const level = hls.levels[data.level];
+                        if (level && qualityBadge) {
+                            qualityBadge.textContent = `${level.height || '1080'}p ${hls.autoLevelEnabled ? '(Auto)' : ''}`;
+                        }
                     });
 
                     hls.on(Hls.Events.ERROR, (event, data) => {
@@ -331,10 +327,10 @@
             window.setQuality = function (levelIndex) {
                 if (!hls) return;
                 hls.currentLevel = levelIndex; // -1 for Auto, 0 for 1080p, 1 for 720p, 2 for 480p
+
                 const items = document.querySelectorAll('.sh-quality-item');
                 items.forEach(i => { i.classList.remove('selected'); const c = i.querySelector('.fa-check'); if (c) c.classList.add('hidden'); });
-                const targetVal = levelIndex === -1 ? 'auto' : (levelIndex === 0 ? '1080' : levelIndex === 1 ? '720' : '480');
-                const sel = document.querySelector(`[data-quality="${targetVal}"]`);
+                const sel = document.querySelector(`[data-quality="${levelIndex === -1 ? 'auto' : levelIndex}"]`);
                 if (sel) { sel.classList.add('selected'); const c = sel.querySelector('.fa-check'); if (c) c.classList.remove('hidden'); }
                 qualityMenu.classList.remove('active');
             };
@@ -366,11 +362,8 @@
             }
 
             playBtn.addEventListener('click', () => {
-                if (video.paused) {
-                    video.play();
-                } else {
-                    video.pause();
-                }
+                if (video.paused) video.play();
+                else video.pause();
                 updatePlayIcon();
             });
 
@@ -389,13 +382,23 @@
                 currentTimeEl.textContent = formatTime(video.currentTime || 0);
             });
 
-            function toggleFullscreen() {
+            async function toggleFullscreen() {
                 if (document.fullscreenElement || document.webkitFullscreenElement) {
-                    if (document.exitFullscreen) document.exitFullscreen();
-                    else if (document.webkitExitFullscreen) document.webkitExitFullscreen();
+                    try {
+                        if (document.exitFullscreen) await document.exitFullscreen();
+                        else if (document.webkitExitFullscreen) await document.webkitExitFullscreen();
+                    } catch (e) {}
+                    if (screen.orientation && typeof screen.orientation.unlock === 'function') {
+                        try { screen.orientation.unlock(); } catch (e) {}
+                    }
                 } else {
-                    if (player.requestFullscreen) player.requestFullscreen();
-                    else if (player.webkitRequestFullscreen) player.webkitRequestFullscreen();
+                    try {
+                        if (player.requestFullscreen) await player.requestFullscreen();
+                        else if (player.webkitRequestFullscreen) await player.webkitRequestFullscreen();
+                    } catch (e) {}
+                    if (screen.orientation && typeof screen.orientation.lock === 'function') {
+                        try { await screen.orientation.lock('landscape'); } catch (e) {}
+                    }
                 }
             }
 
@@ -404,7 +407,7 @@
             function connectStatusWebSocket() {
                 const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
                 const wsUrl = `${protocol}//${window.location.host}/status-ws?key=${encodeURIComponent(currentStreamKey)}&role=viewer`;
-                const statusWs = new WebSocket(wsUrl);
+                statusWs = new WebSocket(wsUrl);
 
                 statusWs.onmessage = (event) => {
                     try {
@@ -414,6 +417,7 @@
                                 viewersCountPill.textContent = `👁️ ${data.viewers} Viewer${data.viewers === 1 ? '' : 's'}`;
                             }
                             if (data.live) {
+                                hideOffline();
                                 if (!hls) initHlsPlayer();
                             } else {
                                 showOffline();
