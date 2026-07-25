@@ -120,7 +120,8 @@ function getOrCreateStreamSession(streamKey, title = 'Live Movie Stream', user =
         totalChunksCount: 0,
         failureCount: 0,
         qualityViewers: { '1080p': new Set(), '720p': new Set(), '480p': new Set() },
-        initSegments: { '1080p': null, '720p': null, '480p': null }
+        initSegments: { '1080p': null, '720p': null, '480p': null },
+        hostAlive: false
     };
 
     if (!fs.existsSync(session.liveDir)) {
@@ -240,11 +241,13 @@ streamWss.on('connection', (ws) => {
 
     const session = activeStreams.get(key);
     if (session) {
+        session.hostAlive = true;
         if (session.disconnectTimer) {
             console.log(`🔄 Host reconnected to WebSocket Ingest for [${key}]! Cancelled 90-second grace timer.`);
             clearTimeout(session.disconnectTimer);
             session.disconnectTimer = null;
         }
+        session.isLive = true;
         broadcastStatus(session, true);
         broadcastAdminTelemetry();
     }
@@ -272,6 +275,7 @@ streamWss.on('connection', (ws) => {
     ws.on('close', () => {
         console.log(`⚠️ Host WebSocket disconnected for [${key}]. Keeping FFmpeg process alive for 90s reconnection window...`);
         const session = activeStreams.get(key);
+        if (session) session.hostAlive = false;
         if (session && session.isLive) {
             if (session.disconnectTimer) clearTimeout(session.disconnectTimer);
             session.disconnectTimer = setTimeout(() => {
@@ -355,6 +359,7 @@ function stopFfmpegLive(session) {
         session.ffmpegProcess = null;
     }
     session.isLive = false;
+    session.hostAlive = false;
     if (session.oneHourTimer) { clearTimeout(session.oneHourTimer); session.oneHourTimer = null; }
 }
 
@@ -392,61 +397,46 @@ async function startFfmpegLive(session) {
         '[v480]scale=854:480:flags=bilinear[sv480];' +
         '[0:a][1:a]amix=inputs=2:duration=first:dropout_transition=0:normalize=0,aresample=async=1:first_pts=0,asplit=3[a1080][a720][a480]',
 
-        // 1080p → pipe:3
+        // 1080p — 4.5Mbps HLS stream
         '-map', '[v1080]', '-map', '[a1080]',
-        '-c:v', 'libx264', '-preset', 'ultrafast', '-profile:v', 'high', '-level', '4.2',
-        '-crf', '23', '-maxrate', '4500k', '-bufsize', '4500k',
-        '-g', '60', '-sc_threshold', '0',
-        '-x264-params', 'no-scenecut=1:open-gop=0:keyint=60:min-keyint=60:rc-lookahead=0:bframes=0',
-        '-c:a', 'aac', '-b:a', '192k', '-ar', '48000',
-        '-f', 'mp4', '-mov_flags', 'frag_keyframe+empty_moof+default_base_moof',
-        '-frag_duration', '1000000', '-max_muxing_queue_size', '4096',
-        'pipe:3',
+        '-c:v:0', 'libx264', '-preset', 'ultrafast', '-profile:v:0', 'high', '-level:v:0', '4.2',
+        '-crf:v:0', '23', '-maxrate:v:0', '4500k', '-bufsize:v:0', '4500k',
+        '-g:v:0', '60', '-sc_threshold:v:0', '0',
+        '-x264-params:v:0', 'no-scenecut=1:open-gop=0:keyint=60:min-keyint=60:rc-lookahead=0:bframes=0',
+        '-c:a:0', 'aac', '-b:a:0', '192k', '-ar:a:0', '48000',
 
-        // 720p → pipe:4
+        // 720p — 2.5Mbps HLS stream
         '-map', '[sv720]', '-map', '[a720]',
-        '-c:v', 'libx264', '-preset', 'ultrafast', '-profile:v', 'main',
-        '-crf', '24', '-maxrate', '2500k', '-bufsize', '2500k',
-        '-g', '60', '-sc_threshold', '0',
-        '-x264-params', 'no-scenecut=1:open-gop=0:keyint=60:min-keyint=60:rc-lookahead=0:bframes=0',
-        '-c:a', 'aac', '-b:a', '128k', '-ar', '48000',
-        '-f', 'mp4', '-mov_flags', 'frag_keyframe+empty_moof+default_base_moof',
-        '-frag_duration', '1000000', '-max_muxing_queue_size', '4096',
-        'pipe:4',
+        '-c:v:1', 'libx264', '-preset', 'ultrafast', '-profile:v:1', 'main',
+        '-crf:v:1', '24', '-maxrate:v:1', '2500k', '-bufsize:v:1', '2500k',
+        '-g:v:1', '60', '-sc_threshold:v:1', '0',
+        '-x264-params:v:1', 'no-scenecut=1:open-gop=0:keyint=60:min-keyint=60:rc-lookahead=0:bframes=0',
+        '-c:a:1', 'aac', '-b:a:1', '128k', '-ar:a:1', '48000',
 
-        // 480p → pipe:5
+        // 480p — 1.2Mbps HLS stream
         '-map', '[sv480]', '-map', '[a480]',
-        '-c:v', 'libx264', '-preset', 'ultrafast', '-profile:v', 'baseline',
-        '-crf', '26', '-maxrate', '1200k', '-bufsize', '1200k',
-        '-g', '60', '-sc_threshold', '0',
-        '-x264-params', 'no-scenecut=1:open-gop=0:keyint=60:min-keyint=60:rc-lookahead=0:bframes=0',
-        '-c:a', 'aac', '-b:a', '96k', '-ar', '48000',
-        '-f', 'mp4', '-mov_flags', 'frag_keyframe+empty_moof+default_base_moof',
-        '-frag_duration', '1000000', '-max_muxing_queue_size', '4096',
-        'pipe:5'
+        '-c:v:2', 'libx264', '-preset', 'ultrafast', '-profile:v:2', 'baseline',
+        '-crf:v:2', '26', '-maxrate:v:2', '1200k', '-bufsize:v:2', '1200k',
+        '-g:v:2', '60', '-sc_threshold:v:2', '0',
+        '-x264-params:v:2', 'no-scenecut=1:open-gop=0:keyint=60:min-keyint=60:rc-lookahead=0:bframes=0',
+        '-c:a:2', 'aac', '-b:a:2', '96k', '-ar:a:2', '48000',
+
+        '-f', 'hls',
+        '-hls_time', '2',
+        '-hls_list_size', '10',
+        '-hls_flags', 'delete_segments+independent_segments',
+        '-hls_segment_filename', path.join(session.liveDir, 'stream_%v%d.ts'),
+        '-master_pl_name', 'master.m3u8',
+        '-var_stream_map', 'v:0,a:0,name:1080p v:1,a:1,name:720p v:2,a:2,name:480p',
+        path.join(session.liveDir, 'stream_%v.m3u8')
     ];
 
-    console.log(`⚡ Spawning Live Stream Generator for [${session.streamKey}]...`);
-    session.ffmpegProcess = spawn('ffmpeg', args, { stdio: ['pipe', 'pipe', 'pipe', 'pipe', 'pipe', 'pipe'] });
+    console.log(`⚡ Spawning Live HLS Stream Generator for [${session.streamKey}]...`);
+    session.ffmpegProcess = spawn('ffmpeg', args, { stdio: ['pipe', 'pipe', 'pipe'] });
     session.isLive = true;
-    session.initSegments = { '1080p': null, '720p': null, '480p': null };
 
     if (session.ffmpegProcess.stdin) {
         session.ffmpegProcess.stdin.on('error', (err) => {});
-    }
-
-    const pipeQualityMap = { 3: '1080p', 4: '720p', 5: '480p' };
-    for (const [fd, quality] of Object.entries(pipeQualityMap)) {
-        const pipe = session.ffmpegProcess.stdio[fd];
-        if (pipe) {
-            pipe.on('data', (chunk) => {
-                if (!session.initSegments[quality]) {
-                    session.initSegments[quality] = chunk;
-                    console.log(`📦 Init segment stored for [${session.streamKey}] ${quality} (${chunk.length} bytes)`);
-                }
-                broadcastToQuality(session, quality, chunk);
-            });
-        }
     }
 
     if (session.ffmpegProcess.stderr) {
@@ -472,8 +462,11 @@ async function startFfmpegLive(session) {
     }
 
     session.ffmpegProcess.on('exit', (code, signal) => {
+        console.warn(`⚠️ FFmpeg exited for [${session.streamKey}] (code=${code}, signal=${signal}). Host WS alive: ${session.hostAlive}`);
         session.ffmpegProcess = null;
-        session.isLive = false;
+        if (!session.hostAlive) {
+            session.isLive = false;
+        }
     });
 }
 
@@ -788,7 +781,7 @@ app.get('/live-file/:streamKey/:filename', (req, res) => {
     res.sendFile(filePath);
 });
 
-// Dynamic Express HLS Playlist Server — Serves .m3u8 instantly
+// Dynamic Express HLS Playlist & Segment Server — Serves .m3u8 and .ts instantly
 app.get(['/live-playlist/:streamKey/:playlist', '/live-playlist/:playlist'], (req, res) => {
     const streamKey = req.params.streamKey || 'default';
     const playlistName = req.params.playlist || 'master.m3u8';
@@ -796,28 +789,29 @@ app.get(['/live-playlist/:streamKey/:playlist', '/live-playlist/:playlist'], (re
     const session = activeStreams.get(streamKey);
     if (!session) return res.status(404).send('#EXTM3U\n#EXT-X-ERROR: Stream session not found');
 
-    const playlistPath = path.join(session.liveDir, playlistName);
-    if (!fs.existsSync(playlistPath)) return res.status(404).send('#EXTM3U\n#EXT-X-ERROR: Playlist not generated yet');
+    const filePath = path.join(session.liveDir, playlistName);
+    if (!fs.existsSync(filePath)) return res.status(404).send('File not found');
 
     try {
-        const isTs = playlistName.endsWith('.ts');
-        if (isTs) {
-            res.setHeader('Content-Type', 'video/mp2t');
-            res.setHeader('Cache-Control', 'public, max-age=3600');
-            res.setHeader('Pragma', 'public');
-            res.setHeader('Expires', '3600');
-            res.setHeader('Access-Control-Allow-Origin', '*');
-            return res.sendFile(playlistPath);
-        }
-        const rawContent = fs.readFileSync(playlistPath, 'utf-8');
-        res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
-        res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate, max-age=0');
-        res.setHeader('Pragma', 'no-cache');
-        res.setHeader('Expires', '0');
+        res.setHeader('Access-Control-Allow-Origin', '*');
+        res.setHeader('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Range');
+        res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, HEAD');
         res.setHeader('Connection', 'keep-alive');
         res.setHeader('Keep-Alive', 'timeout=30, max=100');
-        return res.send(rawContent);
-    } catch (err) { return res.status(500).send('#EXTM3U\n#EXT-X-ERROR: Error reading playlist'); }
+
+        if (playlistName.endsWith('.ts')) {
+            res.setHeader('Content-Type', 'video/mp2t');
+            res.setHeader('Cache-Control', 'public, max-age=3600');
+            return res.sendFile(filePath);
+        } else {
+            res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
+            res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate, max-age=0');
+            res.setHeader('Pragma', 'no-cache');
+            res.setHeader('Expires', '0');
+            const rawContent = fs.readFileSync(filePath, 'utf-8');
+            return res.send(rawContent);
+        }
+    } catch (err) { return res.status(500).send('Error reading HLS resource'); }
 });
 
 // Public Live Player Route (HLS Master Playlist served via Express)
@@ -836,7 +830,8 @@ app.get(['/live', '/live/:streamKey'], (req, res) => {
 app.get(['/live/status', '/live/status/:streamKey'], (req, res) => {
     const key = req.params.streamKey || req.query.streamKey || 'default';
     const session = activeStreams.get(key);
-    res.json({ live: (session && session.isLive), streamKey: key });
+    const hostConnected = session && Array.from(streamWss.clients).some(c => c.streamKey === key && c.readyState === 1);
+    res.json({ live: (session && (session.isLive || hostConnected)), streamKey: key });
 });
 
 // Reset & Start Stream Process
