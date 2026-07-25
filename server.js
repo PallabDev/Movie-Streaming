@@ -5,7 +5,7 @@ import path from 'path';
 import fs from 'fs';
 import os from 'os';
 import { fileURLToPath } from 'url';
-import { spawn } from 'child_process';
+import { spawn, spawnSync } from 'child_process';
 import { WebSocketServer } from 'ws';
 import { EventEmitter } from 'events';
 import cookieParser from 'cookie-parser';
@@ -382,7 +382,7 @@ function stopFfmpegLive(session) {
     if (session.oneHourTimer) { clearTimeout(session.oneHourTimer); session.oneHourTimer = null; }
 }
 
-async function startFfmpegLive(session) {
+async function startFfmpegLive(session, opts = {}) {
     if (session.cleanupTimer) { clearTimeout(session.cleanupTimer); session.cleanupTimer = null; }
 
     stopFfmpegLive(session);
@@ -401,6 +401,21 @@ async function startFfmpegLive(session) {
     }, 3600 * 1000);
 
     const hlsDir = session.liveDir.replace(/\\/g, '/');
+    
+    const usePassthrough = !!opts.passthrough;
+
+    let filterComplex = '';
+    if (!usePassthrough) {
+        filterComplex = '[0:v]fps=30:round=down,format=yuv420p,split=2[v720src][v480src];' +
+            '[v720src]scale=1280:720:flags=fast_bilinear,setsar=1[v720];' +
+            '[v480src]scale=854:480:flags=fast_bilinear,setsar=1[v480];' +
+            '[0:a][1:a]amix=inputs=2:duration=first:dropout_transition=0:normalize=0,aresample=async=1:first_pts=0,asplit=2[a720][a480]';
+    } else {
+        // When passthrough is enabled: keep input video stream as-is for 720p (copy)
+        // and generate a scaled 480p stream from the same input for re-encoding.
+        filterComplex = '[0:v]scale=854:480:flags=fast_bilinear,setsar=1[v480];' +
+            '[0:a][1:a]amix=inputs=2:duration=first:dropout_transition=0:normalize=0,aresample=async=1:first_pts=0,asplit=2[a720][a480]';
+    }
 
     const args = [
         '-y',
@@ -413,29 +428,42 @@ async function startFfmpegLive(session) {
         '-i', 'anullsrc=channel_layout=stereo:sample_rate=48000',
 
         '-filter_complex',
-        '[0:v]fps=30:round=down,format=yuv420p,split=2[v720src][v480src];' +
-        '[v720src]scale=1280:720:flags=fast_bilinear,setsar=1[v720];' +
-        '[v480src]scale=854:480:flags=fast_bilinear,setsar=1[v480];' +
-        '[0:a][1:a]amix=inputs=2:duration=first:dropout_transition=0:normalize=0,aresample=async=1:first_pts=0,asplit=2[a720][a480]',
+        filterComplex,
 
-        // 720p H.264: high-quality 6 Mbps target (use fast preset for good quality with >1x speed on typical servers)
-        '-map', '[v720]', '-map', '[a720]',
-        '-c:v:0', 'libx264', '-preset', 'fast', '-tune:v:0', 'zerolatency',
-        '-profile:v:0', 'main', '-pix_fmt:v:0', 'yuv420p',
-        '-b:v:0', '6000k', '-maxrate:v:0', '6000k', '-bufsize:v:0', '12000k',
-        '-r:v:0', '30', '-g:v:0', '60', '-keyint_min:v:0', '60', '-sc_threshold:v:0', '0',
-        '-x264-params:v:0', 'keyint=60:min-keyint=60:scenecut=0:bframes=0:rc-lookahead=0:ref=2',
-        '-c:a:0', 'aac', '-b:a:0', '128k', '-ar:a:0', '48000', '-ac:a:0', '2',
+    ];
 
-        // 480p H.264 fallback for slower viewers at 2 Mbps
+    if (!usePassthrough) {
+        args.push(
+            // 720p H.264: high-quality 6 Mbps target (use ultrafast preset for realtime)
+            '-map', '[v720]', '-map', '[a720]',
+            '-c:v:0', 'libx264', '-preset', 'ultrafast', '-tune:v:0', 'zerolatency',
+            '-profile:v:0', 'main', '-pix_fmt:v:0', 'yuv420p',
+            '-b:v:0', '6000k', '-maxrate:v:0', '6000k', '-bufsize:v:0', '12000k',
+            '-r:v:0', '30', '-g:v:0', '60', '-keyint_min:v:0', '60', '-sc_threshold:v:0', '0',
+            '-x264-params:v:0', 'keyint=60:min-keyint=60:scenecut=0:bframes=0:rc-lookahead=0:ref=1',
+            '-c:a:0', 'aac', '-b:a:0', '128k', '-ar:a:0', '48000', '-ac:a:0', '2'
+        );
+    } else {
+        // passthrough for 720p: copy input video stream as-is and encode/mix audio
+        args.push(
+            '-map', '0:v', '-map', '[a720]',
+            '-c:v:0', 'copy',
+            '-c:a:0', 'aac', '-b:a:0', '128k', '-ar:a:0', '48000', '-ac:a:0', '2'
+        );
+    }
+
+    // 480p H.264 fallback for slower viewers at 2 Mbps (always re-encode from scaled stream)
+    args.push(
         '-map', '[v480]', '-map', '[a480]',
-        '-c:v:1', 'libx264', '-preset', 'fast', '-tune:v:1', 'zerolatency',
+        '-c:v:1', 'libx264', '-preset', 'ultrafast', '-tune:v:1', 'zerolatency',
         '-profile:v:1', 'main', '-pix_fmt:v:1', 'yuv420p',
         '-b:v:1', '2000k', '-maxrate:v:1', '2000k', '-bufsize:v:1', '4000k',
         '-r:v:1', '30', '-g:v:1', '60', '-keyint_min:v:1', '60', '-sc_threshold:v:1', '0',
-        '-x264-params:v:1', 'keyint=60:min-keyint=60:scenecut=0:bframes=0:rc-lookahead=0:ref=2',
-        '-c:a:1', 'aac', '-b:a:1', '96k', '-ar:a:1', '48000', '-ac:a:1', '2',
+        '-x264-params:v:1', 'keyint=60:min-keyint=60:scenecut=0:bframes=0:rc-lookahead=0:ref=1',
+        '-c:a:1', 'aac', '-b:a:1', '96k', '-ar:a:1', '48000', '-ac:a:1', '2'
+    );
 
+    args.push(
         '-f', 'hls',
         '-hls_time', '2',
         '-hls_list_size', '10',
@@ -444,7 +472,7 @@ async function startFfmpegLive(session) {
         '-master_pl_name', 'master.m3u8',
         '-var_stream_map', 'v:0,a:0,name:720p v:1,a:1,name:480p',
         `${hlsDir}/stream_%v.m3u8`
-    ];
+    );
 
     console.log(`⚡ Spawning Live Stream Generator for [${session.streamKey}]...`);
     session.ffmpegProcess = spawn('ffmpeg', args, { stdio: ['pipe', 'pipe', 'pipe'] });
