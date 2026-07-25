@@ -273,15 +273,18 @@ server.on('upgrade', (request, socket, head) => {
         const urlObj = new URL(request.url, `http://${request.headers.host || 'localhost'}`);
         const pathname = urlObj.pathname;
         const streamKey = urlObj.searchParams.get('key') || 'default';
+        const role = urlObj.searchParams.get('role') || 'viewer';
 
         if (pathname === '/status-ws') {
             wss.handleUpgrade(request, socket, head, (ws) => {
                 ws.streamKey = streamKey;
+                ws.role = role;
                 wss.emit('connection', ws, request);
             });
         } else if (pathname === '/stream-ws') {
             streamWss.handleUpgrade(request, socket, head, (ws) => {
                 ws.streamKey = streamKey;
+                ws.role = 'host';
                 streamWss.emit('connection', ws, request);
             });
         } else {
@@ -292,11 +295,18 @@ server.on('upgrade', (request, socket, head) => {
 
 wss.on('connection', (ws) => {
     const key = ws.streamKey || 'default';
-    const session = activeStreams.get(key);
-    broadcastStatus(session || getOrCreateStreamSession(key), !!(session && session.isLive));
+    if (key !== 'admin') {
+        const session = activeStreams.get(key);
+        if (session) broadcastStatus(session, session.isLive);
+    }
+    broadcastAdminTelemetry();
 
     ws.on('close', () => {
-        if (session) broadcastStatus(session, session.isLive);
+        if (key !== 'admin') {
+            const session = activeStreams.get(key);
+            if (session) broadcastStatus(session, session.isLive);
+        }
+        broadcastAdminTelemetry();
     });
     ws.on('error', (err) => console.warn(`[Status WS Error ${key}]:`, err.message));
 });
@@ -304,7 +314,7 @@ wss.on('connection', (ws) => {
 function broadcastStatus(session, liveState) {
     if (!session) return;
     session.isLive = liveState;
-    const viewerCount = Array.from(wss.clients).filter(c => c.streamKey === session.streamKey && c.readyState === 1).length;
+    const viewerCount = Array.from(wss.clients).filter(c => c.streamKey === session.streamKey && c.readyState === 1 && c.role === 'viewer').length;
     const telemetry = getSessionS3Telemetry(session);
 
     const msg = JSON.stringify({
@@ -317,6 +327,27 @@ function broadcastStatus(session, liveState) {
 
     for (const client of wss.clients) {
         if (client.streamKey === session.streamKey && client.readyState === 1) {
+            client.send(msg);
+        }
+    }
+}
+
+function broadcastAdminTelemetry() {
+    const adminData = Array.from(activeStreams.values()).map(s => {
+        const statusClients = Array.from(wss.clients).filter(c => c.streamKey === s.streamKey && c.readyState === 1 && c.role === 'viewer');
+        return {
+            streamKey: s.streamKey,
+            title: s.title,
+            hostName: s.hostName || 'Host',
+            isLive: s.isLive || fs.existsSync(path.join(s.liveDir, 'master.m3u8')),
+            viewerCount: statusClients.length,
+            s3Telemetry: getSessionS3Telemetry(s)
+        };
+    });
+
+    const msg = JSON.stringify({ type: 'ADMIN_TELEMETRY', activeStreams: adminData });
+    for (const client of wss.clients) {
+        if (client.streamKey === 'admin' && client.readyState === 1) {
             client.send(msg);
         }
     }
@@ -339,15 +370,16 @@ streamWss.on('connection', (ws) => {
     ws.on('close', () => console.log(`⚡ Host Disconnected for [${key}]`));
 });
 
-// Periodic S3 Upload Telemetry Console Logger
+// Periodic S3 Upload Telemetry Console & Admin Broadcast Logger
 setInterval(() => {
+    broadcastAdminTelemetry();
     for (const session of activeStreams.values()) {
         if (session.isLive) {
             const telemetry = getSessionS3Telemetry(session);
             console.log(`[Telemetry ${session.streamKey}] Speed: ${telemetry.chunksPerSec} chunks/sec | 720p: ${telemetry.p720Count} | 480p: ${telemetry.p480Count}`);
         }
     }
-}, 3000);
+}, 1500);
 
 // ─── FFmpeg Live Process Manager ────────────────────────────────────────────────
 function stopFfmpegLive(session) {
@@ -392,7 +424,7 @@ async function startFfmpegLive(session) {
     const args = [
         '-y',
         '-threads', '0',
-        '-fflags', '+genpts+discardcorrupt',
+        '-fflags', '+genpts+discardcorrupt+nobuffer',
         '-probesize', '2M',
         '-analyzeduration', '1000000',
         '-i', 'pipe:0',
@@ -627,11 +659,44 @@ app.post('/api/streams/create', requireAuth, async (req, res) => {
     }
 
     const session = getOrCreateStreamSession(streamKey, title, req.user);
+    broadcastAdminTelemetry();
     res.json({
         success: true,
         streamKey: session.streamKey,
         title: session.title
     });
+});
+
+// Delete Stream & Purge S3 API
+app.post(['/api/streams/delete/:streamKey', '/api/streams/delete'], requireAuth, async (req, res) => {
+    try {
+        const streamKey = req.params.streamKey || req.body?.streamKey;
+        if (!streamKey) return res.status(400).json({ success: false, error: 'Stream key required' });
+
+        const session = activeStreams.get(streamKey);
+        if (session) {
+            stopFfmpegLive(session);
+            stopS3Watcher(session);
+            clearLiveFolder(session);
+            if (S3_ENABLED) await cleanS3Bucket(session);
+            activeStreams.delete(streamKey);
+        } else {
+            const dummySession = { streamKey, liveDir: path.join(liveDir, streamKey) };
+            clearLiveFolder(dummySession);
+            if (S3_ENABLED) await cleanS3Bucket(dummySession);
+        }
+
+        try {
+            await db.delete(streamSessions).where(eq(streamSessions.streamKey, streamKey));
+        } catch (e) {}
+
+        broadcastAdminTelemetry();
+        console.log(`🗑️ Stream [${streamKey}] deleted and S3 files purged.`);
+        res.json({ success: true, message: `Stream [${streamKey}] deleted and S3 storage purged.` });
+    } catch (err) {
+        console.error('Delete stream error:', err);
+        res.status(500).json({ success: false, error: err.message });
+    }
 });
 
 // Broadcaster Studio Route — Requires Auth

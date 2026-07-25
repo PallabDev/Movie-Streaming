@@ -543,6 +543,31 @@
             modal.style.display = 'none';
         }
 
+        // Tab background throttling prevention (Silent Web Audio Keep-Alive)
+        let keepAliveAudioCtx = null;
+        function enableBackgroundKeepAlive() {
+            try {
+                if (!keepAliveAudioCtx) {
+                    keepAliveAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                    const osc = keepAliveAudioCtx.createOscillator();
+                    const gain = keepAliveAudioCtx.createGain();
+                    gain.gain.value = 0.0001; // Virtually silent audio node
+                    osc.connect(gain);
+                    gain.connect(keepAliveAudioCtx.destination);
+                    osc.start();
+                }
+                if (keepAliveAudioCtx.state === 'suspended') {
+                    keepAliveAudioCtx.resume();
+                }
+            } catch(e) {}
+        }
+
+        document.addEventListener('visibilitychange', () => {
+            if (document.hidden && mediaRecorder && mediaRecorder.state === 'recording') {
+                try { mediaRecorder.requestData(); } catch(e) {}
+            }
+        });
+
         async function startSharing() {
             if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
                 alert("Screen Sharing requires HTTPS or localhost.\n\nBrowsers block media capture on unencrypted HTTP IP addresses (http://222.167.207.36:5992).\n\nTo enable Screen Share over HTTP for testing:\n1. Open chrome://flags/#unsafely-treat-insecure-origin-as-secure in Chrome.\n2. Add 'http://222.167.207.36:5992' and set to Enabled.\n3. Relaunch Chrome.");
@@ -550,6 +575,7 @@
             }
 
             try {
+                enableBackgroundKeepAlive();
                 const constraints = {
                     video: {
                         width: { ideal: 1920, max: 1920 },
