@@ -7,7 +7,6 @@ import os from 'os';
 import { fileURLToPath } from 'url';
 import { spawn } from 'child_process';
 import { WebSocketServer } from 'ws';
-import { S3Client, PutObjectCommand, DeleteObjectCommand, DeleteObjectsCommand, ListObjectsV2Command } from '@aws-sdk/client-s3';
 import { EventEmitter } from 'events';
 import cookieParser from 'cookie-parser';
 import jwt from 'jsonwebtoken';
@@ -30,15 +29,6 @@ const NODE_ENV = process.env.NODE_ENV || 'development';
 const APP_URL = process.env.APP_URL || `http://localhost:${PORT}`;
 const IS_PROD = NODE_ENV === 'production';
 const JWT_SECRET = process.env.JWT_SECRET || 'cowatch_super_secret_jwt_key_2026';
-
-// ExCloud S3 Object Storage CDN Configuration
-const S3_ENDPOINT = process.env.S3_ENDPOINT || 'https://buckets.excloud.dev';
-const S3_REGION = process.env.S3_REGION || 'default';
-const S3_BUCKET = process.env.S3_BUCKET || 'live';
-const S3_ACCESS_KEY = process.env.S3_ACCESS_KEY || 'EXCNLC2REYVL5FSFT57AQRKPP24TE';
-const S3_SECRET_KEY = process.env.S3_SECRET_KEY || 'DiVv1AV3CJI/Y58jkiDzqCyUI9osj3NXS1xXxCA3';
-const S3_PUBLIC_BASE_URL = process.env.S3_PUBLIC_BASE_URL || 'https://1834.objects.excloud.dev/public/live';
-const S3_ENABLED = !!(S3_ACCESS_KEY && S3_SECRET_KEY);
 
 // Directories setup
 const liveDir = path.join(__dirname, 'public', 'live');
@@ -104,223 +94,39 @@ async function requireAdmin(req, res, next) {
 // ─── Multi-Stream Session Manager ──────────────────────────────────────────────
 const activeStreams = new Map();
 
-function getOrCreateStreamSession(streamKey, title = 'Live Stream', hostUser = null) {
+function getOrCreateStreamSession(streamKey, title = 'Live Movie Stream', user = null) {
     if (!streamKey || streamKey === 'undefined') streamKey = 'default';
     if (activeStreams.has(streamKey)) {
-        const session = activeStreams.get(streamKey);
-        if (title && title !== 'Live Stream') session.title = title;
-        if (hostUser) { session.hostId = hostUser.id; session.hostName = hostUser.name; }
-        return session;
-    }
-
-    const streamLiveDir = path.join(liveDir, streamKey);
-    if (!fs.existsSync(streamLiveDir)) {
-        fs.mkdirSync(streamLiveDir, { recursive: true });
+        const s = activeStreams.get(streamKey);
+        if (title && title !== 'Live Movie Stream') s.title = title;
+        if (user) { s.hostId = user.id; s.hostName = user.name; }
+        return s;
     }
 
     const session = {
         streamKey,
         title,
-        hostId: hostUser ? hostUser.id : null,
-        hostName: hostUser ? hostUser.name : 'Host',
-        createdAt: new Date(),
+        hostId: user ? user.id : null,
+        hostName: user ? user.name : 'Host',
         isLive: false,
-        liveDir: streamLiveDir,
         ffmpegProcess: null,
-        s3Watcher: null,
-        s3SegmentQueue: new Set(),
-        uploadedS3Segments: new Set(),
-        s3UploadLog: [], // Telemetry items: { timestamp, filename, is720p, is480p }
-        isS3Uploading: false,
-        cleanupTimer: null,
+        disconnectTimer: null,
         oneHourTimer: null,
-        countedAgainstLimit: false
+        liveDir: path.join(liveDir, streamKey),
+        createdAt: new Date(),
+        chunks1080pCount: 0,
+        chunks720pCount: 0,
+        chunks480pCount: 0,
+        totalChunksCount: 0,
+        failureCount: 0
     };
+
+    if (!fs.existsSync(session.liveDir)) {
+        fs.mkdirSync(session.liveDir, { recursive: true });
+    }
 
     activeStreams.set(streamKey, session);
     return session;
-}
-
-// ─── ExCloud S3 Bucket Sync & Telemetry Manager ──────────────────────────────────
-let s3Client = null;
-if (S3_ENABLED) {
-    s3Client = new S3Client({
-        endpoint: S3_ENDPOINT,
-        region: S3_REGION,
-        credentials: { accessKeyId: S3_ACCESS_KEY, secretAccessKey: S3_SECRET_KEY },
-        forcePathStyle: true
-    });
-    console.log(`📦 ExCloud S3 Storage Enabled (${S3_ENDPOINT} / ${S3_BUCKET})`);
-}
-
-function getSessionS3Telemetry(session) {
-    if (!session || !session.s3UploadLog) return { chunksPerSec: '0.0', p1080Count: 0, p720Count: 0, p480Count: 0 };
-    const now = Date.now();
-    const recentLogs = session.s3UploadLog.filter(item => now - item.timestamp < 5000);
-    const count1080p = recentLogs.filter(item => item.is1080p).length;
-    const count720p = recentLogs.filter(item => item.is720p).length;
-    const count480p = recentLogs.filter(item => item.is480p).length;
-    const totalCount = recentLogs.length;
-    return {
-        chunksPerSec: (totalCount / 5).toFixed(1),
-        p1080Count: count1080p,
-        p720Count: count720p,
-        p480Count: count480p,
-        total: totalCount
-    };
-}
-
-async function uploadSingleSegment(session, filename, attempt = 1) {
-    const filePath = path.join(session.liveDir, filename);
-    if (!fs.existsSync(filePath)) return false;
-
-    try {
-        const stat = fs.statSync(filePath);
-        if (stat.size === 0) {
-            if (attempt <= 3) {
-                await new Promise(r => setTimeout(r, 100 * attempt));
-                return uploadSingleSegment(session, filename, attempt + 1);
-            }
-            return false;
-        }
-
-        const fileBuffer = fs.readFileSync(filePath);
-        const s3Key = `${session.streamKey}/${filename}`;
-        await s3Client.send(new PutObjectCommand({
-            Bucket: S3_BUCKET,
-            Key: s3Key,
-            Body: fileBuffer,
-            ContentType: 'video/mp2t',
-            CacheControl: 'public, max-age=3600'
-        }));
-        session.uploadedS3Segments.add(filename);
-
-        const now = Date.now();
-        const is1080p = filename.includes('1080p');
-        const is720p = filename.includes('720p');
-        const is480p = filename.includes('480p');
-
-        if (is1080p) session.chunks1080pCount = (session.chunks1080pCount || 0) + 1;
-        else if (is720p) session.chunks720pCount = (session.chunks720pCount || 0) + 1;
-        else if (is480p) session.chunks480pCount = (session.chunks480pCount || 0) + 1;
-        session.totalChunksCount = (session.totalChunksCount || 0) + 1;
-
-        session.s3UploadLog.push({ timestamp: now, filename, is1080p, is720p, is480p });
-        session.s3UploadLog = session.s3UploadLog.filter(item => now - item.timestamp < 10000);
-
-        return true;
-    } catch (err) {
-        if (attempt <= 3) {
-            await new Promise(r => setTimeout(r, 150 * attempt));
-            return uploadSingleSegment(session, filename, attempt + 1);
-        }
-        console.warn(`[S3 Upload Error ${session.streamKey}] ${filename}:`, err.message);
-        session.failureCount = (session.failureCount || 0) + 1;
-        return false;
-    }
-}
-
-async function processS3Queue(session) {
-    if (session.isS3Uploading || !s3Client) return;
-    if (session.s3SegmentQueue.size === 0) return;
-    session.isS3Uploading = true;
-
-    const segmentsToUpload = Array.from(session.s3SegmentQueue);
-    session.s3SegmentQueue.clear();
-
-    // Prioritize 1080p segments first so high-res stream is uploaded immediately
-    segmentsToUpload.sort((a, b) => {
-        if (a.includes('1080p') && !b.includes('1080p')) return -1;
-        if (!a.includes('1080p') && b.includes('1080p')) return 1;
-        return 0;
-    });
-
-    await Promise.all(segmentsToUpload.map(filename => uploadSingleSegment(session, filename)));
-    session.isS3Uploading = false;
-
-    if (session.s3SegmentQueue.size > 0) {
-        processS3Queue(session);
-    }
-}
-
-function startS3Watcher(session) {
-    if (!S3_ENABLED) return;
-    if (session.s3Watcher) { session.s3Watcher.close(); session.s3Watcher = null; }
-    console.log(`📡 Starting ExCloud S3 Telemetry Watcher for [${session.streamKey}]...`);
-
-    try {
-        const files = fs.readdirSync(session.liveDir);
-        for (const file of files) {
-            if (file.endsWith('.ts')) session.s3SegmentQueue.add(file);
-        }
-        processS3Queue(session);
-    } catch (e) { }
-
-    session.s3Watcher = fs.watch(session.liveDir, (eventType, filename) => {
-        if (!filename) return;
-        if (filename.endsWith('.ts')) {
-            session.s3SegmentQueue.add(filename);
-            processS3Queue(session);
-        }
-    });
-}
-
-function stopS3Watcher(session) {
-    if (session.s3Watcher) { session.s3Watcher.close(); session.s3Watcher = null; }
-    session.s3SegmentQueue.clear();
-    session.uploadedS3Segments.clear();
-}
-
-const cleaningS3Streams = new Set();
-
-async function cleanS3Bucket(session) {
-    if (!S3_ENABLED || !s3Client || !session?.streamKey) return;
-    const streamKey = session.streamKey;
-    if (cleaningS3Streams.has(streamKey)) return;
-    cleaningS3Streams.add(streamKey);
-
-    try {
-        const prefix = `${streamKey}/`;
-        let continuationToken = undefined;
-        let totalDeleted = 0;
-
-        do {
-            const listRes = await s3Client.send(new ListObjectsV2Command({
-                Bucket: S3_BUCKET,
-                Prefix: prefix,
-                ContinuationToken: continuationToken
-            }));
-
-            if (listRes.Contents && listRes.Contents.length > 0) {
-                const objectsToDelete = listRes.Contents.map(item => ({ Key: item.Key }));
-                try {
-                    await s3Client.send(new DeleteObjectsCommand({
-                        Bucket: S3_BUCKET,
-                        Delete: {
-                            Objects: objectsToDelete,
-                            Quiet: true
-                        }
-                    }));
-                } catch (batchErr) {
-                    console.warn(`[S3 Batch Delete Warning ${streamKey}], falling back to parallel deletes:`, batchErr.message);
-                    await Promise.all(objectsToDelete.map(obj =>
-                        s3Client.send(new DeleteObjectCommand({ Bucket: S3_BUCKET, Key: obj.Key })).catch(() => {})
-                    ));
-                }
-                totalDeleted += listRes.Contents.length;
-            }
-
-            continuationToken = listRes.IsTruncated ? listRes.NextContinuationToken : undefined;
-        } while (continuationToken);
-
-        if (totalDeleted > 0) {
-            console.log(`🧹 S3 Bucket folder cleaned for [${streamKey}]: ${totalDeleted} objects purged.`);
-        }
-    } catch (err) {
-        console.warn(`[S3 Clean Error ${session.streamKey}]:`, err.message);
-    } finally {
-        cleaningS3Streams.delete(streamKey);
-    }
 }
 
 function clearLiveFolder(session) {
@@ -383,14 +189,12 @@ function broadcastStatus(session, liveState) {
     if (!session) return;
     session.isLive = liveState;
     const viewerCount = Array.from(wss.clients).filter(c => c.streamKey === session.streamKey && c.readyState === 1 && c.role === 'viewer').length;
-    const telemetry = getSessionS3Telemetry(session);
 
     const msg = JSON.stringify({
         type: 'STATUS',
         live: session.isLive,
         streamKey: session.streamKey,
-        viewers: viewerCount,
-        s3Telemetry: telemetry
+        viewers: viewerCount
     });
 
     for (const client of wss.clients) {
@@ -408,8 +212,7 @@ function broadcastAdminTelemetry() {
             title: s.title,
             hostName: s.hostName || 'Host',
             isLive: s.isLive || fs.existsSync(path.join(s.liveDir, 'master.m3u8')),
-            viewerCount: statusClients.length,
-            s3Telemetry: getSessionS3Telemetry(s)
+            viewerCount: statusClients.length
         };
     });
 
@@ -464,7 +267,6 @@ streamWss.on('connection', (ws) => {
             session.disconnectTimer = setTimeout(() => {
                 console.log(`🛑 90-second reconnection window expired for [${key}]. Stopping FFmpeg process...`);
                 stopFfmpegLive(session);
-                stopS3Watcher(session);
                 broadcastStatus(session, false);
                 broadcastAdminTelemetry();
                 session.disconnectTimer = null;
@@ -473,16 +275,9 @@ streamWss.on('connection', (ws) => {
     });
 });
 
-// Periodic S3 Upload Telemetry Console & Admin Broadcast Logger
 setInterval(() => {
     broadcastAdminTelemetry();
-    for (const session of activeStreams.values()) {
-        if (session.isLive) {
-            const telemetry = getSessionS3Telemetry(session);
-            console.log(`[Telemetry ${session.streamKey}] Speed: ${telemetry.chunksPerSec} chunks/sec | 1080p: ${telemetry.p1080Count} | 720p: ${telemetry.p720Count} | 480p: ${telemetry.p480Count}`);
-        }
-    }
-}, 1500);
+}, 2000);
 
 // ─── FFmpeg Live Process Manager ────────────────────────────────────────────────
 function stopFfmpegLive(session) {
@@ -510,11 +305,6 @@ async function startFfmpegLive(session) {
 
     stopFfmpegLive(session);
     clearLiveFolder(session);
-    session.uploadedS3Segments.clear();
-
-    if (S3_ENABLED) {
-        await cleanS3Bucket(session);
-    }
 
     // 1-Hour Stream Limit Timer: If stream runs > 1 hour (3600s), increment user stream count in DB!
     session.countedAgainstLimit = false;
@@ -637,7 +427,6 @@ async function startFfmpegLive(session) {
     session.ffmpegProcess.on('exit', (code, signal) => {
         session.ffmpegProcess = null;
         session.isLive = false;
-        stopS3Watcher(session);
     });
 }
 
@@ -721,8 +510,7 @@ app.get('/admin', requireAdmin, async (req, res) => {
                 title: s.title,
                 hostName: s.hostName || 'Host',
                 isLive: s.isLive,
-                viewerCount: statusClients.length,
-                s3Telemetry: getSessionS3Telemetry(s)
+                viewerCount: statusClients.length
             };
         });
         res.render('admin', { users: allUsers, activeStreams: activeList, currentUser: req.user });
@@ -788,7 +576,7 @@ app.get(['/user', '/users'], requireAdmin, async (req, res) => {
                         durationSeconds: Math.floor((Date.now() - (activeS.createdAt || Date.now())) / 1000),
                         viewerCount: statusClients.length,
                         peakViewers: Math.max(statusClients.length, activeS.peakViewersCount || 0),
-                        totalChunks: activeS.uploadedS3Segments ? activeS.uploadedS3Segments.size : 0,
+                        totalChunks: activeS.totalChunksCount || 0,
                         chunks1080p: activeS.chunks1080pCount || 0,
                         chunks720p: activeS.chunks720pCount || 0,
                         chunks480p: activeS.chunks480pCount || 0,
@@ -902,14 +690,11 @@ app.post(['/api/streams/delete/:streamKey', '/api/streams/delete'], requireAuth,
         const session = activeStreams.get(streamKey);
         if (session) {
             stopFfmpegLive(session);
-            stopS3Watcher(session);
             clearLiveFolder(session);
-            if (S3_ENABLED) await cleanS3Bucket(session);
             activeStreams.delete(streamKey);
         } else {
             const dummySession = { streamKey, liveDir: path.join(liveDir, streamKey) };
             clearLiveFolder(dummySession);
-            if (S3_ENABLED) await cleanS3Bucket(dummySession);
         }
 
         try {
@@ -917,8 +702,8 @@ app.post(['/api/streams/delete/:streamKey', '/api/streams/delete'], requireAuth,
         } catch (e) {}
 
         broadcastAdminTelemetry();
-        console.log(`🗑️ Stream [${streamKey}] deleted and S3 files purged.`);
-        res.json({ success: true, message: `Stream [${streamKey}] deleted and S3 storage purged.` });
+        console.log(`🗑️ Stream [${streamKey}] deleted.`);
+        res.json({ success: true, message: `Stream [${streamKey}] deleted.` });
     } catch (err) {
         console.error('Delete stream error:', err);
         res.status(500).json({ success: false, error: err.message });
@@ -951,10 +736,12 @@ app.get('/live-file/:streamKey/:filename', (req, res) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Content-Type', 'video/mp2t');
     res.setHeader('Cache-Control', 'public, max-age=3600');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('Keep-Alive', 'timeout=30, max=100');
     res.sendFile(filePath);
 });
 
-// Dynamic Express HLS Playlist Server — Serves .m3u8 instantly with zero CDN delay
+// Dynamic Express HLS Playlist Server — Serves .m3u8 instantly
 app.get(['/live-playlist/:streamKey/:playlist', '/live-playlist/:playlist'], (req, res) => {
     const streamKey = req.params.streamKey || 'default';
     const playlistName = req.params.playlist || 'master.m3u8';
@@ -971,30 +758,10 @@ app.get(['/live-playlist/:streamKey/:playlist', '/live-playlist/:playlist'], (re
         res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate, max-age=0');
         res.setHeader('Pragma', 'no-cache');
         res.setHeader('Expires', '0');
+        res.setHeader('Connection', 'keep-alive');
+        res.setHeader('Keep-Alive', 'timeout=30, max=100');
 
-        if (playlistName === 'master.m3u8') return res.send(rawContent);
-
-        const s3CdnBase = `${S3_PUBLIC_BASE_URL}/${streamKey}`;
-        const lines = rawContent.split(/\r?\n/);
-        const rewrittenLines = [];
-
-        for (let i = 0; i < lines.length; i++) {
-            const line = lines[i].trim();
-            if (line.endsWith('.ts')) {
-                let segmentUrl;
-                if (S3_ENABLED && session.uploadedS3Segments.has(line)) {
-                    segmentUrl = `${s3CdnBase}/${line}`;
-                } else {
-                    // Fallback to Express local file serving while S3 upload completes in background
-                    segmentUrl = `/live-file/${streamKey}/${line}`;
-                }
-                rewrittenLines.push(segmentUrl);
-            } else {
-                rewrittenLines.push(line);
-            }
-        }
-
-        return res.send(rewrittenLines.join('\n'));
+        return res.send(rawContent);
     } catch (err) { return res.status(500).send('#EXTM3U\n#EXT-X-ERROR: Error reading playlist'); }
 });
 
@@ -1042,7 +809,6 @@ app.post(['/stop-stream', '/stop-stream/:streamKey'], async (req, res) => {
 
     try {
         stopFfmpegLive(session);
-        stopS3Watcher(session);
         broadcastStatus(session, false);
         broadcastAdminTelemetry();
         console.log(`🔴 Stream [${key}] stopped and FFmpeg process killed immediately.`);
@@ -1051,7 +817,6 @@ app.post(['/stop-stream', '/stop-stream/:streamKey'], async (req, res) => {
         session.cleanupTimer = setTimeout(async () => {
             console.log(`🧹 Purging local HLS files for [${key}]...`);
             clearLiveFolder(session);
-            if (S3_ENABLED) await cleanS3Bucket(session);
         }, 10 * 60 * 1000);
 
         res.json({ success: true, message: `Stream [${key}] stopped.` });
@@ -1073,7 +838,6 @@ app.post(['/stream', '/stream/:streamKey'], (req, res) => {
             session.disconnectTimer = setTimeout(() => {
                 console.log(`🛑 90-second reconnection window expired for [${key}]. Stopping FFmpeg process...`);
                 stopFfmpegLive(session);
-                stopS3Watcher(session);
                 broadcastStatus(session, false);
                 broadcastAdminTelemetry();
                 session.disconnectTimer = null;
@@ -1097,5 +861,4 @@ app.use((err, req, res, next) => {
 
 server.listen(PORT, () => {
     console.log(`🚀 CoWatch Multi-Stream Platform running at ${APP_URL} (Port ${PORT})`);
-    if (S3_ENABLED) console.log(`📦 ExCloud S3 Multi-Stream CDN Base: ${S3_PUBLIC_BASE_URL}`);
 });

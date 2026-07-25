@@ -106,13 +106,13 @@
         <div class="text-center max-w-3xl mx-auto mb-16">
             <div class="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 text-xs font-semibold uppercase tracking-wider mb-4">
                 <span class="w-2 h-2 rounded-full bg-indigo-400 animate-ping"></span>
-                ExCloud S3 Direct Multi-Stream Ingest
+                Direct Multi-Stream Ingest
             </div>
             <h1 class="text-4xl sm:text-5xl font-extrabold text-white tracking-tight mb-4 leading-tight">
-                Stream Movies & Games in <span class="gradient-text">Real-Time Cloud HLS</span>
+                Stream Movies & Games in <span class="gradient-text">Real-Time HLS</span>
             </h1>
             <p class="text-slate-400 text-base sm:text-lg leading-relaxed">
-                Launch unique stream channels instantly. Video chunks stream directly to ExCloud S3 bucket CDN with triple 1080p/720p/480p adaptive bitrates.
+                Launch unique stream channels instantly with triple 1080p/720p/480p adaptive bitrates and persistent connection streaming.
             </p>
         </div>
 
@@ -228,9 +228,8 @@
         </div>
     </div>
 
-    <!-- Footer -->
     <footer class="w-full border-t border-white/10 py-6 text-center text-xs text-slate-500">
-        CoWatch Multi-Stream Platform &copy; 2026. ExCloud S3 HLS CDN Architecture.
+        CoWatch Multi-Stream Platform &copy; 2026. High-Performance HLS Architecture.
     </footer>
 
     <script>
@@ -274,7 +273,7 @@
         }
 
         async function deleteStream(streamKey) {
-            if (!confirm(`Are you sure you want to delete stream [${streamKey}]?\n\nThis will stop active encoding and permanently purge all video segments from ExCloud S3 Cloud Storage.`)) {
+            if (!confirm(`Are you sure you want to delete stream [${streamKey}]?`)) {
                 return;
             }
 
