@@ -8,6 +8,7 @@ import { fileURLToPath } from 'url';
 import { spawn } from 'child_process';
 import { WebSocketServer } from 'ws';
 import SftpClient from 'ssh2-sftp-client';
+import { S3Client, PutObjectCommand, DeleteObjectCommand, ListObjectsV2Command } from '@aws-sdk/client-s3';
 import { EventEmitter } from 'events';
 
 // Increase default max listeners to prevent SFTP event listener warnings
@@ -30,8 +31,17 @@ const SFTP_PORT = parseInt(process.env.SFTP_PORT || '22');
 const SFTP_USER = process.env.SFTP_USER;
 const SFTP_PASSWORD = process.env.SFTP_PASSWORD;
 const SFTP_BASE_PATH = process.env.SFTP_BASE_PATH;
-const HLS_CDN_URL = process.env.HLS_CDN_URL || '';
 const SFTP_ENABLED = !!(SFTP_HOST && SFTP_USER && SFTP_PASSWORD && SFTP_BASE_PATH);
+
+// ExCloud S3 Object Storage CDN Configuration
+const S3_ENDPOINT = process.env.S3_ENDPOINT || 'https://buckets.excloud.dev';
+const S3_REGION = process.env.S3_REGION || 'default';
+const S3_BUCKET = process.env.S3_BUCKET || 'live';
+const S3_ACCESS_KEY = process.env.S3_ACCESS_KEY || 'EXCNLC2REYVL5FSFT57AQRKPP24TE';
+const S3_SECRET_KEY = process.env.S3_SECRET_KEY || 'DiVv1AV3CJI/Y58jkiDzqCyUI9osj3NXS1xXxCA3';
+const S3_PUBLIC_BASE_URL = process.env.S3_PUBLIC_BASE_URL || 'https://1834.objects.excloud.dev/public/live';
+const HLS_CDN_URL = process.env.HLS_CDN_URL || S3_PUBLIC_BASE_URL;
+const S3_ENABLED = !!(S3_ACCESS_KEY && S3_SECRET_KEY);
 
 // Directories setup
 const liveDir = path.join(__dirname, 'public', 'live');
@@ -223,6 +233,166 @@ function stopSftpWatcher() {
     uploadQueue.clear();
 }
 
+// ─── ExCloud S3 Bucket Sync Manager ─────────────────────────────────────────────
+let s3Client = null;
+if (S3_ENABLED) {
+    s3Client = new S3Client({
+        endpoint: S3_ENDPOINT,
+        region: S3_REGION,
+        credentials: {
+            accessKeyId: S3_ACCESS_KEY,
+            secretAccessKey: S3_SECRET_KEY
+        },
+        forcePathStyle: true
+    });
+    console.log(`📦 ExCloud S3 Bucket Storage Enabled (Endpoint: ${S3_ENDPOINT}, Bucket: ${S3_BUCKET})`);
+}
+
+let s3Watcher = null;
+const s3SegmentQueue = new Set();
+const s3PlaylistQueue = new Set();
+const uploadedS3Segments = new Set();
+let isS3Uploading = false;
+
+async function uploadSingleSegment(filename) {
+    const filePath = path.join(liveDir, filename);
+    if (!fs.existsSync(filePath)) return false;
+
+    try {
+        const fileBuffer = fs.readFileSync(filePath);
+        await s3Client.send(new PutObjectCommand({
+            Bucket: S3_BUCKET,
+            Key: filename,
+            Body: fileBuffer,
+            ContentType: 'video/mp2t',
+            CacheControl: 'public, max-age=3600'
+        }));
+        uploadedS3Segments.add(filename);
+        console.log(`⚡ S3 Segment Synced: ${filename}`);
+        return true;
+    } catch (err) {
+        console.warn(`[S3 Segment Error] ${filename}:`, err.message);
+        return false;
+    }
+}
+
+async function processS3Queue() {
+    if (isS3Uploading || !s3Client) return;
+    if (s3SegmentQueue.size === 0 && s3PlaylistQueue.size === 0) return;
+    isS3Uploading = true;
+
+    // STEP 1: Upload all queued .ts video segments
+    if (s3SegmentQueue.size > 0) {
+        const segmentsToUpload = Array.from(s3SegmentQueue);
+        s3SegmentQueue.clear();
+
+        await Promise.all(segmentsToUpload.map(filename => uploadSingleSegment(filename)));
+    }
+
+    // STEP 2: Process playlists & ensure ALL referenced .ts segments exist on S3 first!
+    if (s3PlaylistQueue.size > 0) {
+        const playlistsToUpload = Array.from(s3PlaylistQueue);
+        s3PlaylistQueue.clear();
+
+        for (const filename of playlistsToUpload) {
+            const filePath = path.join(liveDir, filename);
+            if (!fs.existsSync(filePath)) continue;
+
+            try {
+                const playlistContent = fs.readFileSync(filePath, 'utf-8');
+                
+                // Extract all .ts segment files referenced in this playlist
+                const lines = playlistContent.split(/\r?\n/);
+                const referencedSegments = lines
+                    .map(l => l.trim())
+                    .filter(l => l && l.endsWith('.ts'));
+
+                // Verify every referenced segment is uploaded before pushing the playlist
+                for (const segFile of referencedSegments) {
+                    if (!uploadedS3Segments.has(segFile)) {
+                        console.log(`⏳ Segment ${segFile} needed by ${filename} not on S3 yet. Uploading now...`);
+                        await uploadSingleSegment(segFile);
+                    }
+                }
+
+                // Now safe to push playlist to S3!
+                await s3Client.send(new PutObjectCommand({
+                    Bucket: S3_BUCKET,
+                    Key: filename,
+                    Body: Buffer.from(playlistContent),
+                    ContentType: 'application/vnd.apple.mpegurl',
+                    CacheControl: 'no-cache, no-store, must-revalidate, max-age=0'
+                }));
+                console.log(`⚡ S3 Playlist Synced: ${filename}`);
+            } catch (err) {
+                console.warn(`[S3 Playlist Error] ${filename}:`, err.message);
+            }
+        }
+    }
+
+    isS3Uploading = false;
+
+    if (s3SegmentQueue.size > 0 || s3PlaylistQueue.size > 0) {
+        processS3Queue();
+    }
+}
+
+function startS3Watcher() {
+    if (!S3_ENABLED) return;
+    if (s3Watcher) { s3Watcher.close(); s3Watcher = null; }
+    console.log('📡 Starting ExCloud S3 Bucket File Sync Watcher (TS Pre-Verification Mode)...');
+
+    // Initial scan of liveDir so master.m3u8 and early segments sync immediately
+    try {
+        const files = fs.readdirSync(liveDir);
+        for (const file of files) {
+            if (file.endsWith('.ts')) s3SegmentQueue.add(file);
+            else if (file.endsWith('.m3u8')) s3PlaylistQueue.add(file);
+        }
+        processS3Queue();
+    } catch (e) { }
+
+    s3Watcher = fs.watch(liveDir, (eventType, filename) => {
+        if (!filename) return;
+        if (filename.endsWith('.ts')) {
+            s3SegmentQueue.add(filename);
+            processS3Queue();
+        } else if (filename.endsWith('.m3u8')) {
+            s3PlaylistQueue.add(filename);
+            setTimeout(() => {
+                processS3Queue();
+            }, 100);
+        }
+    });
+}
+
+function stopS3Watcher() {
+    if (s3Watcher) {
+        s3Watcher.close();
+        s3Watcher = null;
+    }
+    s3SegmentQueue.clear();
+    s3PlaylistQueue.clear();
+    uploadedS3Segments.clear();
+}
+
+async function cleanS3Bucket() {
+    if (!S3_ENABLED || !s3Client) return;
+    try {
+        const listRes = await s3Client.send(new ListObjectsV2Command({ Bucket: S3_BUCKET }));
+        if (listRes.Contents && listRes.Contents.length > 0) {
+            for (const item of listRes.Contents) {
+                if (item.Key.endsWith('.ts') || item.Key.endsWith('.m3u8')) {
+                    await s3Client.send(new DeleteObjectCommand({ Bucket: S3_BUCKET, Key: item.Key }));
+                }
+            }
+            console.log('🧹 ExCloud S3 Bucket live folder cleaned');
+        }
+    } catch (err) {
+        console.warn('[S3 Clean Error]:', err.message);
+    }
+}
+
 // ─── CPU Usage Monitor (Production Only) ────────────────────────────────────────
 let prevCpuTimes = null;
 
@@ -346,9 +516,13 @@ async function startFfmpegLive() {
 
     stopFfmpegLive();
     clearLiveFolder();
+    uploadedS3Segments.clear();
 
     if (SFTP_ENABLED) {
         await cleanSftpFolder();
+    }
+    if (S3_ENABLED) {
+        await cleanS3Bucket();
     }
 
     const args = [
@@ -416,6 +590,9 @@ async function startFfmpegLive() {
     if (SFTP_ENABLED) {
         startSftpWatcher();
     }
+    if (S3_ENABLED) {
+        startS3Watcher();
+    }
 
     startCpuMonitor();
 
@@ -459,6 +636,7 @@ async function startFfmpegLive() {
         ffmpegLiveProcess = null;
         stopCpuMonitor();
         stopSftpWatcher();
+        stopS3Watcher();
     });
 }
 
@@ -496,16 +674,20 @@ app.post('/stop-stream', async (req, res) => {
         broadcastStatus(false);
         stopCpuMonitor();
         stopSftpWatcher();
+        stopS3Watcher();
         console.log('🔴 Stream stopped. Segment cleanup scheduled in 10 minutes.');
 
         if (cleanupTimer) clearTimeout(cleanupTimer);
         cleanupTimer = setTimeout(async () => {
-            console.log('🧹 Purging HLS segment files (local + SFTP CDN)...');
+            console.log('🧹 Purging HLS segment files (local + SFTP + ExCloud S3 Bucket)...');
             stopFfmpegLive();
             clearLiveFolder();
             if (SFTP_ENABLED) {
                 await cleanSftpFolder();
                 await disconnectSftp();
+            }
+            if (S3_ENABLED) {
+                await cleanS3Bucket();
             }
         }, CLEANUP_DELAY_MS);
 

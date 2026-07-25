@@ -326,6 +326,13 @@
 <body>
     <div class="ambient-glow"></div>
 
+    <!-- Stream Initialization Loader Modal -->
+    <div id="streamLoaderModal" style="display: none; position: fixed; inset: 0; background: rgba(0, 0, 0, 0.85); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); z-index: 9999; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 20px;">
+        <div style="width: 54px; height: 54px; border: 4px solid rgba(99, 102, 241, 0.2); border-top-color: #6366f1; border-radius: 50%; animation: spin 0.9s linear infinite; margin-bottom: 20px;"></div>
+        <h3 id="loaderTitle" style="font-size: 1.25rem; font-weight: 700; color: #ffffff; margin: 0 0 8px 0; font-family: system-ui, sans-serif;">Initializing Live Stream Engine...</h3>
+        <p id="loaderSubtitle" style="font-size: 0.875rem; color: #94a3b8; max-width: 420px; margin: 0; font-family: system-ui, sans-serif; line-height: 1.5;">Purging old video segments from cloud storage and initializing real-time encoder...</p>
+    </div>
+
     <div class="app-container">
         <!-- 16:9 Video Player -->
         <div class="player-wrapper" id="playerWrapper">
@@ -502,6 +509,18 @@
             }
         }
 
+        function showStreamLoader(title, subtitle) {
+            const modal = document.getElementById('streamLoaderModal');
+            if (title) document.getElementById('loaderTitle').textContent = title;
+            if (subtitle) document.getElementById('loaderSubtitle').textContent = subtitle;
+            modal.style.display = 'flex';
+        }
+
+        function hideStreamLoader() {
+            const modal = document.getElementById('streamLoaderModal');
+            modal.style.display = 'none';
+        }
+
         async function startSharing() {
             if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
                 alert("Screen Sharing requires HTTPS or localhost.\n\nBrowsers block media capture on unencrypted HTTP IP addresses (http://222.167.207.36:5992).\n\nTo enable Screen Share over HTTP for testing:\n1. Open chrome://flags/#unsafely-treat-insecure-origin-as-secure in Chrome.\n2. Add 'http://222.167.207.36:5992' and set to Enabled.\n3. Relaunch Chrome.");
@@ -509,12 +528,6 @@
             }
 
             try {
-                // Clear server media folder for new recording session
-                await fetch('/reset-stream', { method: 'POST' });
-                chunkIndex = 0;
-                chunksBadge.textContent = 'Chunks Sent: 0';
-                downloadBtn.style.display = 'none';
-
                 // Request screen share at 1080p 30fps
                 const constraints = {
                     video: {
@@ -533,7 +546,16 @@
 
                 mediaStream = await navigator.mediaDevices.getDisplayMedia(constraints);
 
-                // Connect WebSocket right after screen selection, before starting MediaRecorder
+                // Show loader modal while purging old S3/server segments and resetting FFmpeg
+                showStreamLoader("Preparing Live Stream Engine...", "Purging old video segments from Cloud Storage & server disk...");
+
+                // Reset stream on server & purge old S3 bucket segments
+                await fetch('/reset-stream', { method: 'POST' });
+                chunkIndex = 0;
+                chunksBadge.textContent = 'Chunks Sent: 0';
+                downloadBtn.style.display = 'none';
+
+                // Connect WebSocket right after reset, before starting MediaRecorder
                 await connectStreamWebSocket();
 
                 // Set stream to video element
@@ -585,8 +607,10 @@
                 btnText.textContent = 'Stop Sharing';
 
                 previewVideo.play();
+                hideStreamLoader();
             } catch (err) {
                 console.error("Error accessing screen share:", err);
+                hideStreamLoader();
             }
         }
 
