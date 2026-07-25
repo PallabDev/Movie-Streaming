@@ -9,7 +9,6 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <link rel="icon" type="image/png" href="/favicon.png">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
-    <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
         tailwind.config = {
@@ -306,21 +305,23 @@
                 const qualityBtn = document.getElementById('sh-quality-btn');
                 const qualityMenu = document.getElementById('sh-quality-menu');
 
-                let hls = null;
+                let ws = null;
+                let mediaSource = null;
+                let sourceBuffer = null;
                 let scrubbing = false;
                 let controlsTimeout = null;
                 let pollInterval = null;
-                let hlsRetryCount = 0;
-                let hlsRetryTimer = null;
-                const MAX_HLS_RETRIES = 15;
+                let currentQuality = 'auto';
+                let selectedQuality = '1080p';
+                let reconnectTimer = null;
+                let pendingData = [];
+
+                const currentStreamKey = '<%= typeof streamKey !== "undefined" ? streamKey : "default" %>';
 
                 function showOffline() {
                     offlineScreen.style.display = 'flex';
                     hideLoading();
-                    if (hls) {
-                        hls.destroy();
-                        hls = null;
-                    }
+                    disconnectWS();
                     video.pause();
                     updatePlayIcon();
                 }
@@ -336,7 +337,101 @@
                     loadingSpinner.style.display = 'none';
                 }
 
-                const currentStreamKey = '<%= typeof streamKey !== "undefined" ? streamKey : "default" %>';
+                function disconnectWS() {
+                    if (ws) {
+                        ws.onclose = null;
+                        ws.onerror = null;
+                        ws.close();
+                        ws = null;
+                    }
+                    if (mediaSource) {
+                        try { mediaSource.endOfStream(); } catch (e) {}
+                        if (sourceBuffer && sourceBuffer.updating) {
+                            try { sourceBuffer.abort(); } catch (e) {}
+                        }
+                        sourceBuffer = null;
+                        mediaSource = null;
+                    }
+                    pendingData = [];
+                }
+
+                function connectStream() {
+                    disconnectWS();
+                    showLoading();
+                    hideOffline();
+
+                    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+                    const url = `${protocol}//${window.location.host}/view-ws?key=${encodeURIComponent(currentStreamKey)}&quality=${selectedQuality}`;
+                    ws = new WebSocket(url);
+                    ws.binaryType = 'arraybuffer';
+
+                    ws.onopen = () => {
+                        console.log(`[WS] Connected to ${currentStreamKey} @ ${selectedQuality}`);
+                    };
+
+                    ws.onmessage = (event) => {
+                        const data = event.data;
+                        if (!mediaSource || !sourceBuffer) return;
+
+                        if (sourceBuffer.updating) {
+                            pendingData.push(data);
+                            if (pendingData.length > 100) pendingData.shift();
+                            return;
+                        }
+
+                        try {
+                            sourceBuffer.appendBuffer(data);
+                        } catch (e) {
+                            console.warn('[MSE] appendBuffer error:', e);
+                        }
+                    };
+
+                    ws.onclose = () => {
+                        console.log('[WS] Disconnected');
+                        hideLoading();
+                    };
+
+                    ws.onerror = (err) => {
+                        console.warn('[WS] Error:', err);
+                    };
+
+                    mediaSource = new MediaSource();
+                    video.src = URL.createObjectURL(mediaSource);
+
+                    mediaSource.addEventListener('sourceopen', () => {
+                        const codec = selectedQuality === '480p'
+                            ? 'video/mp4; codecs="avc1.42E01E, mp4a.40.2"'
+                            : 'video/mp4; codecs="avc1.640028, mp4a.40.2"';
+
+                        try {
+                            sourceBuffer = mediaSource.addSourceBuffer(codec);
+                        } catch (e) {
+                            try {
+                                sourceBuffer = mediaSource.addSourceBuffer('video/mp4; codecs="avc1.42E01E, mp4a.40.2"');
+                            } catch (e2) {
+                                console.error('[MSE] Cannot create SourceBuffer:', e2);
+                                return;
+                            }
+                        }
+
+                        sourceBuffer.addEventListener('updateend', () => {
+                            if (pendingData.length > 0 && !sourceBuffer.updating) {
+                                try {
+                                    sourceBuffer.appendBuffer(pendingData.shift());
+                                } catch (e) {}
+                            }
+                        });
+
+                        sourceBuffer.addEventListener('error', (e) => {
+                            console.warn('[MSE] SourceBuffer error:', e);
+                        });
+                    }, { once: true });
+
+                    mediaSource.addEventListener('error', (e) => {
+                        console.error('[MSE] MediaSource error:', e);
+                        showOffline();
+                    });
+                }
 
                 window.checkStreamStatus = function () {
                     showLoading();
@@ -344,7 +439,8 @@
                         .then(res => res.json())
                         .then(data => {
                             if (data.live) {
-                                initHlsPlayer();
+                                hideOffline();
+                                connectStream();
                             } else {
                                 showOffline();
                             }
@@ -355,156 +451,45 @@
                         });
                 };
 
-                // Connect to Status WebSocket channel for instant real-time live status travel
                 function connectStatusWebSocket() {
                     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
                     const wsUrl = `${protocol}//${window.location.host}/status-ws?key=${encodeURIComponent(currentStreamKey)}&role=viewer`;
+                    const statusWs = new WebSocket(wsUrl);
 
-                    const ws = new WebSocket(wsUrl);
-
-                    ws.onmessage = (event) => {
+                    statusWs.onmessage = (event) => {
                         try {
                             const data = JSON.parse(event.data);
                             if (data.type === 'STATUS') {
                                 if (data.live) {
-                                    // Delay HLS init to give FFmpeg time to generate the first segment
-                                    showLoading();
                                     hideOffline();
-                                    setTimeout(() => {
-                                        initHlsPlayer();
-                                    }, 4000);
+                                    showLoading();
+                                    setTimeout(() => connectStream(), 1000);
                                 } else {
                                     showOffline();
                                 }
                             }
-                        } catch (err) {
-                            console.warn('Status WebSocket message parse error:', err);
-                        }
+                        } catch (err) {}
                     };
 
-                    ws.onclose = () => {
+                    statusWs.onclose = () => {
                         setTimeout(connectStatusWebSocket, 3000);
                     };
-
-                    ws.onerror = (err) => {
-                        console.warn('Status WebSocket error:', err);
-                    };
+                    statusWs.onerror = () => {};
                 }
 
-                function initHlsPlayer() {
-                    const streamUrl = '<%= hlsBaseUrl %>/master.m3u8';
-
-                    // Clear any pending retry timer
-                    if (hlsRetryTimer) { clearTimeout(hlsRetryTimer); hlsRetryTimer = null; }
-
-                    if (Hls.isSupported()) {
-                        if (hls) {
-                            hls.destroy();
-                            hls = null;
-                        }
-
-                        hls = new Hls({
-                            liveSyncDurationCount: 3,          // 6-second live sync buffer cushion
-                            liveMaxLatencyDurationCount: 8,    // Up to 16s latency tolerance before jumping
-                            maxLiveSyncPlaybackRate: 1.0,      // Never pitch shift or speed up audio
-                            enableWorker: true,
-                            lowLatencyMode: false,
-                            progressive: true,                 // Enable progressive chunk streaming
-                            backBufferLength: 60,              // Keep 60s back-buffer
-                            maxBufferLength: 30,               // Pre-download up to 30 seconds ahead
-                            maxMaxBufferLength: 60,            // Allow buffer growth up to 60 seconds
-                            startLevel: -1,                    // Auto quality selection by default
-                            abrEwmaDefaultEstimate: 2500000,   // Initial bandwidth estimate for ABR
-                            abrBandWidthUpFactor: 0.7,
-                            abrBandWidthFactor: 0.8,
-                            manifestLoadingTimeOut: 10000,
-                            manifestLoadingMaxRetry: 10,
-                            manifestLoadingRetryDelay: 500,
-                            levelLoadingTimeOut: 10000,
-                            levelLoadingMaxRetry: 10,
-                            levelLoadingRetryDelay: 500,
-                            fragLoadingTimeOut: 10000,
-                            fragLoadingMaxRetry: 10,
-                            fragLoadingRetryDelay: 500
-                        });
-
-                        hls.loadSource(streamUrl);
-                        hls.attachMedia(video);
-
-                        hls.on(Hls.Events.MANIFEST_PARSED, () => {
-                            hlsRetryCount = 0;
-                            hideOffline();
-                            hideLoading();
-                            video.play().then(() => {
-                                updatePlayIcon();
-                            }).catch(err => {
-                                console.warn('Autoplay prevented:', err);
-                                updatePlayIcon();
-                            });
-                        });
-
-                        hls.on(Hls.Events.ERROR, (event, data) => {
-                            if (data.fatal) {
-                                console.warn('HLS Fatal Error:', data.type, data.details);
-                                if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
-                                    // master.m3u8 might not exist yet — retry with backoff
-                                    hlsRetryCount++;
-                                    if (hlsRetryCount <= MAX_HLS_RETRIES) {
-                                        console.log(`[HLS] Retry ${hlsRetryCount}/${MAX_HLS_RETRIES} in 2s (waiting for FFmpeg to generate segments)...`);
-                                        showLoading();
-                                        hls.destroy();
-                                        hls = null;
-                                        hlsRetryTimer = setTimeout(() => {
-                                            initHlsPlayer();
-                                        }, 2000);
-                                    } else {
-                                        console.warn('[HLS] Max retries reached, showing offline');
-                                        hlsRetryCount = 0;
-                                        showOffline();
-                                    }
-                                } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
-                                    hls.recoverMediaError();
-                                } else {
-                                    hlsRetryCount++;
-                                    if (hlsRetryCount <= MAX_HLS_RETRIES) {
-                                        hls.destroy();
-                                        hls = null;
-                                        hlsRetryTimer = setTimeout(() => initHlsPlayer(), 2000);
-                                    } else {
-                                        hlsRetryCount = 0;
-                                        showOffline();
-                                    }
-                                }
-                            }
-                        });
-                    } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-                        video.src = streamUrl;
-                        video.addEventListener('loadedmetadata', () => {
-                            hideOffline();
-                            hideLoading();
-                            video.play();
-                            updatePlayIcon();
-                        });
-                    }
-                }
-
-                // Quality Selection — Auto lets ABR decide, manual pins to specific rendition
                 window.setQuality = function (targetHeight) {
-                    if (hls && hls.levels && hls.levels.length > 0) {
-                        if (targetHeight === -1) {
-                            hls.currentLevel = -1;
-                            hls.nextLevel = -1;
-                            hls.loadLevel = -1;
-                        } else {
-                            let idx = hls.levels.findIndex(l => l.height === targetHeight);
-                            if (idx === -1) idx = hls.levels.findIndex(l => l.attrs && l.attrs.NAME && l.attrs.NAME.includes(targetHeight + 'p'));
-                            if (idx !== -1) {
-                                hls.currentLevel = idx;
-                                hls.nextLevel = idx;
-                                hls.loadLevel = idx;
-                            }
-                        }
+                    if (targetHeight === -1) {
+                        currentQuality = 'auto';
+                        selectedQuality = '1080p';
+                    } else {
+                        currentQuality = String(targetHeight);
+                        selectedQuality = targetHeight + 'p';
                     }
+
+                    if (ws && ws.readyState === WebSocket.OPEN) {
+                        connectStream();
+                    }
+
                     const items = document.querySelectorAll('.sh-quality-item');
                     items.forEach(i => { i.classList.remove('selected'); const c = i.querySelector('.fa-check'); if (c) c.classList.add('hidden'); });
                     const sel = document.querySelector(`[data-quality="${targetHeight === -1 ? 'auto' : targetHeight}"]`);
@@ -549,15 +534,12 @@
                     resetControlsTimer();
                 });
 
-                // Enforce strict 1.0x playback speed & pitch preservation (Never fast-forward or pitch shift)
                 video.preservesPitch = true;
                 if ('webkitPreservesPitch' in video) video.webkitPreservesPitch = true;
                 if ('mozPreservesPitch' in video) video.mozPreservesPitch = true;
 
                 video.addEventListener('ratechange', () => {
-                    if (video.playbackRate !== 1.0) {
-                        video.playbackRate = 1.0;
-                    }
+                    if (video.playbackRate !== 1.0) video.playbackRate = 1.0;
                 });
 
                 video.addEventListener('play', updatePlayIcon);
@@ -568,9 +550,7 @@
                 video.addEventListener('waiting', () => {
                     if (loadingDebounce) clearTimeout(loadingDebounce);
                     loadingDebounce = setTimeout(() => {
-                        if (video.readyState < 3 && !video.paused) {
-                            showLoading();
-                        }
+                        if (video.readyState < 3 && !video.paused) showLoading();
                     }, 300);
                 });
 
@@ -586,28 +566,11 @@
 
                 video.addEventListener('timeupdate', () => {
                     const ct = video.currentTime || 0;
-                    const dur = video.duration || 0;
                     currentTimeEl.textContent = formatTime(ct);
-
-                    if (dur > 0) {
-                        const percent = (ct / dur) * 100;
-                        progressBar.style.width = percent + '%';
-                        progressHandle.style.left = percent + '%';
-                    }
-
-                    if (video.readyState >= 3) {
-                        if (loadingDebounce) clearTimeout(loadingDebounce);
-                        hideLoading();
-                    }
                 });
 
                 function toggleFullscreen() {
-                    if (
-                        document.fullscreenElement ||
-                        document.webkitFullscreenElement ||
-                        document.mozFullScreenElement ||
-                        document.msFullscreenElement
-                    ) {
+                    if (document.fullscreenElement || document.webkitFullscreenElement || document.mozFullScreenElement || document.msFullscreenElement) {
                         exitFullscreen();
                     } else {
                         enterFullscreen();
@@ -616,31 +579,18 @@
 
                 function enterFullscreen() {
                     const element = player;
-
-                    if (element.requestFullscreen) {
-                        element.requestFullscreen();
-                    } else if (element.mozRequestFullScreen) {
-                        element.mozRequestFullScreen();
-                    } else if (element.webkitRequestFullscreen) {
-                        element.webkitRequestFullscreen(Element.ALLOW_KEYBOARD_INPUT);
-                    } else if (element.msRequestFullscreen) {
-                        element.msRequestFullscreen();
-                    }
-
+                    if (element.requestFullscreen) element.requestFullscreen();
+                    else if (element.mozRequestFullScreen) element.mozRequestFullScreen();
+                    else if (element.webkitRequestFullscreen) element.webkitRequestFullscreen(Element.ALLOW_KEYBOARD_INPUT);
+                    else if (element.msRequestFullscreen) element.msRequestFullscreen();
                     resetControlsTimer();
                 }
 
                 function exitFullscreen() {
-                    if (document.exitFullscreen) {
-                        document.exitFullscreen();
-                    } else if (document.mozCancelFullScreen) {
-                        document.mozCancelFullScreen();
-                    } else if (document.webkitExitFullscreen) {
-                        document.webkitExitFullscreen();
-                    } else if (document.msExitFullscreen) {
-                        document.msExitFullscreen();
-                    }
-
+                    if (document.exitFullscreen) document.exitFullscreen();
+                    else if (document.mozCancelFullScreen) document.mozCancelFullScreen();
+                    else if (document.webkitExitFullscreen) document.webkitExitFullscreen();
+                    else if (document.msExitFullscreen) document.msExitFullscreen();
                     resetControlsTimer();
                 }
 
@@ -651,7 +601,6 @@
                     controls.style.opacity = '1';
                     controls.style.transform = 'translateY(0)';
                     controls.style.pointerEvents = 'auto';
-
                     if (!video.paused) {
                         controlsTimeout = setTimeout(() => {
                             if (!scrubbing) {
@@ -663,17 +612,12 @@
                     }
                 }
 
-                player.addEventListener('mousemove', () => {
-                    resetControlsTimer();
-                });
+                player.addEventListener('mousemove', resetControlsTimer);
 
-                // Start status WebSocket and check stream status
                 connectStatusWebSocket();
                 checkStreamStatus();
                 pollInterval = setInterval(() => {
-                    if (offlineScreen.style.display !== 'none') {
-                        checkStreamStatus();
-                    }
+                    if (offlineScreen.style.display !== 'none') checkStreamStatus();
                 }, 5000);
             })();
     </script>

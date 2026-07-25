@@ -118,7 +118,9 @@ function getOrCreateStreamSession(streamKey, title = 'Live Movie Stream', user =
         chunks720pCount: 0,
         chunks480pCount: 0,
         totalChunksCount: 0,
-        failureCount: 0
+        failureCount: 0,
+        qualityViewers: { '1080p': new Set(), '720p': new Set(), '480p': new Set() },
+        initSegments: { '1080p': null, '720p': null, '480p': null }
     };
 
     if (!fs.existsSync(session.liveDir)) {
@@ -141,6 +143,7 @@ function clearLiveFolder(session) {
 // ─── WebSocket Servers (Status, Viewers Count & Telemetries) ───────────────────
 const wss = new WebSocketServer({ noServer: true });
 const streamWss = new WebSocketServer({ noServer: true });
+const viewWss = new WebSocketServer({ noServer: true });
 
 server.on('upgrade', (request, socket, head) => {
     try {
@@ -160,6 +163,13 @@ server.on('upgrade', (request, socket, head) => {
                 ws.streamKey = streamKey;
                 ws.role = 'host';
                 streamWss.emit('connection', ws, request);
+            });
+        } else if (pathname === '/view-ws') {
+            viewWss.handleUpgrade(request, socket, head, (ws) => {
+                ws.streamKey = streamKey;
+                ws.quality = urlObj.searchParams.get('quality') || '1080p';
+                ws.role = 'viewer';
+                viewWss.emit('connection', ws, request);
             });
         } else {
             socket.destroy();
@@ -188,7 +198,7 @@ wss.on('connection', (ws) => {
 function broadcastStatus(session, liveState) {
     if (!session) return;
     session.isLive = liveState;
-    const viewerCount = Array.from(wss.clients).filter(c => c.streamKey === session.streamKey && c.readyState === 1 && c.role === 'viewer').length;
+    const viewerCount = getTotalViewerCount(session);
 
     const msg = JSON.stringify({
         type: 'STATUS',
@@ -211,7 +221,7 @@ function broadcastAdminTelemetry() {
             streamKey: s.streamKey,
             title: s.title,
             hostName: s.hostName || 'Host',
-            isLive: s.isLive || fs.existsSync(path.join(s.liveDir, 'master.m3u8')),
+        isLive: s.isLive,
             viewerCount: statusClients.length
         };
     });
@@ -275,6 +285,54 @@ streamWss.on('connection', (ws) => {
     });
 });
 
+// ─── Viewer WebSocket Handler (streams fMP4 chunks to viewers) ──────────────
+function broadcastToQuality(session, quality, data) {
+    if (!session || !session.qualityViewers) return;
+    const viewers = session.qualityViewers[quality];
+    if (!viewers) return;
+    for (const viewer of viewers) {
+        if (viewer.readyState === 1) {
+            try { viewer.send(data); } catch (e) { }
+        }
+    }
+}
+
+function getTotalViewerCount(session) {
+    if (!session || !session.qualityViewers) return 0;
+    return (session.qualityViewers['1080p']?.size || 0) +
+           (session.qualityViewers['720p']?.size || 0) +
+           (session.qualityViewers['480p']?.size || 0);
+}
+
+viewWss.on('connection', (ws) => {
+    const key = ws.streamKey || 'default';
+    const quality = ws.quality || '1080p';
+    const session = activeStreams.get(key);
+    if (!session) {
+        ws.close(1000, 'Stream not found');
+        return;
+    }
+
+    if (!session.qualityViewers[quality]) session.qualityViewers[quality] = new Set();
+    session.qualityViewers[quality].add(ws);
+    console.log(`👁 Viewer connected to [${key}] ${quality} (${getTotalViewerCount(session)} total)`);
+
+    if (session.initSegments[quality]) {
+        try { ws.send(session.initSegments[quality]); } catch (e) { }
+    }
+
+    broadcastStatus(session, session.isLive);
+
+    ws.on('close', () => {
+        session.qualityViewers[quality].delete(ws);
+        console.log(`👁 Viewer disconnected from [${key}] ${quality} (${getTotalViewerCount(session)} total)`);
+        broadcastStatus(session, session.isLive);
+    });
+    ws.on('error', (err) => {
+        session.qualityViewers[quality].delete(ws);
+    });
+});
+
 setInterval(() => {
     broadcastAdminTelemetry();
 }, 2000);
@@ -329,73 +387,66 @@ async function startFfmpegLive(session) {
         '-i', 'anullsrc=channel_layout=stereo:sample_rate=48000',
 
         '-filter_complex',
-        '[0:v]format=yuv420p,fps=30,split=2[v1080out][v720in];' +
-        '[v720in]scale=1280:720:flags=bilinear,split=2[v720out][v480in];' +
-        '[v480in]scale=854:480:flags=bilinear[v480out];' +
+        '[0:v]format=yuv420p,fps=30,split=3[v1080][v720][v480];' +
+        '[v720]scale=1280:720:flags=bilinear[sv720];' +
+        '[v480]scale=854:480:flags=bilinear[sv480];' +
         '[0:a][1:a]amix=inputs=2:duration=first:dropout_transition=0:normalize=0,aresample=async=1:first_pts=0,asplit=3[a1080][a720][a480]',
 
-        // 1080p — Optimized 4.5Mbps stream (30fps, GOP 60)
-        '-map', '[v1080out]',
-        '-c:v:0', 'libx264',
-        '-preset', 'ultrafast',
-        '-profile:v:0', 'high',
-        '-level:v:0', '4.2',
-        '-crf:v:0', '23',
-        '-maxrate:v:0', '4500k',
-        '-bufsize:v:0', '4500k',
-        '-g:v:0', '60',
-        '-sc_threshold:v:0', '0',
-        '-x264-params:v:0', 'no-scenecut=1:open-gop=0:keyint=60:min-keyint=60:rc-lookahead=0:bframes=0',
-        '-map', '[a1080]',
-        '-c:a:0', 'aac',
-        '-b:a:0', '192k',
+        // 1080p → pipe:3
+        '-map', '[v1080]', '-map', '[a1080]',
+        '-c:v', 'libx264', '-preset', 'ultrafast', '-profile:v', 'high', '-level', '4.2',
+        '-crf', '23', '-maxrate', '4500k', '-bufsize', '4500k',
+        '-g', '60', '-sc_threshold', '0',
+        '-x264-params', 'no-scenecut=1:open-gop=0:keyint=60:min-keyint=60:rc-lookahead=0:bframes=0',
+        '-c:a', 'aac', '-b:a', '192k', '-ar', '48000',
+        '-f', 'mp4', '-mov_flags', 'frag_keyframe+empty_moof+default_base_moof',
+        '-frag_duration', '1000000', '-max_muxing_queue_size', '4096',
+        'pipe:3',
 
-        // 720p — Optimized 2.5Mbps stream (30fps, GOP 60)
-        '-map', '[v720out]',
-        '-c:v:1', 'libx264',
-        '-preset', 'ultrafast',
-        '-profile:v:1', 'main',
-        '-crf:v:1', '24',
-        '-maxrate:v:1', '2500k',
-        '-bufsize:v:1', '2500k',
-        '-g:v:1', '60',
-        '-sc_threshold:v:1', '0',
-        '-x264-params:v:1', 'no-scenecut=1:open-gop=0:keyint=60:min-keyint=60:rc-lookahead=0:bframes=0',
-        '-map', '[a720]',
-        '-c:a:1', 'aac',
-        '-b:a:1', '128k',
+        // 720p → pipe:4
+        '-map', '[sv720]', '-map', '[a720]',
+        '-c:v', 'libx264', '-preset', 'ultrafast', '-profile:v', 'main',
+        '-crf', '24', '-maxrate', '2500k', '-bufsize', '2500k',
+        '-g', '60', '-sc_threshold', '0',
+        '-x264-params', 'no-scenecut=1:open-gop=0:keyint=60:min-keyint=60:rc-lookahead=0:bframes=0',
+        '-c:a', 'aac', '-b:a', '128k', '-ar', '48000',
+        '-f', 'mp4', '-mov_flags', 'frag_keyframe+empty_moof+default_base_moof',
+        '-frag_duration', '1000000', '-max_muxing_queue_size', '4096',
+        'pipe:4',
 
-        // 480p — Optimized 1.2Mbps stream (30fps, GOP 60)
-        '-map', '[v480out]',
-        '-c:v:2', 'libx264',
-        '-preset', 'ultrafast',
-        '-profile:v:2', 'baseline',
-        '-crf:v:2', '26',
-        '-maxrate:v:2', '1200k',
-        '-bufsize:v:2', '1200k',
-        '-g:v:2', '60',
-        '-sc_threshold:v:2', '0',
-        '-x264-params:v:2', 'no-scenecut=1:open-gop=0:keyint=60:min-keyint=60:rc-lookahead=0:bframes=0',
-        '-map', '[a480]',
-        '-c:a:2', 'aac',
-        '-b:a:2', '96k',
-
-        '-f', 'hls',
-        '-hls_time', '2',
-        '-hls_list_size', '30',
-        '-hls_flags', 'delete_segments+omit_endlist+independent_segments',
-        '-hls_segment_type', 'mpegts',
-        '-master_pl_name', 'master.m3u8',
-        '-var_stream_map', 'v:0,a:0,name:1080p v:1,a:1,name:720p v:2,a:2,name:480p',
-        path.join(session.liveDir, 'stream_%v.m3u8')
+        // 480p → pipe:5
+        '-map', '[sv480]', '-map', '[a480]',
+        '-c:v', 'libx264', '-preset', 'ultrafast', '-profile:v', 'baseline',
+        '-crf', '26', '-maxrate', '1200k', '-bufsize', '1200k',
+        '-g', '60', '-sc_threshold', '0',
+        '-x264-params', 'no-scenecut=1:open-gop=0:keyint=60:min-keyint=60:rc-lookahead=0:bframes=0',
+        '-c:a', 'aac', '-b:a', '96k', '-ar', '48000',
+        '-f', 'mp4', '-mov_flags', 'frag_keyframe+empty_moof+default_base_moof',
+        '-frag_duration', '1000000', '-max_muxing_queue_size', '4096',
+        'pipe:5'
     ];
 
     console.log(`⚡ Spawning Live Stream Generator for [${session.streamKey}]...`);
-    session.ffmpegProcess = spawn('ffmpeg', args);
+    session.ffmpegProcess = spawn('ffmpeg', args, { stdio: ['pipe', 'pipe', 'pipe', 'pipe', 'pipe', 'pipe'] });
     session.isLive = true;
+    session.initSegments = { '1080p': null, '720p': null, '480p': null };
 
     if (session.ffmpegProcess.stdin) {
         session.ffmpegProcess.stdin.on('error', (err) => {});
+    }
+
+    const pipeQualityMap = { 3: '1080p', 4: '720p', 5: '480p' };
+    for (const [fd, quality] of Object.entries(pipeQualityMap)) {
+        const pipe = session.ffmpegProcess.stdio[fd];
+        if (pipe) {
+            pipe.on('data', (chunk) => {
+                if (!session.initSegments[quality]) {
+                    session.initSegments[quality] = chunk;
+                    console.log(`📦 Init segment stored for [${session.streamKey}] ${quality} (${chunk.length} bytes)`);
+                }
+                broadcastToQuality(session, quality, chunk);
+            });
+        }
     }
 
     if (session.ffmpegProcess.stderr) {
@@ -648,7 +699,7 @@ app.get('/', requireAuth, (req, res) => {
     const streamsList = Array.from(activeStreams.values()).map(s => ({
         streamKey: s.streamKey,
         title: s.title,
-        isLive: s.isLive || fs.existsSync(path.join(s.liveDir, 'master.m3u8')),
+        isLive: s.isLive,
         createdAt: s.createdAt
     }));
     res.render('home', { streams: streamsList, user: req.user });
@@ -785,8 +836,7 @@ app.get(['/live', '/live/:streamKey'], (req, res) => {
 app.get(['/live/status', '/live/status/:streamKey'], (req, res) => {
     const key = req.params.streamKey || req.query.streamKey || 'default';
     const session = activeStreams.get(key);
-    const masterExists = session ? fs.existsSync(path.join(session.liveDir, 'master.m3u8')) : false;
-    res.json({ live: (session && session.isLive) || masterExists, streamKey: key });
+    res.json({ live: (session && session.isLive), streamKey: key });
 });
 
 // Reset & Start Stream Process
