@@ -170,11 +170,20 @@ function getSessionS3Telemetry(session) {
     };
 }
 
-async function uploadSingleSegment(session, filename) {
+async function uploadSingleSegment(session, filename, attempt = 1) {
     const filePath = path.join(session.liveDir, filename);
     if (!fs.existsSync(filePath)) return false;
 
     try {
+        const stat = fs.statSync(filePath);
+        if (stat.size === 0) {
+            if (attempt <= 3) {
+                await new Promise(r => setTimeout(r, 100 * attempt));
+                return uploadSingleSegment(session, filename, attempt + 1);
+            }
+            return false;
+        }
+
         const fileBuffer = fs.readFileSync(filePath);
         const s3Key = `${session.streamKey}/${filename}`;
         await s3Client.send(new PutObjectCommand({
@@ -201,6 +210,10 @@ async function uploadSingleSegment(session, filename) {
 
         return true;
     } catch (err) {
+        if (attempt <= 3) {
+            await new Promise(r => setTimeout(r, 150 * attempt));
+            return uploadSingleSegment(session, filename, attempt + 1);
+        }
         console.warn(`[S3 Upload Error ${session.streamKey}] ${filename}:`, err.message);
         session.failureCount = (session.failureCount || 0) + 1;
         return false;
