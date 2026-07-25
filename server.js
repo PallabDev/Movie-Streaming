@@ -414,32 +414,32 @@ async function startFfmpegLive(session) {
 
         '-filter_complex',
         '[0:v]format=yuv420p,fps=30,split=3[v1080][v720][v480];' +
-        '[v720]scale=1280:720:flags=lanczos[sv720];' +
-        '[v480]scale=854:480:flags=lanczos[sv480];' +
+        '[v720]scale=1280:720:flags=bilinear[sv720];' +
+        '[v480]scale=854:480:flags=bilinear[sv480];' +
         '[0:a][1:a]amix=inputs=2:duration=first:dropout_transition=0:normalize=0,aresample=async=1:first_pts=0,asplit=3[a1080][a720][a480]',
 
-        // 1080p — Ultra Crisp 8.0Mbps HD (CRF 18)
+        // 1080p — 6.0 Mbps High Speed HD
         '-map', '[v1080]', '-map', '[a1080]',
-        '-c:v:0', 'libx264', '-preset', 'superfast', '-profile:v:0', 'high', '-level:v:0', '4.2',
-        '-crf:v:0', '18', '-maxrate:v:0', '8000k', '-bufsize:v:0', '12000k',
+        '-c:v:0', 'libx264', '-preset', 'ultrafast', '-profile:v:0', 'high', '-level:v:0', '4.2',
+        '-crf:v:0', '20', '-maxrate:v:0', '6000k', '-bufsize:v:0', '6000k',
         '-g:v:0', '60', '-sc_threshold:v:0', '0',
-        '-x264-params:v:0', 'no-scenecut=1:open-gop=0:keyint=60:min-keyint=60:rc-lookahead=10:bframes=1',
+        '-x264-params:v:0', 'no-scenecut=1:open-gop=0:keyint=60:min-keyint=60:rc-lookahead=0:bframes=0',
         '-c:a:0', 'aac', '-b:a:0', '256k', '-ar:a:0', '48000',
 
-        // 720p — Sharp 4.5Mbps HD (CRF 20)
+        // 720p — 3.5 Mbps High Speed HD
         '-map', '[sv720]', '-map', '[a720]',
-        '-c:v:1', 'libx264', '-preset', 'superfast', '-profile:v:1', 'main',
-        '-crf:v:1', '20', '-maxrate:v:1', '4500k', '-bufsize:v:1', '6750k',
+        '-c:v:1', 'libx264', '-preset', 'ultrafast', '-profile:v:1', 'main',
+        '-crf:v:1', '22', '-maxrate:v:1', '3500k', '-bufsize:v:1', '3500k',
         '-g:v:1', '60', '-sc_threshold:v:1', '0',
-        '-x264-params:v:1', 'no-scenecut=1:open-gop=0:keyint=60:min-keyint=60:rc-lookahead=10:bframes=1',
+        '-x264-params:v:1', 'no-scenecut=1:open-gop=0:keyint=60:min-keyint=60:rc-lookahead=0:bframes=0',
         '-c:a:1', 'aac', '-b:a:1', '192k', '-ar:a:1', '48000',
 
-        // 480p — Clean 2.0Mbps SD (CRF 22)
+        // 480p — 2.0 Mbps High Speed SD
         '-map', '[sv480]', '-map', '[a480]',
-        '-c:v:2', 'libx264', '-preset', 'superfast', '-profile:v:2', 'baseline',
-        '-crf:v:2', '22', '-maxrate:v:2', '2000k', '-bufsize:v:2', '3000k',
+        '-c:v:2', 'libx264', '-preset', 'ultrafast', '-profile:v:2', 'baseline',
+        '-crf:v:2', '24', '-maxrate:v:2', '2000k', '-bufsize:v:2', '2000k',
         '-g:v:2', '60', '-sc_threshold:v:2', '0',
-        '-x264-params:v:2', 'no-scenecut=1:open-gop=0:keyint=60:min-keyint=60:rc-lookahead=10:bframes=1',
+        '-x264-params:v:2', 'no-scenecut=1:open-gop=0:keyint=60:min-keyint=60:rc-lookahead=0:bframes=0',
         '-c:a:2', 'aac', '-b:a:2', '128k', '-ar:a:2', '48000',
 
         '-f', 'hls',
