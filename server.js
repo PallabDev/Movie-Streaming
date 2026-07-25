@@ -341,40 +341,57 @@ async function startFfmpegLive() {
         '-f', 'lavfi',
         '-i', 'anullsrc=channel_layout=stereo:sample_rate=48000',
 
-        // Single 720p stream — lightweight for VPS
+        // Dual-resolution filter graph (720p + 480p) with clean audio
         '-filter_complex',
-        '[0:v]fps=30,scale=1280:720,format=yuv420p[vout];' +
-        '[0:a][1:a]amix=inputs=2:duration=first:dropout_transition=0,aresample=async=1000:first_pts=0[aout]',
+        '[0:v]fps=30,format=yuv420p,split=2[v720in][v480in];' +
+        '[v720in]scale=1280:720[v720out];' +
+        '[v480in]scale=854:480[v480out];' +
+        '[0:a][1:a]amix=inputs=2:duration=first:dropout_transition=0:normalize=0,aresample=async=1:first_pts=0,asplit=2[a720][a480]',
 
-        // 720p Video (2.5 Mbps — VPS-friendly)
-        '-map', '[vout]',
-        '-c:v', 'libx264',
+        // 720p Rendition (2.5 Mbps HD)
+        '-map', '[v720out]',
+        '-c:v:0', 'libx264',
         '-preset', 'ultrafast',
         '-tune', 'zerolatency',
-        '-profile:v', 'main',
-        '-b:v', '2500k',
-        '-maxrate', '3000k',
-        '-bufsize', '5000k',
-        '-g', '30',
-        '-sc_threshold', '0',
-        '-x264-params', 'no-scenecut=1:open-gop=0:keyint=30:min-keyint=30',
+        '-profile:v:0', 'main',
+        '-b:v:0', '2500k',
+        '-maxrate:v:0', '3000k',
+        '-bufsize:v:0', '5000k',
+        '-g:v:0', '30',
+        '-sc_threshold:v:0', '0',
+        '-x264-params:v:0', 'no-scenecut=1:open-gop=0:keyint=30:min-keyint=30',
+        '-map', '[a720]',
+        '-c:a:0', 'aac',
+        '-b:a:0', '192k',
 
-        // Audio (128 kbps AAC)
-        '-map', '[aout]',
-        '-c:a', 'aac',
-        '-b:a', '128k',
+        // 480p Rendition (1.0 Mbps SD)
+        '-map', '[v480out]',
+        '-c:v:1', 'libx264',
+        '-preset', 'ultrafast',
+        '-tune', 'zerolatency',
+        '-profile:v:1', 'main',
+        '-b:v:1', '1000k',
+        '-maxrate:v:1', '1200k',
+        '-bufsize:v:1', '2000k',
+        '-g:v:1', '30',
+        '-sc_threshold:v:1', '0',
+        '-x264-params:v:1', 'no-scenecut=1:open-gop=0:keyint=30:min-keyint=30',
+        '-map', '[a480]',
+        '-c:a:1', 'aac',
+        '-b:a:1', '96k',
 
-        // HLS Packaging Config
+        // HLS Packaging with Master Playlist + Variant Streams
         '-f', 'hls',
         '-hls_time', '2',
         '-hls_list_size', '30',
         '-hls_flags', 'delete_segments+omit_endlist+independent_segments',
         '-hls_segment_type', 'mpegts',
-        '-hls_segment_filename', path.join(liveDir, 'stream_%03d.ts'),
-        path.join(liveDir, 'master.m3u8')
+        '-master_pl_name', 'master.m3u8',
+        '-var_stream_map', 'v:0,a:0,name:720p v:1,a:1,name:480p',
+        path.join(liveDir, 'stream_%v.m3u8')
     ];
 
-    console.log('⚡ Spawning Single 720p VPS-Friendly Live Stream Generator...');
+    console.log('⚡ Spawning Dual-Quality (720p + 480p) Live Stream Generator...');
     ffmpegLiveProcess = spawn('ffmpeg', args);
 
     if (SFTP_ENABLED) {

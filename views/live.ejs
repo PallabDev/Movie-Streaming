@@ -200,9 +200,17 @@ html, body {
       <!-- Quality Settings Popup Menu -->
       <div class="sh-quality-menu" id="sh-quality-menu">
         <div class="text-xs font-semibold text-slate-400 px-2 py-1 mb-1 uppercase tracking-wider">Quality</div>
-        <div class="sh-quality-item selected" id="quality-720" onclick="setQuality(720)">
-          <span>720p HD (30fps)</span>
-          <i class="fas fa-check text-xs" id="check-720"></i>
+        <div class="sh-quality-item selected" data-quality="auto" onclick="setQuality(-1)">
+          <span>Auto</span>
+          <i class="fas fa-check text-xs" id="check-auto"></i>
+        </div>
+        <div class="sh-quality-item" data-quality="720" onclick="setQuality(720)">
+          <span>720p HD</span>
+          <i class="fas fa-check text-xs hidden" id="check-720"></i>
+        </div>
+        <div class="sh-quality-item" data-quality="480" onclick="setQuality(480)">
+          <span>480p SD</span>
+          <i class="fas fa-check text-xs hidden" id="check-480"></i>
         </div>
       </div>
 
@@ -424,7 +432,10 @@ html, body {
         backBufferLength: 30,              // Keep 30s back-buffer
         maxBufferLength: 30,               // Pre-download up to 30 seconds ahead
         maxMaxBufferLength: 60,            // Allow buffer growth up to 60 seconds
-        startLevel: 0,
+        startLevel: -1,                    // Auto quality selection by default
+        abrEwmaDefaultEstimate: 3000000,   // Initial bandwidth estimate for ABR
+        abrBandWidthUpFactor: 0.7,
+        abrBandWidthFactor: 0.8,
         manifestLoadingTimeOut: 5000,
         manifestLoadingMaxRetry: 3,
         manifestLoadingRetryDelay: 2000,
@@ -493,19 +504,53 @@ html, body {
     }
   }
 
-  // Quality Selection Handler (single 720p stream)
+  // Quality Selection Handler — pins HLS.js to a specific rendition level
+  // Auto (-1) = ABR picks best quality, only downloads that rendition's segments
+  // Manual = locks to that level, only downloads that rendition's segments
   window.setQuality = function (targetHeight) {
-    // Single-stream: always level 0
     if (hls && hls.levels && hls.levels.length > 0) {
-      hls.currentLevel = 0;
-      hls.nextLevel = 0;
-      hls.loadLevel = 0;
+      if (targetHeight === -1) {
+        // Auto: let ABR decide
+        hls.currentLevel = -1;
+        hls.nextLevel = -1;
+        hls.loadLevel = -1;
+      } else {
+        // Find the level matching the requested height
+        let levelIndex = hls.levels.findIndex(lvl => lvl.height === targetHeight);
+        if (levelIndex === -1) {
+          // Fallback: match by NAME attribute (e.g., "720p", "480p")
+          levelIndex = hls.levels.findIndex(lvl => 
+            lvl.attrs && lvl.attrs.NAME && lvl.attrs.NAME.includes(targetHeight + 'p')
+          );
+        }
+        if (levelIndex !== -1) {
+          hls.currentLevel = levelIndex;
+          hls.nextLevel = levelIndex;
+          hls.loadLevel = levelIndex;
+        }
+      }
     }
     
     // Update UI highlights
     const items = document.querySelectorAll('.sh-quality-item');
-    items.forEach(item => item.classList.remove('selected'));
-    document.getElementById('quality-720').classList.add('selected');
+    items.forEach(item => {
+      item.classList.remove('selected');
+      const check = item.querySelector('.fa-check');
+      if (check) check.classList.add('hidden');
+    });
+
+    // Highlight the selected item
+    let selectedItem;
+    if (targetHeight === -1) {
+      selectedItem = document.querySelector('[data-quality="auto"]');
+    } else {
+      selectedItem = document.querySelector(`[data-quality="${targetHeight}"]`);
+    }
+    if (selectedItem) {
+      selectedItem.classList.add('selected');
+      const check = selectedItem.querySelector('.fa-check');
+      if (check) check.classList.remove('hidden');
+    }
 
     qualityMenu.classList.remove('active');
   };
