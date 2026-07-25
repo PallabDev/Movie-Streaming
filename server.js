@@ -749,8 +749,8 @@ app.get(['/live-playlist/:streamKey/:playlist', '/live-playlist/:playlist'], (re
     if (!fs.existsSync(playlistPath)) return res.status(404).send('#EXTM3U\n#EXT-X-ERROR: Playlist not generated yet');
 
     try {
-        const rawContent = fs.readFileSync(playlistPath, 'utf-8');
         const isTs = playlistName.endsWith('.ts');
+        const rawContent = isTs ? fs.readFileSync(playlistPath) : fs.readFileSync(playlistPath, 'utf-8');
         res.setHeader('Content-Type', isTs ? 'video/mp2t' : 'application/vnd.apple.mpegurl');
         res.setHeader('Cache-Control', isTs ? 'public, max-age=3600' : 'no-cache, no-store, must-revalidate, max-age=0');
         res.setHeader('Pragma', isTs ? 'public' : 'no-cache');
