@@ -396,7 +396,7 @@
             <span id="btnText">Share Screen</span>
         </button>
 
-        <a id="watchLiveBtn" href="/live" target="_blank" class="btn-action btn-share start" style="background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%);">
+        <a id="watchLiveBtn" href="/live/<%= typeof streamKey !== 'undefined' ? streamKey : 'default' %>" target="_blank" class="btn-action btn-share start" style="background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%);">
             <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round">
                 <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
                 <circle cx="12" cy="12" r="3"></circle>
@@ -443,6 +443,7 @@
             }
         });
 
+        const currentStreamKey = '<%= typeof streamKey !== "undefined" ? streamKey : "default" %>';
         let streamWs = null;
 
         function connectStreamWebSocket() {
@@ -457,12 +458,12 @@
                 }
 
                 const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-                const wsUrl = `${protocol}//${window.location.host}/stream-ws`;
+                const wsUrl = `${protocol}//${window.location.host}/stream-ws?key=${encodeURIComponent(currentStreamKey)}`;
                 streamWs = new WebSocket(wsUrl);
                 streamWs.binaryType = 'arraybuffer';
 
                 streamWs.onopen = () => {
-                    console.log('⚡ WebSocket Stream Ingest Connected');
+                    console.log('⚡ WebSocket Stream Ingest Connected for [' + currentStreamKey + ']');
                     resolve();
                 };
 
@@ -473,7 +474,6 @@
 
                 streamWs.onclose = () => {
                     console.warn('WebSocket stream closed');
-                    // Auto-reconnect if still streaming
                     if (mediaStream) {
                         setTimeout(() => {
                             connectStreamWebSocket();
@@ -481,7 +481,6 @@
                     }
                 };
 
-                // Timeout — don't block forever if WS fails to connect
                 setTimeout(resolve, 3000);
             });
         }
@@ -492,12 +491,12 @@
                 if (streamWs && streamWs.readyState === WebSocket.OPEN) {
                     streamWs.send(arrayBuffer);
                 } else {
-                    // HTTP fallback only when WS is temporarily down
-                    fetch('/stream', {
+                    fetch('/stream/' + currentStreamKey, {
                         method: 'POST',
                         headers: {
                             'Content-Type': 'application/octet-stream',
-                            'x-chunk-index': index
+                            'x-chunk-index': index,
+                            'x-stream-key': currentStreamKey
                         },
                         body: arrayBuffer
                     }).catch(() => {});
@@ -528,7 +527,6 @@
             }
 
             try {
-                // Request screen share at 1080p 30fps
                 const constraints = {
                     video: {
                         width: { ideal: 1920, max: 1920 },
@@ -546,16 +544,13 @@
 
                 mediaStream = await navigator.mediaDevices.getDisplayMedia(constraints);
 
-                // Show loader modal while purging old S3/server segments and resetting FFmpeg
                 showStreamLoader("Preparing Live Stream Engine...", "Purging old video segments from Cloud Storage & server disk...");
 
-                // Reset stream on server & purge old S3 bucket segments
-                await fetch('/reset-stream', { method: 'POST' });
+                await fetch('/reset-stream/' + currentStreamKey, { method: 'POST' });
                 chunkIndex = 0;
                 chunksBadge.textContent = 'Chunks Sent: 0';
                 downloadBtn.style.display = 'none';
 
-                // Connect WebSocket right after reset, before starting MediaRecorder
                 await connectStreamWebSocket();
 
                 // Set stream to video element

@@ -332,9 +332,11 @@
                     loadingSpinner.style.display = 'none';
                 }
 
+                const currentStreamKey = '<%= typeof streamKey !== "undefined" ? streamKey : "default" %>';
+
                 window.checkStreamStatus = function () {
                     showLoading();
-                    fetch('/live/status')
+                    fetch('/live/status/' + currentStreamKey)
                         .then(res => res.json())
                         .then(data => {
                             if (data.live) {
@@ -352,7 +354,7 @@
                 // Connect to Status WebSocket channel for instant real-time live status travel
                 function connectStatusWebSocket() {
                     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-                    const wsUrl = `${protocol}//${window.location.host}/status-ws`;
+                    const wsUrl = `${protocol}//${window.location.host}/status-ws?key=${encodeURIComponent(currentStreamKey)}`;
 
                     const ws = new WebSocket(wsUrl);
 
