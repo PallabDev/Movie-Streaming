@@ -394,10 +394,6 @@ async function startFfmpegLive(session) {
     session.ffmpegProcess = spawn('ffmpeg', args);
     session.isLive = true;
 
-    if (S3_ENABLED) {
-        startS3Watcher(session);
-    }
-
     if (session.ffmpegProcess.stdin) {
         session.ffmpegProcess.stdin.on('error', (err) => {});
     }
@@ -681,7 +677,7 @@ app.post('/api/streams/create', requireAuth, async (req, res) => {
     });
 });
 
-// Delete Stream & Purge S3 API
+// Delete Stream API
 app.post(['/api/streams/delete/:streamKey', '/api/streams/delete'], requireAuth, async (req, res) => {
     try {
         const streamKey = req.params.streamKey || req.body?.streamKey;
@@ -728,7 +724,7 @@ app.get(['/stream', '/stream/:streamKey'], requireAuth, (req, res) => {
     });
 });
 
-// Express Local Live File Fallback — Serves segment instantly if S3 upload is in-progress
+// Express Local Live File Fallback
 app.get('/live-file/:streamKey/:filename', (req, res) => {
     const { streamKey, filename } = req.params;
     const filePath = path.join(liveDir, streamKey, filename);
@@ -754,10 +750,11 @@ app.get(['/live-playlist/:streamKey/:playlist', '/live-playlist/:playlist'], (re
 
     try {
         const rawContent = fs.readFileSync(playlistPath, 'utf-8');
-        res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
-        res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate, max-age=0');
-        res.setHeader('Pragma', 'no-cache');
-        res.setHeader('Expires', '0');
+        const isTs = playlistName.endsWith('.ts');
+        res.setHeader('Content-Type', isTs ? 'video/mp2t' : 'application/vnd.apple.mpegurl');
+        res.setHeader('Cache-Control', isTs ? 'public, max-age=3600' : 'no-cache, no-store, must-revalidate, max-age=0');
+        res.setHeader('Pragma', isTs ? 'public' : 'no-cache');
+        res.setHeader('Expires', isTs ? '3600' : '0');
         res.setHeader('Connection', 'keep-alive');
         res.setHeader('Keep-Alive', 'timeout=30, max=100');
 
