@@ -904,13 +904,19 @@ app.get(['/stream', '/stream/:streamKey'], requireAuth, (req, res) => {
 app.get('/live-file/:streamKey/:filename', (req, res) => {
     const { streamKey, filename } = req.params;
     const filePath = path.join(liveDir, streamKey, filename);
-    if (!fs.existsSync(filePath)) return res.status(404).send('File not found');
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Content-Type', 'video/mp2t');
-    res.setHeader('Cache-Control', 'public, max-age=3600');
-    res.setHeader('Connection', 'keep-alive');
-    res.setHeader('Keep-Alive', 'timeout=30, max=100');
-    res.sendFile(filePath);
+    try {
+        const stat = fs.statSync(filePath);
+        res.writeHead(200, {
+            'Content-Type': 'video/mp2t',
+            'Content-Length': stat.size,
+            'Cache-Control': 'public, max-age=3',
+            'Access-Control-Allow-Origin': '*',
+            'Connection': 'keep-alive'
+        });
+        fs.createReadStream(filePath).pipe(res);
+    } catch (err) {
+        if (!res.headersSent) return res.status(404).send('File not found');
+    }
 });
 
 // Dynamic Express HLS Playlist & Segment Server — Serves .m3u8 and .ts instantly
@@ -922,19 +928,21 @@ app.get(['/live-playlist/:streamKey/:playlist', '/live-playlist/:playlist'], (re
     if (!session) return res.status(404).send('#EXTM3U\n#EXT-X-ERROR: Stream session not found');
 
     const filePath = path.join(session.liveDir, playlistName);
-    if (!fs.existsSync(filePath)) return res.status(404).send('File not found');
 
     try {
         res.setHeader('Access-Control-Allow-Origin', '*');
         res.setHeader('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Range');
         res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, HEAD');
-        res.setHeader('Connection', 'keep-alive');
-        res.setHeader('Keep-Alive', 'timeout=30, max=100');
 
         if (playlistName.endsWith('.ts')) {
-            res.setHeader('Content-Type', 'video/mp2t');
-            res.setHeader('Cache-Control', 'public, max-age=3600');
-            return res.sendFile(filePath);
+            const stat = fs.statSync(filePath);
+            res.writeHead(200, {
+                'Content-Type': 'video/mp2t',
+                'Content-Length': stat.size,
+                'Cache-Control': 'public, max-age=3',
+                'Connection': 'keep-alive'
+            });
+            fs.createReadStream(filePath).pipe(res);
         } else {
             res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
             res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate, max-age=0');
@@ -943,7 +951,9 @@ app.get(['/live-playlist/:streamKey/:playlist', '/live-playlist/:playlist'], (re
             const rawContent = fs.readFileSync(filePath, 'utf-8');
             return res.send(rawContent);
         }
-    } catch (err) { return res.status(500).send('Error reading HLS resource'); }
+    } catch (err) {
+        if (!res.headersSent) return res.status(404).send('File not found');
+    }
 });
 
 // Public Live Player Route (HLS Master Playlist served via Express)
