@@ -9,9 +9,6 @@ services:
       - NODE_ENV=${NODE_ENV:-production}
       - PORT=${PORT:-5992}
       - APP_URL=${APP_URL:-https://watch.pallabdev.in}
-    labels:
-      caddy: ${DOMAIN:-watch.pallabdev.in}
-      caddy.reverse_proxy: '{{upstreams ${PORT:-5992}}}'
     networks:
       - caddy_net
 
