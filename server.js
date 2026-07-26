@@ -526,7 +526,7 @@ async function startFfmpegLive(session, opts = {}) {
             '-profile:v:0', 'main', '-pix_fmt:v:0', 'yuv420p',
             '-b:v:0', '6000k', '-maxrate:v:0', '6000k', '-bufsize:v:0', '6000k',
             '-r:v:0', '30', '-g:v:0', '30', '-keyint_min:v:0', '30', '-sc_threshold:v:0', '0',
-            '-x264-params:v:0', 'keyint=30:min-keyint=30:scenecut=0:bframes=0:rc-lookahead=0:ref=1:me=dia:subme=0:trellis=0:mixed-refs=0:8x8dct=0:weightb=0:b-adapt=0:direct=auto:no-mbtree=1:force-cfr=1',
+            '-x264-params:v:0', 'keyint=30:min-keyint=30:scenecut=0:bframes=0:rc-lookahead=0:ref=1:me=dia:subme=0:trellis=0:mixed-refs=0:8x8dct=0:weightb=0:b-adapt=0:direct=auto:no-mbtree=1:force-cfr=1:threads=4',
             '-c:a:0', 'aac', '-b:a:0', '128k', '-ar:a:0', '48000', '-ac:a:0', '2'
         );
         args.push(
@@ -536,7 +536,7 @@ async function startFfmpegLive(session, opts = {}) {
             '-profile:v:1', 'main', '-pix_fmt:v:1', 'yuv420p',
             '-b:v:1', '3000k', '-maxrate:v:1', '3000k', '-bufsize:v:1', '3000k',
             '-r:v:1', '30', '-g:v:1', '30', '-keyint_min:v:1', '30', '-sc_threshold:v:1', '0',
-            '-x264-params:v:1', 'keyint=30:min-keyint=30:scenecut=0:bframes=0:rc-lookahead=0:ref=1:me=dia:subme=0:trellis=0:mixed-refs=0:8x8dct=0:weightb=0:b-adapt=0:direct=auto:no-mbtree=1:force-cfr=1',
+            '-x264-params:v:1', 'keyint=30:min-keyint=30:scenecut=0:bframes=0:rc-lookahead=0:ref=1:me=dia:subme=0:trellis=0:mixed-refs=0:8x8dct=0:weightb=0:b-adapt=0:direct=auto:no-mbtree=1:force-cfr=1:threads=2',
             '-c:a:1', 'aac', '-b:a:1', '128k', '-ar:a:1', '48000', '-ac:a:1', '2'
         );
         args.push(
@@ -546,7 +546,7 @@ async function startFfmpegLive(session, opts = {}) {
             '-profile:v:2', 'main', '-pix_fmt:v:2', 'yuv420p',
             '-b:v:2', '1000k', '-maxrate:v:2', '1000k', '-bufsize:v:2', '1000k',
             '-r:v:2', '30', '-g:v:2', '30', '-keyint_min:v:2', '30', '-sc_threshold:v:2', '0',
-            '-x264-params:v:2', 'keyint=30:min-keyint=30:scenecut=0:bframes=0:rc-lookahead=0:ref=1:me=dia:subme=0:trellis=0:mixed-refs=0:8x8dct=0:weightb=0:b-adapt=0:direct=auto:no-mbtree=1:force-cfr=1',
+            '-x264-params:v:2', 'keyint=30:min-keyint=30:scenecut=0:bframes=0:rc-lookahead=0:ref=1:me=dia:subme=0:trellis=0:mixed-refs=0:8x8dct=0:weightb=0:b-adapt=0:direct=auto:no-mbtree=1:force-cfr=1:threads=2',
             '-c:a:2', 'aac', '-b:a:2', '96k', '-ar:a:2', '48000', '-ac:a:2', '2'
         );
     } else {
