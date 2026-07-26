@@ -492,25 +492,24 @@ async function startFfmpegLive(session, opts = {}) {
 
     let filterComplex = '';
     if (!usePassthrough) {
-        // Cascaded downscaling: 1080p -> 720p -> 480p to minimize CPU scaling work
-        filterComplex = '[0:v]format=yuv420p,split=2[v1080src][v1080down];' +
-            '[v1080src]scale=1920:1080:flags=fast_bilinear,setsar=1[v1080];' +
-            '[v1080down]scale=1280:720:flags=fast_bilinear,setsar=1,split=2[v720][v720down];' +
-            '[v720down]scale=854:480:flags=fast_bilinear,setsar=1[v480];' +
+        filterComplex = '[0:v]split=2[v1080src][v1080down];' +
+            '[v1080src]scale=1920:1080:flags=fast_bilinear[v1080];' +
+            '[v1080down]scale=1280:720:flags=fast_bilinear,split=2[v720][v720down];' +
+            '[v720down]scale=854:480:flags=fast_bilinear[v480];' +
             '[0:a][1:a]amix=inputs=2:duration=first:dropout_transition=0:normalize=0,aresample=async=1:first_pts=0,asplit=3[a1080][a720][a480]';
     } else {
-        // 1080p passthrough mode: pass 0:v directly to stream 0 while cascaded downscaling to 720p and 480p
-        filterComplex = '[0:v]format=yuv420p,scale=1280:720:flags=fast_bilinear,setsar=1,split=2[v720][v720down];' +
-            '[v720down]scale=854:480:flags=fast_bilinear,setsar=1[v480];' +
+        filterComplex = '[0:v]scale=1280:720:flags=fast_bilinear,split=2[v720][v720down];' +
+            '[v720down]scale=854:480:flags=fast_bilinear[v480];' +
             '[0:a][1:a]amix=inputs=2:duration=first:dropout_transition=0:normalize=0,aresample=async=1:first_pts=0,asplit=3[a1080][a720][a480]';
     }
 
     const args = [
         '-y',
         '-threads', '0',
-        '-fflags', '+genpts+discardcorrupt+nobuffer',
+        '-fflags', '+genpts+discardcorrupt',
         '-probesize', '2M',
         '-analyzeduration', '1000000',
+        '-thread_queue_size', '1024',
         '-i', 'pipe:0',
         '-f', 'lavfi',
         '-i', 'anullsrc=channel_layout=stereo:sample_rate=48000',
@@ -521,13 +520,13 @@ async function startFfmpegLive(session, opts = {}) {
 
     if (!usePassthrough) {
         args.push(
-            // 1080p H.264: 4 Mbps — optimized x264 zerolatency parameters
+            // 1080p H.264: 4 Mbps — max CPU threads
             '-map', '[v1080]', '-map', '[a1080]',
             '-c:v:0', 'libx264', '-preset', 'ultrafast', '-tune:v:0', 'zerolatency',
             '-profile:v:0', 'main', '-pix_fmt:v:0', 'yuv420p',
             '-b:v:0', '4000k', '-maxrate:v:0', '4000k', '-bufsize:v:0', '8000k',
             '-r:v:0', '30', '-g:v:0', '30', '-keyint_min:v:0', '30', '-sc_threshold:v:0', '0',
-            '-x264-params:v:0', 'keyint=30:min-keyint=30:scenecut=0:bframes=0:rc-lookahead=0:ref=1:me=dia:subme=0:trellis=0:mixed-refs=0:8x8dct=0:weightb=0:b-adapt=0:direct=none:no-mbtree=1:force-cfr=1:aq-mode=0:partitions=none:no-deblock=1:threads=2:sliced-threads=1',
+            '-x264-params:v:0', 'keyint=30:min-keyint=30:scenecut=0:bframes=0:rc-lookahead=0:ref=1:me=dia:subme=0:trellis=0:mixed-refs=0:8x8dct=0:weightb=0:b-adapt=0:direct=none:no-mbtree=1:force-cfr=1:aq-mode=0:partitions=none:no-deblock=1:threads=4:sliced-threads=1',
             '-c:a:0', 'aac', '-b:a:0', '128k', '-ar:a:0', '48000', '-ac:a:0', '2'
         );
     } else {

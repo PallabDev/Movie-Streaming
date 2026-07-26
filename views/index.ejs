@@ -877,7 +877,7 @@
                 mediaRecorder = new MediaRecorder(mediaStream, {
                     mimeType: preferredMime,
                     audioBitsPerSecond: 128000, // 128 kbps audio to match HLS audio bitrate
-                    videoBitsPerSecond: 6000000 // 6 Mbps target for 720p
+                    videoBitsPerSecond: 4000000 // 4 Mbps — matches server 1080p encode bitrate
                 });
 
                 mediaRecorder.ondataavailable = (event) => {
