@@ -279,18 +279,16 @@ streamWss.on('connection', (ws) => {
             try { fs.writeFileSync(tmpPath, buf); } catch (e) { logger.warn('Failed to write probe tmp file', e); }
 
             // Run ffprobe synchronously on the saved init segment
-            let is720h264 = false;
+            let isH264 = false;
             try {
                 const probe = spawnSync('ffprobe', ['-v', 'error', '-select_streams', 'v:0', '-show_entries', 'stream=codec_name,width,height', '-of', 'json', tmpPath], { encoding: 'utf8' });
                 if (probe && probe.stdout) {
                     const info = JSON.parse(probe.stdout);
                     const s = info.streams && info.streams[0];
-                    if (s && s.codec_name && s.width && s.height) {
-                        const w = parseInt(s.width || 0, 10);
-                        const h = parseInt(s.height || 0, 10);
+                    if (s && s.codec_name) {
                         const codec = (s.codec_name || '').toLowerCase();
-                        if (codec === 'h264' && ((w === 1280 && h === 720) || (w === 720 && h === 1280))) {
-                            is720h264 = true;
+                        if (codec === 'h264') {
+                            isH264 = true;
                         }
                     }
                 }
@@ -298,8 +296,8 @@ streamWss.on('connection', (ws) => {
 
             try { if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath); } catch (e) { }
 
-            if (is720h264) {
-                logger.info(`Probe: input appears to be H.264 720p for [${key}] -- restarting FFmpeg with passthrough`);
+            if (isH264) {
+                logger.info(`Probe: input appears to be H.264 for [${key}] -- restarting FFmpeg with 1080p passthrough + multi-bitrate transcode`);
                 (async () => {
                     try {
                         stopFfmpegLive(session);
@@ -494,13 +492,17 @@ async function startFfmpegLive(session, opts = {}) {
 
     let filterComplex = '';
     if (!usePassthrough) {
-        filterComplex = '[0:v]fps=30:round=down,format=yuv420p,split=3[v1080src][v720src][v480src];' +
+        // Cascaded downscaling: 1080p -> 720p -> 480p to minimize CPU scaling work
+        filterComplex = '[0:v]format=yuv420p,split=2[v1080src][v1080down];' +
             '[v1080src]scale=1920:1080:flags=fast_bilinear,setsar=1[v1080];' +
-            '[v720src]scale=1280:720:flags=fast_bilinear,setsar=1[v720];' +
-            '[v480src]scale=854:480:flags=fast_bilinear,setsar=1[v480];' +
+            '[v1080down]scale=1280:720:flags=fast_bilinear,setsar=1,split=2[v720][v720down];' +
+            '[v720down]scale=854:480:flags=fast_bilinear,setsar=1[v480];' +
             '[0:a][1:a]amix=inputs=2:duration=first:dropout_transition=0:normalize=0,aresample=async=1:first_pts=0,asplit=3[a1080][a720][a480]';
     } else {
-        filterComplex = '[0:a][1:a]amix=inputs=2:duration=first:dropout_transition=0:normalize=0,aresample=async=1:first_pts=0,asplit=2[a1080][a720]';
+        // 1080p passthrough mode: pass 0:v directly to stream 0 while cascaded downscaling to 720p and 480p
+        filterComplex = '[0:v]format=yuv420p,scale=1280:720:flags=fast_bilinear,setsar=1,split=2[v720][v720down];' +
+            '[v720down]scale=854:480:flags=fast_bilinear,setsar=1[v480];' +
+            '[0:a][1:a]amix=inputs=2:duration=first:dropout_transition=0:normalize=0,aresample=async=1:first_pts=0,asplit=3[a1080][a720][a480]';
     }
 
     const args = [
@@ -515,47 +517,49 @@ async function startFfmpegLive(session, opts = {}) {
 
         '-filter_complex',
         filterComplex,
-
     ];
 
     if (!usePassthrough) {
         args.push(
-            // 1080p H.264: 6 Mbps — 2 threads for speed
+            // 1080p H.264: 4 Mbps — optimized x264 zerolatency parameters
             '-map', '[v1080]', '-map', '[a1080]',
             '-c:v:0', 'libx264', '-preset', 'ultrafast', '-tune:v:0', 'zerolatency',
             '-profile:v:0', 'main', '-pix_fmt:v:0', 'yuv420p',
-            '-b:v:0', '6000k', '-maxrate:v:0', '6000k', '-bufsize:v:0', '6000k',
+            '-b:v:0', '4000k', '-maxrate:v:0', '4000k', '-bufsize:v:0', '8000k',
             '-r:v:0', '30', '-g:v:0', '30', '-keyint_min:v:0', '30', '-sc_threshold:v:0', '0',
-            '-x264-params:v:0', 'keyint=30:min-keyint=30:scenecut=0:bframes=0:rc-lookahead=0:ref=1:me=dia:subme=0:trellis=0:mixed-refs=0:8x8dct=0:weightb=0:b-adapt=0:direct=auto:no-mbtree=1:force-cfr=1:threads=4',
+            '-x264-params:v:0', 'keyint=30:min-keyint=30:scenecut=0:bframes=0:rc-lookahead=0:ref=1:me=dia:subme=0:trellis=0:mixed-refs=0:8x8dct=0:weightb=0:b-adapt=0:direct=none:no-mbtree=1:force-cfr=1:aq-mode=0:partitions=none:no-deblock=1:threads=2:sliced-threads=1',
             '-c:a:0', 'aac', '-b:a:0', '128k', '-ar:a:0', '48000', '-ac:a:0', '2'
-        );
-        args.push(
-            // 720p H.264: 3 Mbps — 1 thread
-            '-map', '[v720]', '-map', '[a720]',
-            '-c:v:1', 'libx264', '-preset', 'ultrafast', '-tune:v:1', 'zerolatency',
-            '-profile:v:1', 'main', '-pix_fmt:v:1', 'yuv420p',
-            '-b:v:1', '3000k', '-maxrate:v:1', '3000k', '-bufsize:v:1', '3000k',
-            '-r:v:1', '30', '-g:v:1', '30', '-keyint_min:v:1', '30', '-sc_threshold:v:1', '0',
-            '-x264-params:v:1', 'keyint=30:min-keyint=30:scenecut=0:bframes=0:rc-lookahead=0:ref=1:me=dia:subme=0:trellis=0:mixed-refs=0:8x8dct=0:weightb=0:b-adapt=0:direct=auto:no-mbtree=1:force-cfr=1:threads=2',
-            '-c:a:1', 'aac', '-b:a:1', '128k', '-ar:a:1', '48000', '-ac:a:1', '2'
-        );
-        args.push(
-            // 480p H.264: 1 Mbps — 1 thread
-            '-map', '[v480]', '-map', '[a480]',
-            '-c:v:2', 'libx264', '-preset', 'ultrafast', '-tune:v:2', 'zerolatency',
-            '-profile:v:2', 'main', '-pix_fmt:v:2', 'yuv420p',
-            '-b:v:2', '1000k', '-maxrate:v:2', '1000k', '-bufsize:v:2', '1000k',
-            '-r:v:2', '30', '-g:v:2', '30', '-keyint_min:v:2', '30', '-sc_threshold:v:2', '0',
-            '-x264-params:v:2', 'keyint=30:min-keyint=30:scenecut=0:bframes=0:rc-lookahead=0:ref=1:me=dia:subme=0:trellis=0:mixed-refs=0:8x8dct=0:weightb=0:b-adapt=0:direct=auto:no-mbtree=1:force-cfr=1:threads=2',
-            '-c:a:2', 'aac', '-b:a:2', '96k', '-ar:a:2', '48000', '-ac:a:2', '2'
         );
     } else {
         args.push(
+            // 1080p H.264 Passthrough (0% CPU video encoding)
             '-map', '0:v', '-map', '[a1080]',
             '-c:v:0', 'copy',
             '-c:a:0', 'aac', '-b:a:0', '128k', '-ar:a:0', '48000', '-ac:a:0', '2'
         );
     }
+
+    args.push(
+        // 720p H.264: 2 Mbps
+        '-map', '[v720]', '-map', '[a720]',
+        '-c:v:1', 'libx264', '-preset', 'ultrafast', '-tune:v:1', 'zerolatency',
+        '-profile:v:1', 'main', '-pix_fmt:v:1', 'yuv420p',
+        '-b:v:1', '2000k', '-maxrate:v:1', '2000k', '-bufsize:v:1', '4000k',
+        '-r:v:1', '25', '-g:v:1', '25', '-keyint_min:v:1', '25', '-sc_threshold:v:1', '0',
+        '-x264-params:v:1', 'keyint=25:min-keyint=25:scenecut=0:bframes=0:rc-lookahead=0:ref=1:me=dia:subme=0:trellis=0:mixed-refs=0:8x8dct=0:weightb=0:b-adapt=0:direct=none:no-mbtree=1:force-cfr=1:aq-mode=0:partitions=none:no-deblock=1:threads=1',
+        '-c:a:1', 'aac', '-b:a:1', '128k', '-ar:a:1', '48000', '-ac:a:1', '2'
+    );
+
+    args.push(
+        // 480p H.264: 800 kbps
+        '-map', '[v480]', '-map', '[a480]',
+        '-c:v:2', 'libx264', '-preset', 'ultrafast', '-tune:v:2', 'zerolatency',
+        '-profile:v:2', 'main', '-pix_fmt:v:2', 'yuv420p',
+        '-b:v:2', '800k', '-maxrate:v:2', '800k', '-bufsize:v:2', '1600k',
+        '-r:v:2', '24', '-g:v:2', '24', '-keyint_min:v:2', '24', '-sc_threshold:v:2', '0',
+        '-x264-params:v:2', 'keyint=24:min-keyint=24:scenecut=0:bframes=0:rc-lookahead=0:ref=1:me=dia:subme=0:trellis=0:mixed-refs=0:8x8dct=0:weightb=0:b-adapt=0:direct=none:no-mbtree=1:force-cfr=1:aq-mode=0:partitions=none:no-deblock=1:threads=1',
+        '-c:a:2', 'aac', '-b:a:2', '96k', '-ar:a:2', '48000', '-ac:a:2', '2'
+    );
 
     args.push(
         '-f', 'hls',
