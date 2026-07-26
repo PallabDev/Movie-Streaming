@@ -13,8 +13,6 @@ services:
       caddy: ${DOMAIN:-watch.pallabdev.in}
       caddy.reverse_proxy: '{{upstreams ${PORT:-5992}}}'
       caddy.reverse_proxy.flush_interval: '0'
-      caddy.reverse_proxy.buffer_requests: 'off'
-      caddy.reverse_proxy.buffer_responses: 'off'
     networks:
       - caddy_net
 
