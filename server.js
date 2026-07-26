@@ -13,6 +13,7 @@ import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
 import { db } from './db/index.js';
 import { users, streamSessions } from './db/schema.js';
+import logger, { getCpuUsage, getSystemInfo } from './logger.js';
 import { initDb } from './db/migrate.js';
 import { eq, desc, sql } from 'drizzle-orm';
 
@@ -64,7 +65,7 @@ app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
 
 // Initialize Database schema and seed default Admin (watch@watch.in / HexWatch78)
-initDb().catch(console.error);
+initDb().catch(err => logger.error('DB init failed', err));
 
 // ─── Authentication Middlewares ──────────────────────────────────────────────
 function getAuthUser(req) {
@@ -202,7 +203,7 @@ wss.on('connection', (ws) => {
         }
         broadcastAdminTelemetry();
     });
-    ws.on('error', (err) => console.warn(`[Status WS Error ${key}]:`, err.message));
+    ws.on('error', (err) => logger.warn(`[Status WS Error ${key}]: ${err.message}`));
 });
 
 function broadcastStatus(session, liveState) {
@@ -246,13 +247,13 @@ function broadcastAdminTelemetry() {
 
 streamWss.on('connection', (ws) => {
     const key = ws.streamKey || 'default';
-    console.log(`⚡ Host connected to WebSocket Ingest for [${key}]`);
+    logger.info(`⚡ Host connected to WebSocket Ingest for [${key}]`);
 
     const session = activeStreams.get(key);
     if (session) {
         session.hostAlive = true;
         if (session.disconnectTimer) {
-            console.log(`🔄 Host reconnected to WebSocket Ingest for [${key}]! Cancelled 90-second grace timer.`);
+            logger.info(`🔄 Host reconnected to WebSocket Ingest for [${key}]! Cancelled 90-second grace timer.`);
             clearTimeout(session.disconnectTimer);
             session.disconnectTimer = null;
         }
@@ -275,7 +276,7 @@ streamWss.on('connection', (ws) => {
             if (buf.length < 256) return; // insufficient data to probe
 
             const tmpPath = path.join(session.liveDir, 'probe_init.bin');
-            try { fs.writeFileSync(tmpPath, buf); } catch (e) { console.warn('Failed to write probe tmp file', e); }
+            try { fs.writeFileSync(tmpPath, buf); } catch (e) { logger.warn('Failed to write probe tmp file', e); }
 
             // Run ffprobe synchronously on the saved init segment
             let is720h264 = false;
@@ -293,12 +294,12 @@ streamWss.on('connection', (ws) => {
                         }
                     }
                 }
-            } catch (e) { console.warn('ffprobe failed', e); }
+            } catch (e) { logger.warn('ffprobe failed', e); }
 
             try { if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath); } catch (e) { }
 
             if (is720h264) {
-                console.log(`🔎 Probe: input appears to be H.264 720p for [${key}] — restarting FFmpeg with passthrough`);
+                logger.info(`🔎 Probe: input appears to be H.264 720p for [${key}] — restarting FFmpeg with passthrough`);
                 (async () => {
                     try {
                         stopFfmpegLive(session);
@@ -309,14 +310,14 @@ streamWss.on('connection', (ws) => {
                                 for (const c of session._probeBuffer.chunks) session.ffmpegProcess.stdin.write(c);
                             } catch (e) { }
                         }
-                    } catch (e) { console.warn('Failed to restart ffmpeg with passthrough', e); }
+                    } catch (e) { logger.warn('Failed to restart ffmpeg with passthrough', e); }
                 })();
             }
 
             // free memory
             session._probeBuffer.chunks = [];
             session._probeBuffer.size = 0;
-        } catch (e) { console.warn('runProbeNow error', e); }
+        } catch (e) { logger.warn('runProbeNow error', e); }
     }
 
     ws.on('message', (data) => {
@@ -355,18 +356,18 @@ streamWss.on('connection', (ws) => {
     });
 
     ws.on('error', (err) => {
-        console.warn(`[Stream WS Error ${key}]:`, err.message);
+        logger.warn(`[Stream WS Error ${key}]: ${err.message}`);
         const session = activeStreams.get(key);
         if (session) session.failureCount = (session.failureCount || 0) + 1;
     });
     ws.on('close', () => {
-        console.log(`⚠️ Host WebSocket disconnected for [${key}]. Keeping FFmpeg process alive for 90s reconnection window...`);
+        logger.info(`⚠️ Host WebSocket disconnected for [${key}]. Keeping FFmpeg process alive for 90s reconnection window...`);
         const session = activeStreams.get(key);
         if (session) session.hostAlive = false;
         if (session && session.isLive) {
             if (session.disconnectTimer) clearTimeout(session.disconnectTimer);
             session.disconnectTimer = setTimeout(() => {
-                console.log(`🛑 90-second reconnection window expired for [${key}]. Stopping FFmpeg process...`);
+                logger.info(`🛑 90-second reconnection window expired for [${key}]. Stopping FFmpeg process...`);
                 stopFfmpegLive(session);
                 broadcastStatus(session, false);
                 broadcastAdminTelemetry();
@@ -406,7 +407,7 @@ viewWss.on('connection', (ws) => {
 
     if (!session.qualityViewers[quality]) session.qualityViewers[quality] = new Set();
     session.qualityViewers[quality].add(ws);
-    console.log(`👁 Viewer connected to [${key}] ${quality} (${getTotalViewerCount(session)} total)`);
+        logger.info(`👁 Viewer connected to [${key}] ${quality} (${getTotalViewerCount(session)} total)`);
 
     if (session.initSegments[quality]) {
         try { ws.send(session.initSegments[quality]); } catch (e) { }
@@ -425,7 +426,7 @@ viewWss.on('connection', (ws) => {
                     if (!session.qualityViewers[newQ]) session.qualityViewers[newQ] = new Set();
                     session.qualityViewers[newQ].add(ws);
                     ws.currentQuality = newQ;
-                    console.log(`🔀 Viewer switched quality: [${key}] ${oldQ} → ${newQ}`);
+                    logger.info(`🔀 Viewer switched quality: [${key}] ${oldQ} → ${newQ}`);
                     if (session.initSegments[newQ]) {
                         try { ws.send(session.initSegments[newQ]); } catch (e) { }
                     }
@@ -437,10 +438,10 @@ viewWss.on('connection', (ws) => {
     ws.on('close', () => {
         const currentQ = ws.currentQuality || quality;
         if (session.qualityViewers[currentQ]) session.qualityViewers[currentQ].delete(ws);
-        console.log(`👁 Viewer disconnected from [${key}] ${currentQ} (${getTotalViewerCount(session)} total)`);
+        logger.info(`👁 Viewer disconnected from [${key}] ${currentQ} (${getTotalViewerCount(session)} total)`);
         broadcastStatus(session, session.isLive);
     });
-    ws.on('error', (err) => console.warn(`[Viewer WS Error ${key}]:`, err.message));
+    ws.on('error', (err) => logger.warn(`[Viewer WS Error ${key}]: ${err.message}`));
 });
 
 setInterval(() => {
@@ -478,12 +479,12 @@ async function startFfmpegLive(session, opts = {}) {
     // 1-Hour Stream Limit Timer
     session.countedAgainstLimit = false;
     session.oneHourTimer = setTimeout(async () => {
-        console.log(`⏰ Stream [${session.streamKey}] reached 1 hour duration. Incrementing stream count for host ${session.hostId}...`);
+        logger.info(`⏰ Stream [${session.streamKey}] reached 1 hour duration. Incrementing stream count for host ${session.hostId}...`);
         if (session.hostId && !session.countedAgainstLimit) {
             session.countedAgainstLimit = true;
             try {
                 await db.update(users).set({ streamCount: sql`${users.streamCount} + 1` }).where(eq(users.id, session.hostId));
-            } catch (e) { console.error('Error updating user streamCount:', e); }
+            } catch (e) { logger.error('Error updating user streamCount', e); }
         }
     }, 3600 * 1000);
 
@@ -567,7 +568,7 @@ async function startFfmpegLive(session, opts = {}) {
         `${hlsDir}/stream_%v.m3u8`
     );
 
-    console.log(`⚡ Spawning Live Stream Generator for [${session.streamKey}]...`);
+    logger.info(`⚡ Spawning Live Stream Generator for [${session.streamKey}]...`, { sys: getSystemInfo() });
     session.ffmpegProcess = spawn('ffmpeg', args, { stdio: ['pipe', 'pipe', 'pipe'] });
     session.isLive = true;
 
@@ -588,19 +589,21 @@ async function startFfmpegLive(session, opts = {}) {
                         lastLoggedTime = now;
                         const fpsMatch = msg.match(/fps=\s*([\d.]+)/);
                         const speedMatch = msg.match(/speed=\s*([\d.x]+)/);
-                        const fps = fpsMatch ? parseFloat(fpsMatch[1]).toFixed(1) : '30.0';
+                        const fps = fpsMatch ? parseFloat(fpsMatch[1]).toFixed(1) : '0.0';
                         const speed = speedMatch ? speedMatch[1] : '1.0x';
-                        console.log(`[FFmpeg ${session.streamKey}] Speed: ${speed} | FPS: ${fps}`);
+                        const cpu = getCpuUsage();
+                        const load = os.loadavg().map(l => l.toFixed(2)).join(' ');
+                        logger.info(`[FFmpeg ${session.streamKey}] Speed: ${speed} | FPS: ${fps} | CPU: ${cpu}% | Load: ${load}`, { tag: 'FFMPEG' });
                     }
                 } else if (msg.includes('Error') || msg.includes('Invalid') || msg.includes('failed')) {
-                    console.error(`[FFmpeg Error ${session.streamKey}]:`, msg);
+                    logger.error(`[FFmpeg Error ${session.streamKey}]: ${msg}`);
                 }
             }
         });
     }
 
     session.ffmpegProcess.on('exit', (code, signal) => {
-        console.warn(`⚠️ FFmpeg exited for [${session.streamKey}] (code=${code}, signal=${signal}). Host WS alive: ${session.hostAlive}`);
+        logger.warn(`⚠️ FFmpeg exited for [${session.streamKey}] (code=${code}, signal=${signal}). Host WS alive: ${session.hostAlive}`);
         session.ffmpegProcess = null;
         if (!session.hostAlive) {
             session.isLive = false;
@@ -818,7 +821,7 @@ app.get(['/user', '/users'], requireAdmin, async (req, res) => {
 
         res.render('users', { usersList: usersListWithTelemetry, currentUser: req.user });
     } catch (err) {
-        console.error('User telemetry route error:', err);
+        logger.error('User telemetry route error', err);
         res.status(500).send('User telemetry error: ' + err.message);
     }
 });
@@ -880,10 +883,10 @@ app.post(['/api/streams/delete/:streamKey', '/api/streams/delete'], requireAuth,
         } catch (e) { }
 
         broadcastAdminTelemetry();
-        console.log(`🗑️ Stream [${streamKey}] deleted.`);
+        logger.info(`🗑️ Stream [${streamKey}] deleted.`);
         res.json({ success: true, message: `Stream [${streamKey}] deleted.` });
     } catch (err) {
-        console.error('Delete stream error:', err);
+        logger.error('Delete stream error', err);
         res.status(500).json({ success: false, error: err.message });
     }
 });
@@ -993,7 +996,7 @@ app.post(['/reset-stream', '/reset-stream/:streamKey'], async (req, res) => {
         broadcastStatus(session, true);
         res.json({ success: true, message: `Live stream ${key} started`, streamKey: key });
     } catch (err) {
-        console.error(`Error starting stream ${key}:`, err);
+        logger.error(`Error starting stream ${key}`, err);
         res.status(500).json({ success: false, error: err.message });
     }
 });
@@ -1008,11 +1011,11 @@ app.post(['/stop-stream', '/stop-stream/:streamKey'], async (req, res) => {
         stopFfmpegLive(session);
         broadcastStatus(session, false);
         broadcastAdminTelemetry();
-        console.log(`🔴 Stream [${key}] stopped and FFmpeg process killed immediately.`);
+        logger.info(`🔴 Stream [${key}] stopped and FFmpeg process killed immediately.`);
 
         if (session.cleanupTimer) clearTimeout(session.cleanupTimer);
         session.cleanupTimer = setTimeout(async () => {
-            console.log(`🧹 Purging local HLS files for [${key}]...`);
+            logger.info(`🧹 Purging local HLS files for [${key}]...`);
             clearLiveFolder(session);
         }, 10 * 60 * 1000);
 
@@ -1030,10 +1033,10 @@ app.post(['/stream', '/stream/:streamKey'], (req, res) => {
     const session = activeStreams.get(key);
     if (session) {
         if (session.disconnectTimer) {
-            console.log(`🔄 Incoming HTTP chunk stream for [${key}] during network drop! Refreshing 90-second grace timer.`);
+                logger.info(`🔄 Incoming HTTP chunk stream for [${key}] during network drop! Refreshing 90-second grace timer.`);
             clearTimeout(session.disconnectTimer);
             session.disconnectTimer = setTimeout(() => {
-                console.log(`🛑 90-second reconnection window expired for [${key}]. Stopping FFmpeg process...`);
+                logger.info(`🛑 90-second reconnection window expired for [${key}]. Stopping FFmpeg process...`);
                 stopFfmpegLive(session);
                 broadcastStatus(session, false);
                 broadcastAdminTelemetry();
@@ -1057,5 +1060,5 @@ app.use((err, req, res, next) => {
 });
 
 server.listen(PORT, () => {
-    console.log(`🚀 CoWatch Multi-Stream Platform running at ${APP_URL} (Port ${PORT})`);
+    logger.info(`🚀 CoWatch Multi-Stream Platform running at ${APP_URL} (Port ${PORT})`, { sys: getSystemInfo() });
 });
