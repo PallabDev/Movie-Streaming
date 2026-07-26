@@ -534,7 +534,7 @@ async function startFfmpegLive(session, opts = {}) {
             '-map', '[v720]', '-map', '[a720]',
             '-c:v:1', 'libx264', '-preset', 'ultrafast', '-tune:v:1', 'zerolatency',
             '-profile:v:1', 'main', '-pix_fmt:v:1', 'yuv420p',
-            '-b:v:1', '4500k', '-maxrate:v:1', '4500k', '-bufsize:v:1', '4500k',
+            '-b:v:1', '3000k', '-maxrate:v:1', '3000k', '-bufsize:v:1', '3000k',
             '-r:v:1', '30', '-g:v:1', '30', '-keyint_min:v:1', '30', '-sc_threshold:v:1', '0',
             '-x264-params:v:1', 'keyint=30:min-keyint=30:scenecut=0:bframes=0:rc-lookahead=0:ref=1',
             '-c:a:1', 'aac', '-b:a:1', '128k', '-ar:a:1', '48000', '-ac:a:1', '2'
@@ -551,7 +551,7 @@ async function startFfmpegLive(session, opts = {}) {
         '-map', '[v480]', '-map', '[a480]',
         '-c:v:2', 'libx264', '-preset', 'ultrafast', '-tune:v:2', 'zerolatency',
         '-profile:v:2', 'main', '-pix_fmt:v:2', 'yuv420p',
-        '-b:v:2', '2000k', '-maxrate:v:2', '2000k', '-bufsize:v:2', '2000k',
+        '-b:v:2', '1500k', '-maxrate:v:2', '1500k', '-bufsize:v:2', '1500k',
         '-r:v:2', '30', '-g:v:2', '30', '-keyint_min:v:2', '30', '-sc_threshold:v:2', '0',
         '-x264-params:v:2', 'keyint=30:min-keyint=30:scenecut=0:bframes=0:rc-lookahead=0:ref=1',
         '-c:a:2', 'aac', '-b:a:2', '96k', '-ar:a:2', '48000', '-ac:a:2', '2'
