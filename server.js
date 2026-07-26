@@ -48,7 +48,16 @@ app.use((req, res, next) => {
     next();
 });
 
-app.use(express.static(path.join(__dirname, 'public')));
+app.use(express.static(path.join(__dirname, 'public'), {
+    setHeaders: (res, path) => {
+        if (path.endsWith('.ts')) {
+            res.setHeader('Cache-Control', 'public, max-age=3');
+            res.setHeader('Accept-Ranges', 'bytes');
+        } else if (path.endsWith('.m3u8')) {
+            res.setHeader('Cache-Control', 'no-cache');
+        }
+    }
+}));
 app.use('/stream', express.raw({ type: '*/*', limit: '100mb' }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
@@ -286,7 +295,7 @@ streamWss.on('connection', (ws) => {
                 }
             } catch (e) { console.warn('ffprobe failed', e); }
 
-            try { if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath); } catch (e) {}
+            try { if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath); } catch (e) { }
 
             if (is720h264) {
                 console.log(`🔎 Probe: input appears to be H.264 720p for [${key}] — restarting FFmpeg with passthrough`);
@@ -479,7 +488,7 @@ async function startFfmpegLive(session, opts = {}) {
     }, 3600 * 1000);
 
     const hlsDir = session.liveDir.replace(/\\/g, '/');
-    
+
     const usePassthrough = !!opts.passthrough;
 
     let filterComplex = '';
@@ -516,7 +525,7 @@ async function startFfmpegLive(session, opts = {}) {
             '-map', '[v720]', '-map', '[a720]',
             '-c:v:0', 'libx264', '-preset', 'ultrafast', '-tune:v:0', 'zerolatency',
             '-profile:v:0', 'main', '-pix_fmt:v:0', 'yuv420p',
-            '-b:v:0', '4500k', '-maxrate:v:0', '4500k', '-bufsize:v:0', '9000k',
+            '-b:v:0', '4500k', '-maxrate:v:0', '4500k', '-bufsize:v:0', '4500k',
             '-r:v:0', '30', '-g:v:0', '60', '-keyint_min:v:0', '60', '-sc_threshold:v:0', '0',
             '-x264-params:v:0', 'keyint=60:min-keyint=60:scenecut=0:bframes=0:rc-lookahead=0:ref=1',
             '-c:a:0', 'aac', '-b:a:0', '128k', '-ar:a:0', '48000', '-ac:a:0', '2'
@@ -535,7 +544,7 @@ async function startFfmpegLive(session, opts = {}) {
         '-map', '[v480]', '-map', '[a480]',
         '-c:v:1', 'libx264', '-preset', 'ultrafast', '-tune:v:1', 'zerolatency',
         '-profile:v:1', 'main', '-pix_fmt:v:1', 'yuv420p',
-        '-b:v:1', '2000k', '-maxrate:v:1', '2000k', '-bufsize:v:1', '4000k',
+        '-b:v:1', '2000k', '-maxrate:v:1', '2000k', '-bufsize:v:1', '2000k',
         '-r:v:1', '30', '-g:v:1', '60', '-keyint_min:v:1', '60', '-sc_threshold:v:1', '0',
         '-x264-params:v:1', 'keyint=60:min-keyint=60:scenecut=0:bframes=0:rc-lookahead=0:ref=1',
         '-c:a:1', 'aac', '-b:a:1', '96k', '-ar:a:1', '48000', '-ac:a:1', '2'
@@ -543,8 +552,8 @@ async function startFfmpegLive(session, opts = {}) {
 
     args.push(
         '-f', 'hls',
-        '-hls_time', '2',
-        '-hls_list_size', '10',
+        '-hls_time', '1',
+        '-hls_list_size', '20',
         '-hls_flags', 'delete_segments+independent_segments',
         '-hls_segment_filename', `${hlsDir}/stream_%v%d.ts`,
         '-master_pl_name', 'master.m3u8',

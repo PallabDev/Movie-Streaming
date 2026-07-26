@@ -11,8 +11,14 @@ services:
       - APP_URL=${APP_URL:-https://watch.pallabdev.in}
     labels:
       caddy: ${DOMAIN:-watch.pallabdev.in}
-      caddy.reverse_proxy: "{{upstreams ${PORT:-5992}}}"
-      caddy.reverse_proxy.flush_interval: "-1"
+      caddy.reverse_proxy: '{{upstreams ${PORT:-5992}}}'
+      caddy.reverse_proxy.flush_interval: '0'
+      caddy.reverse_proxy.buffer_requests: 'off'
+      caddy.reverse_proxy.buffer_responses: 'off'
+      caddy.header: '-Server'
+      caddy.header.Cache-Control: 'public, max-age=3'
+      caddy.encode: 'gzip zstd'
+      caddy.encode.match.header.Content-Type: 'application/vnd.apple.mpegurl text/*'
     networks:
       - caddy_net
 
