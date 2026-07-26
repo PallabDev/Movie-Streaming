@@ -390,6 +390,11 @@
                     <span id="topChunksBadge"
                         style="background:#072f18;color:#9fe6c4;padding:6px 10px;border-radius:10px;font-size:13px;border:1px solid rgba(255,255,255,0.04);">Chunks
                         Sent: 0</span>
+                    <span id="topConnBadge"
+                        style="background:#072f18;color:#9fe6c4;padding:6px 10px;border-radius:10px;font-size:13px;border:1px solid rgba(255,255,255,0.04);display:flex;align-items:center;gap:6px;">
+                        <span id="connDot" style="width:8px;height:8px;border-radius:50%;background:#10b981;display:inline-block;"></span>
+                        <span id="connText">Stable Connection</span>
+                    </span>
                 </div>
             </div>
         </div>
@@ -501,6 +506,8 @@
         const topQualityBadge = document.getElementById('topQualityBadge');
         const topChunksBadge = document.getElementById('topChunksBadge');
         const playerWrapper = document.getElementById('playerWrapper');
+        const connDot = document.getElementById('connDot');
+        const connText = document.getElementById('connText');
 
         // Controls
         const playPauseBtn = document.getElementById('playPauseBtn');
@@ -663,7 +670,6 @@
                 try {
                     const data = JSON.parse(event.data);
                     if (data.type === 'STATUS') {
-                        // when host goes live/offline we may show/hide the top status box
                         if (topStatusBox) topStatusBox.style.display = data.live ? 'block' : 'none';
                     }
                 } catch (e) { }
@@ -673,26 +679,86 @@
         }
         connectHostStatusWebSocket();
 
+        // ─── Connection Quality Monitor ────────────────────────────────────────
+        let connStats = { sent: 0, failed: 0, wsConnected: false, wsOk: 0, wsFail: 0 };
+        let connCheckInterval = null;
+
+        function updateConnBadge(status, color) {
+            if (connDot) connDot.style.background = color;
+            if (connText) connText.textContent = status;
+            const badge = document.getElementById('topConnBadge');
+            if (badge) {
+                badge.style.background = color === '#10b981' ? '#072f18' :
+                    color === '#f59e0b' ? '#2f2207' : '#2f0707';
+                badge.style.color = color === '#10b981' ? '#9fe6c4' :
+                    color === '#f59e0b' ? '#f5c490' : '#f59090';
+            }
+        }
+
+        function evaluateConnection() {
+            const total = connStats.sent;
+            if (total < 3) return;
+            const failRate = connStats.failed / total;
+            const wsFailRate = (connStats.wsFail) / Math.max(connStats.wsOk + connStats.wsFail, 1);
+
+            if (connStats.wsConnected && failRate < 0.05 && wsFailRate < 0.1) {
+                updateConnBadge('Stable Connection', '#10b981');
+            } else if (failRate < 0.2 && wsFailRate < 0.3) {
+                updateConnBadge('Good Connection', '#22c55e');
+            } else if (failRate < 0.5) {
+                updateConnBadge('Unstable Connection', '#f59e0b');
+            } else {
+                updateConnBadge('Poor Connection', '#ef4444');
+            }
+        }
+
+        function startConnMonitor() {
+            connStats = { sent: 0, failed: 0, wsConnected: false, wsOk: 0, wsFail: 0 };
+            if (connCheckInterval) clearInterval(connCheckInterval);
+            connCheckInterval = setInterval(evaluateConnection, 3000);
+        }
+
+        function stopConnMonitor() {
+            if (connCheckInterval) { clearInterval(connCheckInterval); connCheckInterval = null; }
+            updateConnBadge('Offline', '#6b7280');
+        }
+
         async function sendChunk(blob, index) {
             try {
                 const arrayBuffer = await blob.arrayBuffer();
+                connStats.sent++;
                 if (streamWs && streamWs.readyState === WebSocket.OPEN) {
-                    streamWs.send(arrayBuffer);
+                    connStats.wsConnected = true;
+                    try {
+                        streamWs.send(arrayBuffer);
+                        connStats.wsOk++;
+                    } catch (e) {
+                        connStats.wsFail++;
+                        connStats.failed++;
+                    }
                 } else {
-                    fetch('/stream/' + currentStreamKey, {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/octet-stream',
-                            'x-chunk-index': index,
-                            'x-stream-key': currentStreamKey
-                        },
-                        body: arrayBuffer
-                    }).catch(() => { });
+                    connStats.wsConnected = false;
+                    try {
+                        await fetch('/stream/' + currentStreamKey, {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/octet-stream',
+                                'x-chunk-index': index,
+                                'x-stream-key': currentStreamKey
+                            },
+                            body: arrayBuffer
+                        });
+                        connStats.wsOk++;
+                    } catch (e) {
+                        connStats.wsFail++;
+                        connStats.failed++;
+                    }
                 }
                 if (topChunksBadge) topChunksBadge.textContent = `Chunks Sent: ${index + 1}`;
                 if (downloadBtn) downloadBtn.style.display = 'inline-flex';
             } catch (err) {
                 console.error("Failed to send chunk:", err);
+                connStats.failed++;
             }
         }
 
@@ -743,8 +809,8 @@
                 enableBackgroundKeepAlive();
                 const constraints = {
                     video: {
-                        width: { ideal: 1280, max: 1280 },
-                        height: { ideal: 720, max: 720 },
+                        width: { ideal: 1920, max: 1920 },
+                        height: { ideal: 1080, max: 1080 },
                         frameRate: { ideal: 30, max: 30 }
                     },
                     audio: {
@@ -764,6 +830,7 @@
                 chunkIndex = 0;
                 if (topChunksBadge) topChunksBadge.textContent = 'Chunks Sent: 0';
                 if (downloadBtn) downloadBtn.style.display = 'none';
+                startConnMonitor();
 
                 await connectStreamWebSocket();
 
@@ -858,6 +925,7 @@
             previewVideo.classList.remove('active');
             placeholder.style.display = 'flex';
             if (topStatusBox) topStatusBox.style.display = 'none';
+            stopConnMonitor();
 
             toggleShareBtn.classList.remove('stop');
             toggleShareBtn.classList.add('start');

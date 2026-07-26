@@ -219,6 +219,11 @@
                 </span>
                 <span id="quality-badge"
                     class="px-2 py-0.5 rounded text-[10px] font-mono bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">Auto</span>
+                <span id="conn-badge"
+                    class="px-2 py-0.5 rounded text-[10px] font-semibold bg-green-500/20 text-green-400 border border-green-500/30 flex items-center gap-1">
+                    <span id="conn-dot" class="w-1.5 h-1.5 rounded-full bg-green-400"></span>
+                    <span id="conn-label">Stable</span>
+                </span>
             </div>
         </div>
 
@@ -254,6 +259,10 @@
                         <div class="sh-quality-item selected" data-quality="auto" onclick="setQuality('auto')">
                             <span>Auto (ABR)</span>
                             <i class="fa-solid fa-check text-xs"></i>
+                        </div>
+                        <div class="sh-quality-item" data-quality="1080" onclick="setQuality(1080)">
+                            <span>1080p FHD</span>
+                            <i class="fa-solid fa-check text-xs hidden"></i>
                         </div>
                         <div class="sh-quality-item" data-quality="720" onclick="setQuality(720)">
                             <span>720p HD</span>
@@ -293,6 +302,9 @@
                 const qualityBtn = document.getElementById('sh-quality-btn');
                 const qualityMenu = document.getElementById('sh-quality-menu');
                 const qualityBadge = document.getElementById('quality-badge');
+                const connBadge = document.getElementById('conn-badge');
+                const connDot = document.getElementById('conn-dot');
+                const connLabel = document.getElementById('conn-label');
 
                 const currentStreamKey = '<%= typeof streamKey !== "undefined" ? streamKey : "default" %>';
                 const masterUrl = `/live-playlist/${encodeURIComponent(currentStreamKey)}/master.m3u8`;
@@ -394,6 +406,7 @@
                                 switch (data.type) {
                                     case Hls.ErrorTypes.NETWORK_ERROR:
                                         console.warn('Network error, retrying HLS manifest...');
+                                        updateConnViewer('poor');
                                         setTimeout(() => { if (hls) hls.loadSource(masterUrl); }, 1000);
                                         break;
                                     case Hls.ErrorTypes.MEDIA_ERROR:
@@ -406,6 +419,51 @@
                                 }
                             }
                         });
+
+                        // ─── Viewer Connection Quality Monitor ─────────────────────────
+                        let viewerConn = { loads: 0, fails: 0, lastBandwidth: 0 };
+                        let viewerConnTimer = null;
+
+                        function updateConnViewer(level) {
+                            const colors = { good: '#22c55e', stable: '#10b981', poor: '#ef4444' };
+                            const labels = { good: 'Good', stable: 'Stable', poor: 'Poor' };
+                            const bgColors = { good: 'bg-green-500/20', stable: 'bg-green-500/20', poor: 'bg-red-500/20' };
+                            const textColors = { good: 'text-green-400', stable: 'text-green-400', poor: 'text-red-400' };
+                            const borderColors = { good: 'border-green-500/30', stable: 'border-green-500/30', poor: 'border-red-500/30' };
+                            if (connDot) connDot.style.background = colors[level] || colors.stable;
+                            if (connLabel) connLabel.textContent = labels[level] || 'Stable';
+                            if (connBadge) {
+                                connBadge.className = connBadge.className
+                                    .replace(/bg-\w+-500\/20/g, '').replace(/text-\w+-400/g, '').replace(/border-\w+-500\/30/g, '')
+                                    + ' ' + (bgColors[level] || bgColors.stable) + ' ' + (textColors[level] || textColors.stable) + ' ' + (borderColors[level] || borderColors.stable);
+                            }
+                        }
+
+                        hls.on(Hls.Events.FRAG_LOADED, () => {
+                            viewerConn.loads++;
+                        });
+                        hls.on(Hls.Events.FRAG_LOAD_ERROR, () => {
+                            viewerConn.fails++;
+                        });
+                        hls.on(Hls.Events.FRAG_BUFFERED, () => {
+                            if (hls.bandwidthEstimate) viewerConn.lastBandwidth = hls.bandwidthEstimate;
+                        });
+
+                        if (viewerConnTimer) clearInterval(viewerConnTimer);
+                        viewerConnTimer = setInterval(() => {
+                            const total = viewerConn.loads;
+                            if (total < 2) return;
+                            const failRate = viewerConn.fails / total;
+                            const bw = viewerConn.lastBandwidth;
+                            if (failRate > 0.3 || bw < 500000) {
+                                updateConnViewer('poor');
+                            } else if (failRate > 0.1 || bw < 2000000) {
+                                updateConnViewer('good');
+                            } else {
+                                updateConnViewer('stable');
+                            }
+                            viewerConn = { loads: 0, fails: 0, lastBandwidth: viewerConn.lastBandwidth };
+                        }, 5000);
                     } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
                         video.src = masterUrl;
                         video.play().then(() => updatePlayIcon()).catch(() => updatePlayIcon());
