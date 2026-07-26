@@ -493,14 +493,12 @@ async function startFfmpegLive(session, opts = {}) {
 
     let filterComplex = '';
     if (!usePassthrough) {
-        filterComplex = '[0:v]fps=30:round=down,format=yuv420p,split=3[v1080src][v720src][v480src];' +
+        filterComplex = '[0:v]fps=30:round=down,format=yuv420p,split=2[v1080src][v720src];' +
             '[v1080src]scale=1920:1080:flags=fast_bilinear,setsar=1[v1080];' +
             '[v720src]scale=1280:720:flags=fast_bilinear,setsar=1[v720];' +
-            '[v480src]scale=854:480:flags=fast_bilinear,setsar=1[v480];' +
-            '[0:a][1:a]amix=inputs=2:duration=first:dropout_transition=0:normalize=0,aresample=async=1:first_pts=0,asplit=3[a1080][a720][a480]';
+            '[0:a][1:a]amix=inputs=2:duration=first:dropout_transition=0:normalize=0,aresample=async=1:first_pts=0,asplit=2[a1080][a720]';
     } else {
-        filterComplex = '[0:v]scale=854:480:flags=fast_bilinear,setsar=1[v480];' +
-            '[0:a][1:a]amix=inputs=2:duration=first:dropout_transition=0:normalize=0,aresample=async=1:first_pts=0,asplit=2[a720][a480]';
+        filterComplex = '[0:a][1:a]amix=inputs=2:duration=first:dropout_transition=0:normalize=0,aresample=async=1:first_pts=0,asplit=2[a1080][a720]';
     }
 
     const args = [
@@ -548,23 +546,13 @@ async function startFfmpegLive(session, opts = {}) {
     }
 
     args.push(
-        '-map', '[v480]', '-map', '[a480]',
-        '-c:v:2', 'libx264', '-preset', 'ultrafast', '-tune:v:2', 'zerolatency',
-        '-profile:v:2', 'main', '-pix_fmt:v:2', 'yuv420p',
-        '-b:v:2', '1500k', '-maxrate:v:2', '1500k', '-bufsize:v:2', '1500k',
-        '-r:v:2', '30', '-g:v:2', '30', '-keyint_min:v:2', '30', '-sc_threshold:v:2', '0',
-        '-x264-params:v:2', 'keyint=30:min-keyint=30:scenecut=0:bframes=0:rc-lookahead=0:ref=1',
-        '-c:a:2', 'aac', '-b:a:2', '96k', '-ar:a:2', '48000', '-ac:a:2', '2'
-    );
-
-    args.push(
         '-f', 'hls',
         '-hls_time', '1',
         '-hls_list_size', '20',
         '-hls_flags', 'delete_segments+independent_segments',
         '-hls_segment_filename', `${hlsDir}/stream_%v%d.ts`,
         '-master_pl_name', 'master.m3u8',
-        '-var_stream_map', 'v:0,a:0,name:1080p v:1,a:1,name:720p v:2,a:2,name:480p',
+        '-var_stream_map', 'v:0,a:0,name:1080p v:1,a:1,name:720p',
         `${hlsDir}/stream_%v.m3u8`
     );
 
