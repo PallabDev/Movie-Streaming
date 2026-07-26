@@ -385,7 +385,7 @@
                         <strong style="color:#fff; font-size:13px;">LIVE</strong>
                     </span>
                     <span id="topQualityBadge"
-                        style="background:#0f172a;color:#9fc7ff;padding:6px 10px;border-radius:10px;font-size:13px;border:1px solid rgba(255,255,255,0.04);">1080p
+                        style="background:#0f172a;color:#9fc7ff;padding:6px 10px;border-radius:10px;font-size:13px;border:1px solid rgba(255,255,255,0.04);">720p
                         30FPS</span>
                     <span id="topChunksBadge"
                         style="background:#072f18;color:#9fe6c4;padding:6px 10px;border-radius:10px;font-size:13px;border:1px solid rgba(255,255,255,0.04);">Chunks
@@ -809,8 +809,8 @@
                 enableBackgroundKeepAlive();
                 const constraints = {
                     video: {
-                        width: { ideal: 1920, max: 1920 },
-                        height: { ideal: 1080, max: 1080 },
+                        width: { ideal: 1280, max: 1280 },
+                        height: { ideal: 720, max: 720 },
                         frameRate: { ideal: 30, max: 30 }
                     },
                     audio: {
@@ -844,7 +844,7 @@
                 const videoTrack = mediaStream.getVideoTracks()[0];
                 if (videoTrack) {
                     const settings = videoTrack.getSettings();
-                    const height = settings.height || 1080;
+                    const height = settings.height || 720;
                     const fps = Math.round(settings.frameRate) || 30;
                     if (topQualityBadge) topQualityBadge.textContent = `${height}p ${fps}FPS`;
 
@@ -877,7 +877,7 @@
                 mediaRecorder = new MediaRecorder(mediaStream, {
                     mimeType: preferredMime,
                     audioBitsPerSecond: 128000, // 128 kbps audio to match HLS audio bitrate
-                    videoBitsPerSecond: 4000000 // 4 Mbps — matches server 1080p encode bitrate
+                    videoBitsPerSecond: 6000000 // 6 Mbps — matches server 720p encode bitrate
                 });
 
                 mediaRecorder.ondataavailable = (event) => {

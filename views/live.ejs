@@ -260,10 +260,6 @@
                             <span>Auto (ABR)</span>
                             <i class="fa-solid fa-check text-xs"></i>
                         </div>
-                        <div class="sh-quality-item" data-quality="1080" onclick="setQuality(1080)">
-                            <span>1080p FHD</span>
-                            <i class="fa-solid fa-check text-xs hidden"></i>
-                        </div>
                         <div class="sh-quality-item" data-quality="720" onclick="setQuality(720)">
                             <span>720p HD</span>
                             <i class="fa-solid fa-check text-xs hidden"></i>
@@ -397,7 +393,7 @@
                         hls.on(Hls.Events.LEVEL_SWITCHED, (event, data) => {
                             const level = hls.levels[data.level];
                             if (level && qualityBadge) {
-                                qualityBadge.textContent = `${level.height || '1080'}p ${hls.autoLevelEnabled ? '(Auto)' : ''}`;
+                                qualityBadge.textContent = `${level.height || '720'}p ${hls.autoLevelEnabled ? '(Auto)' : ''}`;
                             }
                         });
 
@@ -477,8 +473,7 @@
                     } else {
                         const foundIndex = hls.levels.findIndex(l =>
                             l.height === targetHeight ||
-                            (targetHeight === 1080 && l.height >= 1000) ||
-                            (targetHeight === 720 && l.height >= 700 && l.height < 1000) ||
+                            (targetHeight === 720 && l.height >= 700) ||
                             (targetHeight === 480 && l.height < 700)
                         );
                         if (foundIndex !== -1) {
