@@ -526,8 +526,8 @@ async function startFfmpegLive(session, opts = {}) {
             '-c:v:0', 'libx264', '-preset', 'ultrafast', '-tune:v:0', 'zerolatency',
             '-profile:v:0', 'main', '-pix_fmt:v:0', 'yuv420p',
             '-b:v:0', '4500k', '-maxrate:v:0', '4500k', '-bufsize:v:0', '4500k',
-            '-r:v:0', '30', '-g:v:0', '60', '-keyint_min:v:0', '60', '-sc_threshold:v:0', '0',
-            '-x264-params:v:0', 'keyint=60:min-keyint=60:scenecut=0:bframes=0:rc-lookahead=0:ref=1',
+            '-r:v:0', '30', '-g:v:0', '30', '-keyint_min:v:0', '30', '-sc_threshold:v:0', '0',
+            '-x264-params:v:0', 'keyint=30:min-keyint=30:scenecut=0:bframes=0:rc-lookahead=0:ref=1',
             '-c:a:0', 'aac', '-b:a:0', '128k', '-ar:a:0', '48000', '-ac:a:0', '2'
         );
     } else {
@@ -545,8 +545,8 @@ async function startFfmpegLive(session, opts = {}) {
         '-c:v:1', 'libx264', '-preset', 'ultrafast', '-tune:v:1', 'zerolatency',
         '-profile:v:1', 'main', '-pix_fmt:v:1', 'yuv420p',
         '-b:v:1', '2000k', '-maxrate:v:1', '2000k', '-bufsize:v:1', '2000k',
-        '-r:v:1', '30', '-g:v:1', '60', '-keyint_min:v:1', '60', '-sc_threshold:v:1', '0',
-        '-x264-params:v:1', 'keyint=60:min-keyint=60:scenecut=0:bframes=0:rc-lookahead=0:ref=1',
+        '-r:v:1', '30', '-g:v:1', '30', '-keyint_min:v:1', '30', '-sc_threshold:v:1', '0',
+        '-x264-params:v:1', 'keyint=30:min-keyint=30:scenecut=0:bframes=0:rc-lookahead=0:ref=1',
         '-c:a:1', 'aac', '-b:a:1', '96k', '-ar:a:1', '48000', '-ac:a:1', '2'
     );
 
