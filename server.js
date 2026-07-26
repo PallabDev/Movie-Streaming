@@ -247,13 +247,13 @@ function broadcastAdminTelemetry() {
 
 streamWss.on('connection', (ws) => {
     const key = ws.streamKey || 'default';
-    logger.info(`⚡ Host connected to WebSocket Ingest for [${key}]`);
+    logger.info(`Host connected to WebSocket Ingest for [${key}]`);
 
     const session = activeStreams.get(key);
     if (session) {
         session.hostAlive = true;
         if (session.disconnectTimer) {
-            logger.info(`🔄 Host reconnected to WebSocket Ingest for [${key}]! Cancelled 90-second grace timer.`);
+            logger.info(`Host reconnected to WebSocket Ingest for [${key}]! Cancelled 90-second grace timer.`);
             clearTimeout(session.disconnectTimer);
             session.disconnectTimer = null;
         }
@@ -299,7 +299,7 @@ streamWss.on('connection', (ws) => {
             try { if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath); } catch (e) { }
 
             if (is720h264) {
-                logger.info(`🔎 Probe: input appears to be H.264 720p for [${key}] — restarting FFmpeg with passthrough`);
+                logger.info(`Probe: input appears to be H.264 720p for [${key}] -- restarting FFmpeg with passthrough`);
                 (async () => {
                     try {
                         stopFfmpegLive(session);
@@ -361,13 +361,13 @@ streamWss.on('connection', (ws) => {
         if (session) session.failureCount = (session.failureCount || 0) + 1;
     });
     ws.on('close', () => {
-        logger.info(`⚠️ Host WebSocket disconnected for [${key}]. Keeping FFmpeg process alive for 90s reconnection window...`);
+        logger.info(`Host WebSocket disconnected for [${key}]. Keeping FFmpeg process alive for 90s reconnection window...`);
         const session = activeStreams.get(key);
         if (session) session.hostAlive = false;
         if (session && session.isLive) {
             if (session.disconnectTimer) clearTimeout(session.disconnectTimer);
             session.disconnectTimer = setTimeout(() => {
-                logger.info(`🛑 90-second reconnection window expired for [${key}]. Stopping FFmpeg process...`);
+                logger.info(`90-second reconnection window expired for [${key}]. Stopping FFmpeg process...`);
                 stopFfmpegLive(session);
                 broadcastStatus(session, false);
                 broadcastAdminTelemetry();
@@ -407,7 +407,7 @@ viewWss.on('connection', (ws) => {
 
     if (!session.qualityViewers[quality]) session.qualityViewers[quality] = new Set();
     session.qualityViewers[quality].add(ws);
-        logger.info(`👁 Viewer connected to [${key}] ${quality} (${getTotalViewerCount(session)} total)`);
+        logger.info(`Viewer connected to [${key}] ${quality} (${getTotalViewerCount(session)} total)`);
 
     if (session.initSegments[quality]) {
         try { ws.send(session.initSegments[quality]); } catch (e) { }
@@ -426,7 +426,7 @@ viewWss.on('connection', (ws) => {
                     if (!session.qualityViewers[newQ]) session.qualityViewers[newQ] = new Set();
                     session.qualityViewers[newQ].add(ws);
                     ws.currentQuality = newQ;
-                    logger.info(`🔀 Viewer switched quality: [${key}] ${oldQ} → ${newQ}`);
+                    logger.info(`Viewer switched quality: [${key}] ${oldQ} -> ${newQ}`);
                     if (session.initSegments[newQ]) {
                         try { ws.send(session.initSegments[newQ]); } catch (e) { }
                     }
@@ -438,7 +438,7 @@ viewWss.on('connection', (ws) => {
     ws.on('close', () => {
         const currentQ = ws.currentQuality || quality;
         if (session.qualityViewers[currentQ]) session.qualityViewers[currentQ].delete(ws);
-        logger.info(`👁 Viewer disconnected from [${key}] ${currentQ} (${getTotalViewerCount(session)} total)`);
+        logger.info(`Viewer disconnected from [${key}] ${currentQ} (${getTotalViewerCount(session)} total)`);
         broadcastStatus(session, session.isLive);
     });
     ws.on('error', (err) => logger.warn(`[Viewer WS Error ${key}]: ${err.message}`));
@@ -479,7 +479,7 @@ async function startFfmpegLive(session, opts = {}) {
     // 1-Hour Stream Limit Timer
     session.countedAgainstLimit = false;
     session.oneHourTimer = setTimeout(async () => {
-        logger.info(`⏰ Stream [${session.streamKey}] reached 1 hour duration. Incrementing stream count for host ${session.hostId}...`);
+        logger.info(`Stream [${session.streamKey}] reached 1 hour duration. Incrementing stream count for host ${session.hostId}...`);
         if (session.hostId && !session.countedAgainstLimit) {
             session.countedAgainstLimit = true;
             try {
@@ -526,7 +526,7 @@ async function startFfmpegLive(session, opts = {}) {
             '-profile:v:0', 'main', '-pix_fmt:v:0', 'yuv420p',
             '-b:v:0', '6000k', '-maxrate:v:0', '6000k', '-bufsize:v:0', '6000k',
             '-r:v:0', '30', '-g:v:0', '30', '-keyint_min:v:0', '30', '-sc_threshold:v:0', '0',
-            '-x264-params:v:0', 'keyint=30:min-keyint=30:scenecut=0:bframes=0:rc-lookahead=0:ref=1:me=dia:subme=0:trellis=0:mixed-refs=0:8x8dct=0:weightb=0:b-adapt=0:direct=auto:threads=2',
+            '-x264-params:v:0', 'keyint=30:min-keyint=30:scenecut=0:bframes=0:rc-lookahead=0:ref=1:me=dia:subme=0:trellis=0:mixed-refs=0:8x8dct=0:weightb=0:b-adapt=0:direct=auto:no-mbtree=1:force-cfr=1',
             '-c:a:0', 'aac', '-b:a:0', '128k', '-ar:a:0', '48000', '-ac:a:0', '2'
         );
         args.push(
@@ -536,7 +536,7 @@ async function startFfmpegLive(session, opts = {}) {
             '-profile:v:1', 'main', '-pix_fmt:v:1', 'yuv420p',
             '-b:v:1', '3000k', '-maxrate:v:1', '3000k', '-bufsize:v:1', '3000k',
             '-r:v:1', '30', '-g:v:1', '30', '-keyint_min:v:1', '30', '-sc_threshold:v:1', '0',
-            '-x264-params:v:1', 'keyint=30:min-keyint=30:scenecut=0:bframes=0:rc-lookahead=0:ref=1:me=dia:subme=0:trellis=0:mixed-refs=0:8x8dct=0:weightb=0:b-adapt=0:direct=auto:threads=1',
+            '-x264-params:v:1', 'keyint=30:min-keyint=30:scenecut=0:bframes=0:rc-lookahead=0:ref=1:me=dia:subme=0:trellis=0:mixed-refs=0:8x8dct=0:weightb=0:b-adapt=0:direct=auto:no-mbtree=1:force-cfr=1',
             '-c:a:1', 'aac', '-b:a:1', '128k', '-ar:a:1', '48000', '-ac:a:1', '2'
         );
         args.push(
@@ -546,7 +546,7 @@ async function startFfmpegLive(session, opts = {}) {
             '-profile:v:2', 'main', '-pix_fmt:v:2', 'yuv420p',
             '-b:v:2', '1000k', '-maxrate:v:2', '1000k', '-bufsize:v:2', '1000k',
             '-r:v:2', '30', '-g:v:2', '30', '-keyint_min:v:2', '30', '-sc_threshold:v:2', '0',
-            '-x264-params:v:2', 'keyint=30:min-keyint=30:scenecut=0:bframes=0:rc-lookahead=0:ref=1:me=dia:subme=0:trellis=0:mixed-refs=0:8x8dct=0:weightb=0:b-adapt=0:direct=auto:threads=1',
+            '-x264-params:v:2', 'keyint=30:min-keyint=30:scenecut=0:bframes=0:rc-lookahead=0:ref=1:me=dia:subme=0:trellis=0:mixed-refs=0:8x8dct=0:weightb=0:b-adapt=0:direct=auto:no-mbtree=1:force-cfr=1',
             '-c:a:2', 'aac', '-b:a:2', '96k', '-ar:a:2', '48000', '-ac:a:2', '2'
         );
     } else {
@@ -568,7 +568,7 @@ async function startFfmpegLive(session, opts = {}) {
         `${hlsDir}/stream_%v.m3u8`
     );
 
-    logger.info(`⚡ Spawning Live Stream Generator for [${session.streamKey}]...`, { sys: getSystemInfo() });
+    logger.info(`Spawning Live Stream Generator for [${session.streamKey}]...`, { sys: getSystemInfo() });
     session.ffmpegProcess = spawn('ffmpeg', args, { stdio: ['pipe', 'pipe', 'pipe'] });
     session.isLive = true;
 
@@ -593,7 +593,7 @@ async function startFfmpegLive(session, opts = {}) {
                         const speed = speedMatch ? speedMatch[1] : '1.0x';
                         const cpu = getCpuUsage();
                         const load = os.loadavg().map(l => l.toFixed(2)).join(' ');
-                        logger.info(`[FFmpeg ${session.streamKey}] Speed: ${speed} | FPS: ${fps} | CPU: ${cpu}% | Load: ${load}`, { tag: 'FFMPEG' });
+                        logger.info(`[FFmpeg ${session.streamKey}] Speed: ${speed} | FPS: ${fps} | CPU: ${cpu}% | Load: ${load}`);
                     }
                 } else if (msg.includes('Error') || msg.includes('Invalid') || msg.includes('failed')) {
                     logger.error(`[FFmpeg Error ${session.streamKey}]: ${msg}`);
@@ -603,7 +603,7 @@ async function startFfmpegLive(session, opts = {}) {
     }
 
     session.ffmpegProcess.on('exit', (code, signal) => {
-        logger.warn(`⚠️ FFmpeg exited for [${session.streamKey}] (code=${code}, signal=${signal}). Host WS alive: ${session.hostAlive}`);
+        logger.warn(`FFmpeg exited for [${session.streamKey}] (code=${code}, signal=${signal}). Host WS alive: ${session.hostAlive}`);
         session.ffmpegProcess = null;
         if (!session.hostAlive) {
             session.isLive = false;
@@ -883,7 +883,7 @@ app.post(['/api/streams/delete/:streamKey', '/api/streams/delete'], requireAuth,
         } catch (e) { }
 
         broadcastAdminTelemetry();
-        logger.info(`🗑️ Stream [${streamKey}] deleted.`);
+        logger.info(`Stream [${streamKey}] deleted.`);
         res.json({ success: true, message: `Stream [${streamKey}] deleted.` });
     } catch (err) {
         logger.error('Delete stream error', err);
@@ -1011,11 +1011,11 @@ app.post(['/stop-stream', '/stop-stream/:streamKey'], async (req, res) => {
         stopFfmpegLive(session);
         broadcastStatus(session, false);
         broadcastAdminTelemetry();
-        logger.info(`🔴 Stream [${key}] stopped and FFmpeg process killed immediately.`);
+        logger.info(`Stream [${key}] stopped and FFmpeg process killed immediately.`);
 
         if (session.cleanupTimer) clearTimeout(session.cleanupTimer);
         session.cleanupTimer = setTimeout(async () => {
-            logger.info(`🧹 Purging local HLS files for [${key}]...`);
+            logger.info(`Purging local HLS files for [${key}]...`);
             clearLiveFolder(session);
         }, 10 * 60 * 1000);
 
@@ -1033,10 +1033,10 @@ app.post(['/stream', '/stream/:streamKey'], (req, res) => {
     const session = activeStreams.get(key);
     if (session) {
         if (session.disconnectTimer) {
-                logger.info(`🔄 Incoming HTTP chunk stream for [${key}] during network drop! Refreshing 90-second grace timer.`);
+                logger.info(`Incoming HTTP chunk stream for [${key}] during network drop! Refreshing 90-second grace timer.`);
             clearTimeout(session.disconnectTimer);
             session.disconnectTimer = setTimeout(() => {
-                logger.info(`🛑 90-second reconnection window expired for [${key}]. Stopping FFmpeg process...`);
+                logger.info(`90-second reconnection window expired for [${key}]. Stopping FFmpeg process...`);
                 stopFfmpegLive(session);
                 broadcastStatus(session, false);
                 broadcastAdminTelemetry();
@@ -1060,5 +1060,5 @@ app.use((err, req, res, next) => {
 });
 
 server.listen(PORT, () => {
-    logger.info(`🚀 CoWatch Multi-Stream Platform running at ${APP_URL} (Port ${PORT})`, { sys: getSystemInfo() });
+    logger.info(`CoWatch Multi-Stream Platform running at ${APP_URL} (Port ${PORT})`, { sys: getSystemInfo() });
 });
