@@ -612,9 +612,8 @@ function getEncoderArgs(quality, bitrate, bufsize) {
     }
 
     const keyint = quality === '720p' ? '30' : '24';
-    const threads = quality === '720p' ? '2' : '1';
     return [
-        '-c:v', 'libx264', '-threads:v', threads, '-preset', 'ultrafast', '-tune', 'zerolatency',
+        '-c:v', 'libx264', '-threads:v', '0', '-preset', 'ultrafast', '-tune', 'zerolatency',
         '-profile:v', 'main', '-pix_fmt', 'yuv420p',
         '-b:v', bitrate, '-maxrate', bitrate, '-bufsize', bufsize,
         '-x264-params', `keyint=${keyint}:min-keyint=${keyint}:scenecut=0:bframes=0:rc-lookahead=0:ref=1:me=dia:subme=0:trellis=0:mixed-refs=0:8x8dct=0:weightb=0:b-adapt=0:direct=none:no-mbtree=1:force-cfr=1:aq-mode=0:partitions=none:no-deblock=1`
@@ -640,9 +639,8 @@ function getEncoderArgsForStream(quality, streamIndex, bitrate, bufsize) {
     }
 
     const keyint = quality === '720p' ? '30' : '24';
-    const threads = quality === '720p' ? '2' : '1';
     return [
-        `-c:v:${streamIndex}`, 'libx264', `-threads:v:${streamIndex}`, threads,
+        `-c:v:${streamIndex}`, 'libx264', `-threads:v:${streamIndex}`, '0',
         `-preset:v:${streamIndex}`, 'ultrafast', `-tune:v:${streamIndex}`, 'zerolatency',
         `-profile:v:${streamIndex}`, 'main', `-pix_fmt:v:${streamIndex}`, 'yuv420p',
         `-b:v:${streamIndex}`, bitrate, `-maxrate:v:${streamIndex}`, bitrate, `-bufsize:v:${streamIndex}`, bufsize,
