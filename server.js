@@ -129,6 +129,14 @@ function getOrCreateStreamSession(streamKey, title = 'Live Movie Stream', user =
         chunks480pCount: 0,
         totalChunksCount: 0,
         failureCount: 0,
+        hostIngestStats: {
+            bytes: 0,
+            chunks: 0,
+            lastBytes: 0,
+            lastChunks: 0,
+            lastLoggedAt: 0,
+            lastChunkAt: 0
+        },
         qualityViewers: { '720p': new Set(), '480p': new Set() },
         initSegments: { '720p': null, '480p': null },
         hostAlive: false
@@ -245,6 +253,72 @@ function broadcastAdminTelemetry() {
     }
 }
 
+function logHostIngestStats(session, source, chunkBytes) {
+    if (!session.hostIngestStats) {
+        session.hostIngestStats = { bytes: 0, chunks: 0, lastBytes: 0, lastChunks: 0, lastLoggedAt: 0, lastChunkAt: 0 };
+    }
+
+    const now = Date.now();
+    const stats = session.hostIngestStats;
+    const gapMs = stats.lastChunkAt ? now - stats.lastChunkAt : 0;
+    stats.lastChunkAt = now;
+    stats.bytes += chunkBytes;
+    stats.chunks += 1;
+
+    if (!stats.lastLoggedAt) {
+        stats.lastLoggedAt = now;
+        stats.lastBytes = stats.bytes;
+        stats.lastChunks = stats.chunks;
+        return;
+    }
+
+    const elapsedSec = (now - stats.lastLoggedAt) / 1000;
+    if (elapsedSec < 5) return;
+
+    const bytesDelta = stats.bytes - stats.lastBytes;
+    const chunksDelta = stats.chunks - stats.lastChunks;
+    const mbps = (bytesDelta * 8) / elapsedSec / 1000000;
+    const chunksPerSec = chunksDelta / elapsedSec;
+
+    logger.info(
+        `[Host Ingest ${session.streamKey}] Source: ${source} | ${mbps.toFixed(2)} Mbps | ` +
+        `${chunksPerSec.toFixed(2)} chunks/s | Last chunk: ${(chunkBytes / 1024).toFixed(1)} KB | Gap: ${gapMs}ms`
+    );
+
+    stats.lastLoggedAt = now;
+    stats.lastBytes = stats.bytes;
+    stats.lastChunks = stats.chunks;
+}
+
+function tryHandleHostControlMessage(session, data, isBinary) {
+    if (isBinary) return false;
+    try {
+        const raw = typeof data === 'string' ? data : data.toString();
+        const parsed = JSON.parse(raw);
+        if (parsed.type === 'HOST_MEDIA_SETTINGS') {
+            logger.info(`[Host Media ${session.streamKey}] ${JSON.stringify({
+                mimeType: parsed.mimeType,
+                videoBitsPerSecond: parsed.videoBitsPerSecond,
+                audioBitsPerSecond: parsed.audioBitsPerSecond,
+                trackSettings: parsed.trackSettings
+            })}`);
+            return true;
+        }
+        if (parsed.type === 'HOST_CAPTURE_STATS') {
+            logger.info(`[Host Capture ${session.streamKey}] ${JSON.stringify({
+                measuredFps: parsed.measuredFps,
+                totalVideoFrames: parsed.totalVideoFrames,
+                droppedVideoFrames: parsed.droppedVideoFrames,
+                chunkIndex: parsed.chunkIndex
+            })}`);
+            return true;
+        }
+        return false;
+    } catch (e) {
+        return false;
+    }
+}
+
 streamWss.on('connection', (ws) => {
     const key = ws.streamKey || 'default';
     logger.info(`Host connected to WebSocket Ingest for [${key}]`);
@@ -262,15 +336,18 @@ streamWss.on('connection', (ws) => {
         broadcastAdminTelemetry();
     }
 
-    ws.on('message', async (data) => {
+    ws.on('message', async (data, isBinary) => {
         const session = activeStreams.get(key);
         if (session) {
+            if (tryHandleHostControlMessage(session, data, isBinary)) return;
+
             if (session.disconnectTimer) {
                 clearTimeout(session.disconnectTimer);
                 session.disconnectTimer = null;
             }
 
             const buf = Buffer.isBuffer(data) ? data : Buffer.from(data);
+            logHostIngestStats(session, 'ws', buf.length);
 
             if (!session.ffmpegProcess) {
                 try {
@@ -453,8 +530,9 @@ async function startFfmpegLive(session, opts = {}) {
 
     const hlsDir = session.liveDir.replace(/\\/g, '/');
 
-    const filterComplex = '[0:v]scale=1280:720:flags=fast_bilinear,split=2[v720][v480down];' +
-        '[v480down]scale=854:480:flags=fast_bilinear,fps=24[v480];' +
+    const filterComplex = '[0:v]split=2[v720src][v480src];' +
+        '[v720src]scale=1280:720:flags=fast_bilinear[v720];' +
+        '[v480src]scale=854:480:flags=fast_bilinear,fps=24[v480];' +
         '[0:a][1:a]amix=inputs=2:duration=first:dropout_transition=0:normalize=0,aresample=async=1:first_pts=0,asplit=2[a720][a480]';
 
     const args = [
@@ -472,24 +550,24 @@ async function startFfmpegLive(session, opts = {}) {
     ];
 
     args.push(
-        // 720p H.264: 6 Mbps — 2 threads (480p gets the rest)
+        // 720p H.264: 6 Mbps at 30fps.
         '-map', '[v720]', '-map', '[a720]',
-        '-c:v:0', 'libx264', '-preset', 'ultrafast', '-tune:v:0', 'zerolatency',
+        '-c:v:0', 'libx264', '-threads:v:0', '0', '-preset', 'ultrafast', '-tune:v:0', 'zerolatency',
         '-profile:v:0', 'main', '-pix_fmt:v:0', 'yuv420p',
         '-b:v:0', '6000k', '-maxrate:v:0', '6000k', '-bufsize:v:0', '12000k',
         '-r:v:0', '30', '-g:v:0', '30', '-keyint_min:v:0', '30', '-sc_threshold:v:0', '0',
-        '-x264-params:v:0', 'keyint=30:min-keyint=30:scenecut=0:bframes=0:rc-lookahead=0:ref=1:me=dia:subme=0:trellis=0:mixed-refs=0:8x8dct=0:weightb=0:b-adapt=0:direct=none:no-mbtree=1:force-cfr=1:aq-mode=0:partitions=none:no-deblock=1:threads=2:sliced-threads=1',
+        '-x264-params:v:0', 'keyint=30:min-keyint=30:scenecut=0:bframes=0:rc-lookahead=0:ref=1:me=dia:subme=0:trellis=0:mixed-refs=0:8x8dct=0:weightb=0:b-adapt=0:direct=none:no-mbtree=1:force-cfr=1:aq-mode=0:partitions=none:no-deblock=1',
         '-c:a:0', 'aac', '-b:a:0', '128k', '-ar:a:0', '48000', '-ac:a:0', '2'
     );
 
     args.push(
-        // 480p H.264: 2 Mbps — 24fps, 2 threads
+        // 480p H.264: 2 Mbps, 24fps.
         '-map', '[v480]', '-map', '[a480]',
-        '-c:v:1', 'libx264', '-preset', 'ultrafast', '-tune:v:1', 'zerolatency',
+        '-c:v:1', 'libx264', '-threads:v:1', '0', '-preset', 'ultrafast', '-tune:v:1', 'zerolatency',
         '-profile:v:1', 'main', '-pix_fmt:v:1', 'yuv420p',
         '-b:v:1', '2000k', '-maxrate:v:1', '2000k', '-bufsize:v:1', '4000k',
         '-r:v:1', '24', '-g:v:1', '24', '-keyint_min:v:1', '24', '-sc_threshold:v:1', '0',
-        '-x264-params:v:1', 'keyint=24:min-keyint=24:scenecut=0:bframes=0:rc-lookahead=0:ref=1:me=dia:subme=0:trellis=0:mixed-refs=0:8x8dct=0:weightb=0:b-adapt=0:direct=none:no-mbtree=1:force-cfr=1:aq-mode=0:partitions=none:no-deblock=1:threads=2:sliced-threads=1',
+        '-x264-params:v:1', 'keyint=24:min-keyint=24:scenecut=0:bframes=0:rc-lookahead=0:ref=1:me=dia:subme=0:trellis=0:mixed-refs=0:8x8dct=0:weightb=0:b-adapt=0:direct=none:no-mbtree=1:force-cfr=1:aq-mode=0:partitions=none:no-deblock=1',
         '-c:a:1', 'aac', '-b:a:1', '96k', '-ar:a:1', '48000', '-ac:a:1', '2'
     );
 
@@ -1000,6 +1078,7 @@ app.post(['/stream', '/stream/:streamKey'], async (req, res) => {
         if (session.ffmpegProcess && session.ffmpegProcess.stdin && session.ffmpegProcess.stdin.writable) {
             try {
                 const buf = Buffer.isBuffer(req.body) ? req.body : Buffer.from(req.body);
+                logHostIngestStats(session, 'http', buf.length);
                 session.ffmpegProcess.stdin.write(buf);
             } catch (e) { }
         }

@@ -520,6 +520,7 @@
 
         let mediaStream = null;
         let mediaRecorder = null;
+        let captureStatsInterval = null;
         let chunkIndex = 0;
         let isPageUnloading = false;
 
@@ -693,7 +694,7 @@
         }
         connectHostStatusWebSocket();
 
-        // ─── Connection Quality Monitor ────────────────────────────────────────
+        // Connection Quality Monitor
         let connStats = { sent: 0, failed: 0, wsConnected: false, wsOk: 0, wsFail: 0 };
         let connCheckInterval = null;
 
@@ -856,10 +857,11 @@
 
                 // Detect actual settings
                 const videoTrack = mediaStream.getVideoTracks()[0];
+                let trackSettings = null;
                 if (videoTrack) {
-                    const settings = videoTrack.getSettings();
-                    const height = settings.height || 720;
-                    const fps = Math.round(settings.frameRate) || 30;
+                    trackSettings = videoTrack.getSettings();
+                    const height = trackSettings.height || 720;
+                    const fps = Math.round(trackSettings.frameRate) || 30;
                     if (topQualityBadge) topQualityBadge.textContent = `${height}p ${fps}FPS`;
 
                     videoTrack.addEventListener('ended', () => {
@@ -891,8 +893,43 @@
                 mediaRecorder = new MediaRecorder(mediaStream, {
                     mimeType: preferredMime,
                     audioBitsPerSecond: 128000, // 128 kbps audio to match HLS audio bitrate
-                    videoBitsPerSecond: 6000000 // 6 Mbps — matches server 720p encode bitrate
+                    videoBitsPerSecond: 6000000 // 6 Mbps - matches server 720p encode bitrate
                 });
+
+                if (streamWs && streamWs.readyState === WebSocket.OPEN) {
+                    streamWs.send(JSON.stringify({
+                        type: 'HOST_MEDIA_SETTINGS',
+                        mimeType: preferredMime,
+                        videoBitsPerSecond: 6000000,
+                        audioBitsPerSecond: 128000,
+                        trackSettings
+                    }));
+                }
+
+                let lastFrameCount = 0;
+                let lastFrameCheckAt = performance.now();
+                if (captureStatsInterval) clearInterval(captureStatsInterval);
+                captureStatsInterval = setInterval(() => {
+                    if (!streamWs || streamWs.readyState !== WebSocket.OPEN) return;
+                    if (!previewVideo.getVideoPlaybackQuality) return;
+
+                    const quality = previewVideo.getVideoPlaybackQuality();
+                    const now = performance.now();
+                    const elapsedSec = (now - lastFrameCheckAt) / 1000;
+                    const frameDelta = quality.totalVideoFrames - lastFrameCount;
+                    const measuredFps = elapsedSec > 0 ? frameDelta / elapsedSec : 0;
+
+                    streamWs.send(JSON.stringify({
+                        type: 'HOST_CAPTURE_STATS',
+                        measuredFps: Number(measuredFps.toFixed(2)),
+                        totalVideoFrames: quality.totalVideoFrames,
+                        droppedVideoFrames: quality.droppedVideoFrames,
+                        chunkIndex
+                    }));
+
+                    lastFrameCount = quality.totalVideoFrames;
+                    lastFrameCheckAt = now;
+                }, 5000);
 
                 mediaRecorder.ondataavailable = (event) => {
                     if (event.data && event.data.size > 0) {
@@ -922,6 +959,11 @@
             if (mediaRecorder && mediaRecorder.state !== 'inactive') {
                 mediaRecorder.stop();
                 mediaRecorder = null;
+            }
+
+            if (captureStatsInterval) {
+                clearInterval(captureStatsInterval);
+                captureStatsInterval = null;
             }
 
             if (mediaStream) {
