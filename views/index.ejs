@@ -521,6 +521,20 @@
         let mediaStream = null;
         let mediaRecorder = null;
         let chunkIndex = 0;
+        let isPageUnloading = false;
+
+        window.addEventListener('pagehide', () => {
+            isPageUnloading = true;
+        });
+
+        window.addEventListener('beforeunload', (e) => {
+            if (mediaStream && mediaRecorder && mediaRecorder.state !== 'inactive') {
+                isPageUnloading = true;
+                e.preventDefault();
+                e.returnValue = '';
+                return '';
+            }
+        });
 
         // Player control helpers
         function updatePlayPauseUI() {
@@ -824,7 +838,7 @@
 
                 mediaStream = await navigator.mediaDevices.getDisplayMedia(constraints);
 
-                showStreamLoader("Preparing Live Stream Engine...", "Purging old video segments from Cloud Storage & server disk...");
+                showStreamLoader("Preparing Live Stream Engine...", "Clearing old video segments and connecting to ingest server...");
 
                 await fetch('/reset-stream/' + currentStreamKey, { method: 'POST' });
                 chunkIndex = 0;
@@ -849,7 +863,7 @@
                     if (topQualityBadge) topQualityBadge.textContent = `${height}p ${fps}FPS`;
 
                     videoTrack.addEventListener('ended', () => {
-                        stopSharing();
+                        if (!isPageUnloading && document.visibilityState !== 'hidden') stopSharing();
                     });
                 }
 
@@ -903,6 +917,8 @@
         }
 
         function stopSharing() {
+            if (isPageUnloading || document.visibilityState === 'hidden') return;
+
             if (mediaRecorder && mediaRecorder.state !== 'inactive') {
                 mediaRecorder.stop();
                 mediaRecorder = null;
@@ -918,7 +934,6 @@
                 streamWs = null;
             }
 
-            // Notify server that stream has ended and kill FFmpeg immediately
             fetch('/stop-stream/' + currentStreamKey, { method: 'POST' }).catch(err => console.warn('Error calling /stop-stream:', err));
 
             previewVideo.srcObject = null;

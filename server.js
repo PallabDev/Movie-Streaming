@@ -123,6 +123,7 @@ function getOrCreateStreamSession(streamKey, title = 'Live Movie Stream', user =
         disconnectTimer: null,
         oneHourTimer: null,
         liveDir: path.join(liveDir, streamKey),
+        ffmpegSpawnedAt: 0,
         createdAt: new Date(),
         chunks720pCount: 0,
         chunks480pCount: 0,
@@ -261,7 +262,7 @@ streamWss.on('connection', (ws) => {
         broadcastAdminTelemetry();
     }
 
-    ws.on('message', (data) => {
+    ws.on('message', async (data) => {
         const session = activeStreams.get(key);
         if (session) {
             if (session.disconnectTimer) {
@@ -270,6 +271,15 @@ streamWss.on('connection', (ws) => {
             }
 
             const buf = Buffer.isBuffer(data) ? data : Buffer.from(data);
+
+            if (!session.ffmpegProcess) {
+                try {
+                    await startFfmpegLive(session);
+                    broadcastStatus(session, true);
+                } catch (e) {
+                    logger.error(`Failed to start FFmpeg on first chunk for [${key}]: ${e.message}`);
+                }
+            }
 
             if (session.ffmpegProcess && session.ffmpegProcess.stdin && session.ffmpegProcess.stdin.writable) {
                 try {
@@ -419,6 +429,7 @@ function stopFfmpegLive(session) {
     }
     session.isLive = false;
     session.hostAlive = false;
+    session.ffmpegSpawnedAt = 0;
     if (session.oneHourTimer) { clearTimeout(session.oneHourTimer); session.oneHourTimer = null; }
 }
 
@@ -497,6 +508,7 @@ async function startFfmpegLive(session, opts = {}) {
     logger.info(`Spawning Live Stream Generator for [${session.streamKey}]...`, { sys: getSystemInfo() });
     session.ffmpegProcess = spawn('ffmpeg', args, { stdio: ['pipe', 'pipe', 'pipe'] });
     session.isLive = true;
+    session.ffmpegSpawnedAt = Date.now();
 
     if (session.ffmpegProcess.stdin) {
         session.ffmpegProcess.stdin.on('error', (err) => { });
@@ -919,11 +931,12 @@ app.post(['/reset-stream', '/reset-stream/:streamKey'], async (req, res) => {
     const session = getOrCreateStreamSession(key, 'Live Stream', user);
 
     try {
-        await startFfmpegLive(session);
-        broadcastStatus(session, true);
-        res.json({ success: true, message: `Live stream ${key} started`, streamKey: key });
+        stopFfmpegLive(session);
+        clearLiveFolder(session);
+        broadcastStatus(session, false);
+        res.json({ success: true, message: `Stream ${key} reset`, streamKey: key });
     } catch (err) {
-        logger.error(`Error starting stream ${key}`, err);
+        logger.error(`Error resetting stream ${key}`, err);
         res.status(500).json({ success: false, error: err.message });
     }
 });
@@ -933,6 +946,13 @@ app.post(['/stop-stream', '/stop-stream/:streamKey'], async (req, res) => {
     const key = req.params.streamKey || req.body?.streamKey || 'default';
     const session = activeStreams.get(key);
     if (!session) return res.json({ success: true });
+
+    // Debounce: ignore stop-stream if FFmpeg was spawned less than 1 second ago
+    // This prevents a stale stop-stream from a refreshing page from killing a newly spawned FFmpeg
+    if (session.ffmpegSpawnedAt && (Date.now() - session.ffmpegSpawnedAt) < 1000) {
+        logger.info(`Ignoring stale /stop-stream for [${key}] — FFmpeg spawned ${Date.now() - session.ffmpegSpawnedAt}ms ago`);
+        return res.json({ success: true, message: `Stream [${key}] stop ignored (recent spawn).` });
+    }
 
     try {
         stopFfmpegLive(session);
@@ -951,7 +971,7 @@ app.post(['/stop-stream', '/stop-stream/:streamKey'], async (req, res) => {
 });
 
 // Binary Chunk Stream HTTP Fallback
-app.post(['/stream', '/stream/:streamKey'], (req, res) => {
+app.post(['/stream', '/stream/:streamKey'], async (req, res) => {
     const key = req.params.streamKey || req.headers['x-stream-key'] || 'default';
     const chunkIndex = parseInt(req.headers['x-chunk-index'] || '0');
 
@@ -969,6 +989,14 @@ app.post(['/stream', '/stream/:streamKey'], (req, res) => {
                 broadcastAdminTelemetry();
                 session.disconnectTimer = null;
             }, 90 * 1000);
+        }
+        if (!session.ffmpegProcess) {
+            try {
+                await startFfmpegLive(session);
+                broadcastStatus(session, true);
+            } catch (e) {
+                logger.error(`Failed to start FFmpeg on HTTP chunk for [${key}]: ${e.message}`);
+            }
         }
         if (session.ffmpegProcess && session.ffmpegProcess.stdin && session.ffmpegProcess.stdin.writable) {
             try {
