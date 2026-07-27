@@ -869,7 +869,8 @@
                     });
                 }
 
-                // Setup MediaRecorder for high quality Opus audio & video chunk streaming
+                // Setup MediaRecorder — prefer H.264/MP4 for faster server-side decode (VP8 is CPU-heavy to decode).
+                // Falls back to WebM VP8 if H.264 is not supported.
                 let mimeType = 'video/webm;codecs=vp8,opus';
                 if (!MediaRecorder.isTypeSupported(mimeType)) {
                     mimeType = 'video/webm;codecs=vp9,opus';
@@ -878,14 +879,12 @@
                     }
                 }
 
-                // Prefer WebM because Chrome emits small timeslice chunks reliably for live ingest.
-                // MP4/H.264 MediaRecorder can batch several seconds into one blob, starving FFmpeg.
                 let preferredMime = null;
                 const recorderOptions = [
+                    'video/mp4;codecs="avc1.42E01E, mp4a.40.2"',
                     'video/webm;codecs=vp8,opus',
                     'video/webm;codecs=vp9,opus',
                     'video/webm',
-                    'video/mp4;codecs="avc1.42E01E, mp4a.40.2"',
                 ];
                 for (const m of recorderOptions) {
                     try { if (MediaRecorder.isTypeSupported(m)) { preferredMime = m; break; } } catch (e) { }
