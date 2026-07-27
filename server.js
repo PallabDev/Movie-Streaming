@@ -292,6 +292,18 @@ function logHostIngestStats(session, source, chunkBytes) {
     stats.lastChunks = stats.chunks;
 }
 
+function resetHostIngestStats(session) {
+    session.hostIngestStats = {
+        bytes: 0,
+        chunks: 0,
+        lastBytes: 0,
+        lastChunks: 0,
+        lastLoggedAt: 0,
+        lastChunkAt: 0
+    };
+    session._hostChunkLog = [];
+}
+
 function tryHandleHostControlMessage(session, data, isBinary) {
     if (isBinary) return false;
     try {
@@ -725,6 +737,7 @@ async function startFfmpegLive(session, opts = {}) {
     stopFfmpegLive(session);
     clearLiveFolder(session);
     session.ffmpegRestartBlocked = false;
+    resetHostIngestStats(session);
 
     // 1-Hour Stream Limit Timer
     session.countedAgainstLimit = false;
@@ -1132,6 +1145,7 @@ app.post(['/reset-stream', '/reset-stream/:streamKey'], async (req, res) => {
         stopFfmpegLive(session);
         clearLiveFolder(session);
         session.ffmpegRestartBlocked = false;
+        resetHostIngestStats(session);
         broadcastStatus(session, false);
         res.json({ success: true, message: `Stream ${key} reset`, streamKey: key });
     } catch (err) {

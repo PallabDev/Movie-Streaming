@@ -521,7 +521,6 @@
         let mediaStream = null;
         let mediaRecorder = null;
         let captureStatsInterval = null;
-        let recorderFlushInterval = null;
         let chunkIndex = 0;
         let isPageUnloading = false;
 
@@ -947,12 +946,6 @@
 
                 // Request chunk every 500 ms for sub-second real-time streaming
                 mediaRecorder.start(500);
-                if (recorderFlushInterval) clearInterval(recorderFlushInterval);
-                recorderFlushInterval = setInterval(() => {
-                    if (mediaRecorder && mediaRecorder.state === 'recording') {
-                        try { mediaRecorder.requestData(); } catch (e) { }
-                    }
-                }, 500);
 
                 // Toggle button UI
                 toggleShareBtn.classList.remove('start');
@@ -978,11 +971,6 @@
             if (captureStatsInterval) {
                 clearInterval(captureStatsInterval);
                 captureStatsInterval = null;
-            }
-
-            if (recorderFlushInterval) {
-                clearInterval(recorderFlushInterval);
-                recorderFlushInterval = null;
             }
 
             if (mediaStream) {
