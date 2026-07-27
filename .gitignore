@@ -15,6 +15,7 @@ node_modules/
 jspm_packages/
 media/
 public/live/
+PROJECT_SOURCE.md
 
 # TypeScript v1 declaration files
 typings/

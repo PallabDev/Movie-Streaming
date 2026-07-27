@@ -120,14 +120,11 @@ function getOrCreateStreamSession(streamKey, title = 'Live Movie Stream', user =
         hostName: user ? user.name : 'Host',
         isLive: false,
         ffmpegProcess: null,
-        ffmpegProcesses: { '720p': null, '480p': null },
         disconnectTimer: null,
         oneHourTimer: null,
         liveDir: path.join(liveDir, streamKey),
         ffmpegSpawnedAt: 0,
         createdAt: new Date(),
-        chunks720pCount: 0,
-        chunks480pCount: 0,
         totalChunksCount: 0,
         failureCount: 0,
         ffmpegRestartBlocked: false,
@@ -139,8 +136,8 @@ function getOrCreateStreamSession(streamKey, title = 'Live Movie Stream', user =
             lastLoggedAt: 0,
             lastChunkAt: 0
         },
-        qualityViewers: { '720p': new Set(), '480p': new Set() },
-        initSegments: { '720p': null, '480p': null },
+        viewers: new Set(),
+        initSegment: null,
         hostAlive: false
     };
 
@@ -188,7 +185,6 @@ server.on('upgrade', (request, socket, head) => {
         } else if (pathname === '/view-ws') {
             viewWss.handleUpgrade(request, socket, head, (ws) => {
                 ws.streamKey = streamKey;
-                ws.quality = urlObj.searchParams.get('quality') || '720p';
                 ws.role = 'viewer';
                 viewWss.emit('connection', ws, request);
             });
@@ -418,68 +414,32 @@ streamWss.on('connection', (ws) => {
     });
 });
 
-// ─── Viewer WebSocket Handler (streams fMP4 chunks to viewers) ──────────────
-function broadcastToQuality(session, quality, data) {
-    if (!session || !session.qualityViewers) return;
-    const viewers = session.qualityViewers[quality];
-    if (!viewers) return;
-    for (const viewer of viewers) {
-        if (viewer.readyState === 1) {
-            try { viewer.send(data); } catch (e) { }
-        }
-    }
-}
-
+// ─── Viewer WebSocket Handler ──────────────────────────────────────────────
 function getTotalViewerCount(session) {
-    if (!session || !session.qualityViewers) return 0;
-    return (session.qualityViewers['720p']?.size || 0) +
-        (session.qualityViewers['720p']?.size || 0) +
-        (session.qualityViewers['480p']?.size || 0);
+    if (!session || !session.viewers) return 0;
+    return session.viewers.size;
 }
 
 viewWss.on('connection', (ws) => {
     const key = ws.streamKey || 'default';
-    const quality = ws.quality || '720p';
     const session = activeStreams.get(key);
     if (!session) {
         ws.close(1000, 'Stream not found');
         return;
     }
 
-    if (!session.qualityViewers[quality]) session.qualityViewers[quality] = new Set();
-    session.qualityViewers[quality].add(ws);
-        logger.info(`Viewer connected to [${key}] ${quality} (${getTotalViewerCount(session)} total)`);
+    session.viewers.add(ws);
+    logger.info(`Viewer connected to [${key}] (${getTotalViewerCount(session)} total)`);
 
-    if (session.initSegments[quality]) {
-        try { ws.send(session.initSegments[quality]); } catch (e) { }
+    if (session.initSegment) {
+        try { ws.send(session.initSegment); } catch (e) { }
     }
 
     broadcastStatus(session, session.isLive);
 
-    ws.on('message', (msg) => {
-        try {
-            const parsed = JSON.parse(msg);
-            if (parsed.type === 'CHANGE_QUALITY' && parsed.quality) {
-                const oldQ = ws.currentQuality || quality;
-                const newQ = parsed.quality;
-                if (oldQ !== newQ) {
-                    if (session.qualityViewers[oldQ]) session.qualityViewers[oldQ].delete(ws);
-                    if (!session.qualityViewers[newQ]) session.qualityViewers[newQ] = new Set();
-                    session.qualityViewers[newQ].add(ws);
-                    ws.currentQuality = newQ;
-                    logger.info(`Viewer switched quality: [${key}] ${oldQ} -> ${newQ}`);
-                    if (session.initSegments[newQ]) {
-                        try { ws.send(session.initSegments[newQ]); } catch (e) { }
-                    }
-                }
-            }
-        } catch (e) { }
-    });
-
     ws.on('close', () => {
-        const currentQ = ws.currentQuality || quality;
-        if (session.qualityViewers[currentQ]) session.qualityViewers[currentQ].delete(ws);
-        logger.info(`Viewer disconnected from [${key}] ${currentQ} (${getTotalViewerCount(session)} total)`);
+        session.viewers.delete(ws);
+        logger.info(`Viewer disconnected from [${key}] (${getTotalViewerCount(session)} total)`);
         broadcastStatus(session, session.isLive);
     });
     ws.on('error', (err) => logger.warn(`[Viewer WS Error ${key}]: ${err.message}`));
@@ -516,22 +476,6 @@ function stopFfmpegLive(session) {
         clearTimeout(session.disconnectTimer);
         session.disconnectTimer = null;
     }
-    if (session.ffmpegProcesses) {
-        for (const quality of Object.keys(session.ffmpegProcesses)) {
-            const proc = session.ffmpegProcesses[quality];
-            if (!proc) continue;
-            try {
-                if (proc.stdin) {
-                    proc.stdin.removeAllListeners('error');
-                    proc.stdin.on('error', () => { });
-                    proc.stdin.end();
-                }
-                proc.kill('SIGKILL');
-            } catch (err) { }
-            session.ffmpegProcesses[quality] = null;
-        }
-        session.ffmpegProcess = null;
-    }
     if (session.ffmpegProcess) {
         try {
             if (session.ffmpegProcess.stdin) {
@@ -558,140 +502,40 @@ function commandSucceeds(command, args = []) {
     }
 }
 
-function detectH264Encoder() {
-    const forced = (process.env.FFMPEG_H264_ENCODER || '').toLowerCase().trim();
-    if (['libx264', 'h264_nvenc', 'h264_vaapi'].includes(forced)) {
-        return { name: forced, reason: 'forced by FFMPEG_H264_ENCODER' };
-    }
-
-    const encoders = spawnSync('ffmpeg', ['-hide_banner', '-encoders'], { encoding: 'utf8', timeout: 5000 });
-    const list = `${encoders.stdout || ''}\n${encoders.stderr || ''}`;
-
-    if (list.includes('h264_nvenc') && commandSucceeds('nvidia-smi')) {
-        return { name: 'h264_nvenc', reason: 'NVIDIA NVENC available' };
-    }
-
-    if (list.includes('h264_vaapi') && fs.existsSync('/dev/dri/renderD128')) {
-        return { name: 'h264_vaapi', reason: 'VAAPI render device available' };
-    }
-
-    return { name: 'libx264', reason: 'no usable hardware H.264 encoder detected' };
-}
-
-const H264_ENCODER = detectH264Encoder();
-
 function writeMasterPlaylist(session) {
     const master = [
         '#EXTM3U',
         '#EXT-X-VERSION:3',
         '#EXT-X-STREAM-INF:BANDWIDTH=6128000,AVERAGE-BANDWIDTH=6128000,RESOLUTION=1280x720,FRAME-RATE=30.000,CODECS="avc1.4d401f,mp4a.40.2"',
-        'stream_720p.m3u8',
-        '#EXT-X-STREAM-INF:BANDWIDTH=2096000,AVERAGE-BANDWIDTH=2096000,RESOLUTION=854x480,FRAME-RATE=24.000,CODECS="avc1.4d401e,mp4a.40.2"',
-        'stream_480p.m3u8',
+        'stream.m3u8',
         ''
     ].join('\n');
     fs.writeFileSync(path.join(session.liveDir, 'master.m3u8'), master);
 }
 
-function getEncoderArgs(quality, bitrate, bufsize) {
-    if (H264_ENCODER.name === 'h264_nvenc') {
-        return [
-            '-c:v', 'h264_nvenc', '-preset', 'p1', '-tune', 'll', '-rc', 'cbr',
-            '-b:v', bitrate, '-maxrate', bitrate, '-bufsize', bufsize,
-            '-profile:v', 'main', '-pix_fmt', 'yuv420p'
-        ];
-    }
-
-    if (H264_ENCODER.name === 'h264_vaapi') {
-        return [
-            '-vaapi_device', '/dev/dri/renderD128',
-            '-c:v', 'h264_vaapi',
-            '-b:v', bitrate, '-maxrate', bitrate, '-bufsize', bufsize,
-            '-profile:v', '578'
-        ];
-    }
-
-    const keyint = quality === '720p' ? '30' : '24';
-    const threads = quality === '720p' ? '2' : '1';
-    return [
-        '-c:v', 'libx264', '-threads:v', threads, '-preset', 'ultrafast', '-tune', 'zerolatency',
-        '-profile:v', 'main', '-pix_fmt', 'yuv420p',
-        '-b:v', bitrate, '-maxrate', bitrate, '-bufsize', bufsize,
-        '-x264-params', `keyint=${keyint}:min-keyint=${keyint}:scenecut=0:bframes=0:rc-lookahead=0:ref=1:me=dia:subme=0:trellis=0:mixed-refs=0:8x8dct=0:weightb=0:b-adapt=0:direct=none:no-mbtree=1:force-cfr=1:aq-mode=0:partitions=none:no-deblock=1`
-    ];
-}
-
-function getEncoderArgsForStream(quality, streamIndex, bitrate, bufsize) {
-    if (H264_ENCODER.name === 'h264_nvenc') {
-        return [
-            `-c:v:${streamIndex}`, 'h264_nvenc', `-preset:v:${streamIndex}`, 'p1',
-            `-tune:v:${streamIndex}`, 'll', `-rc:v:${streamIndex}`, 'cbr',
-            `-b:v:${streamIndex}`, bitrate, `-maxrate:v:${streamIndex}`, bitrate, `-bufsize:v:${streamIndex}`, bufsize,
-            `-profile:v:${streamIndex}`, 'main', `-pix_fmt:v:${streamIndex}`, 'yuv420p'
-        ];
-    }
-
-    if (H264_ENCODER.name === 'h264_vaapi') {
-        return [
-            `-c:v:${streamIndex}`, 'h264_vaapi',
-            `-b:v:${streamIndex}`, bitrate, `-maxrate:v:${streamIndex}`, bitrate, `-bufsize:v:${streamIndex}`, bufsize,
-            `-profile:v:${streamIndex}`, '578'
-        ];
-    }
-
-    const keyint = quality === '720p' ? '30' : '24';
-    const threads = quality === '720p' ? '2' : '1';
-    return [
-        `-c:v:${streamIndex}`, 'libx264', `-threads:v:${streamIndex}`, threads,
-        `-preset:v:${streamIndex}`, 'ultrafast', `-tune:v:${streamIndex}`, 'zerolatency',
-        `-profile:v:${streamIndex}`, 'main', `-pix_fmt:v:${streamIndex}`, 'yuv420p',
-        `-b:v:${streamIndex}`, bitrate, `-maxrate:v:${streamIndex}`, bitrate, `-bufsize:v:${streamIndex}`, bufsize,
-        `-x264-params:v:${streamIndex}`, `keyint=${keyint}:min-keyint=${keyint}:scenecut=0:bframes=0:rc-lookahead=0:ref=1:me=dia:subme=0:trellis=0:mixed-refs=0:8x8dct=0:weightb=0:b-adapt=0:direct=none:no-mbtree=1:force-cfr=1:aq-mode=0:partitions=none:no-deblock=1`
-    ];
-}
-
 function buildFfmpegArgs(session) {
     const hlsDir = session.liveDir.replace(/\\/g, '/');
-    const v720Filter = H264_ENCODER.name === 'h264_vaapi'
-        ? 'fps=30,format=nv12,hwupload[v720]'
-        : 'fps=30[v720]';
-    const v480Filter = H264_ENCODER.name === 'h264_vaapi'
-        ? 'scale=854:480:flags=fast_bilinear,fps=24,format=nv12,hwupload[v480]'
-        : 'scale=854:480:flags=fast_bilinear,fps=24[v480]';
-    const filterComplex = `[0:v]split=2[v720src][v480src];[v720src]${v720Filter};[v480src]${v480Filter};[0:a]aformat=channel_layouts=stereo:sample_rates=48000,aresample=async=1:first_pts=0,asplit=2[a720][a480]`;
 
     return [
         '-y',
-        ...(H264_ENCODER.name === 'h264_vaapi' ? ['-vaapi_device', '/dev/dri/renderD128'] : []),
         '-fflags', '+genpts+discardcorrupt',
         '-probesize', '2M',
         '-analyzeduration', '1000000',
         '-thread_queue_size', '1024',
         '-i', 'pipe:0',
-        '-filter_complex', filterComplex,
-
-        '-map', '[v720]', '-map', '[a720]',
-        '-r:v:0', '30', '-g:v:0', '30', '-keyint_min:v:0', '30', '-sc_threshold:v:0', '0',
-        ...getEncoderArgsForStream('720p', 0, '6000k', '12000k'),
-        '-c:a:0', 'aac', '-b:a:0', '128k', '-ar:a:0', '48000', '-ac:a:0', '2',
-
-        '-map', '[v480]', '-map', '[a480]',
-        '-r:v:1', '24', '-g:v:1', '24', '-keyint_min:v:1', '24', '-sc_threshold:v:1', '0',
-        ...getEncoderArgsForStream('480p', 1, '2000k', '4000k'),
-        '-c:a:1', 'aac', '-b:a:1', '96k', '-ar:a:1', '48000', '-ac:a:1', '2',
-
+        '-c:v', 'copy',
+        '-c:a', 'aac', '-b:a', '128k', '-ar:a', '48000', '-ac:a', '2',
         '-f', 'hls',
         '-hls_time', '1',
         '-hls_list_size', '20',
         '-hls_flags', 'delete_segments+independent_segments',
-        '-hls_segment_filename', `${hlsDir}/stream_%v%d.ts`,
+        '-hls_segment_filename', `${hlsDir}/stream%d.ts`,
         '-master_pl_name', 'master.m3u8',
-        '-var_stream_map', 'v:0,a:0,name:720p v:1,a:1,name:480p',
-        `${hlsDir}/stream_%v.m3u8`
+        `${hlsDir}/stream.m3u8`
     ];
 }
 
-function attachFfmpegLogging(session, quality, proc) {
+function attachFfmpegLogging(session, proc) {
     if (proc.stdin) proc.stdin.on('error', () => { });
 
     if (proc.stderr) {
@@ -711,23 +555,21 @@ function attachFfmpegLogging(session, quality, proc) {
                         const speed = speedMatch ? speedMatch[1] : '1.0x';
                         const cpu = getCpuUsage();
                         const load = os.loadavg().map(l => l.toFixed(2)).join(' ');
-                        logger.info(`[FFmpeg ${session.streamKey} ${quality}] Encoder: ${H264_ENCODER.name} | Speed: ${speed} | FPS: ${fps} | CPU: ${cpu}% | Load: ${load}`);
+                        logger.info(`[FFmpeg ${session.streamKey}] Copy | Speed: ${speed} | FPS: ${fps} | CPU: ${cpu}% | Load: ${load}`);
                     }
                 } else if (msg.includes('Error') || msg.includes('Invalid') || msg.includes('failed')) {
-                    logger.error(`[FFmpeg Error ${session.streamKey} ${quality}]: ${msg}`);
+                    logger.error(`[FFmpeg Error ${session.streamKey}]: ${msg}`);
                 }
             }
         });
     }
 
     proc.on('exit', (code, signal) => {
-        logger.warn(`FFmpeg ${quality} exited for [${session.streamKey}] (code=${code}, signal=${signal}). Host WS alive: ${session.hostAlive}`);
-        if (session.ffmpegProcesses) session.ffmpegProcesses[quality] = null;
-        const anyRunning = session.ffmpegProcesses && Object.values(session.ffmpegProcesses).some(Boolean);
-        session.ffmpegProcess = anyRunning ? session.ffmpegProcess : null;
+        logger.warn(`FFmpeg exited for [${session.streamKey}] (code=${code}, signal=${signal}). Host WS alive: ${session.hostAlive}`);
+        session.ffmpegProcess = null;
         session.ffmpegRestartBlocked = true;
         logger.warn(`FFmpeg restart blocked for [${session.streamKey}] until stream reset; current MediaRecorder chunks may not include a fresh container header.`);
-        if (!session.hostAlive && !anyRunning) session.isLive = false;
+        if (!session.hostAlive) session.isLive = false;
     });
 }
 
@@ -751,13 +593,12 @@ async function startFfmpegLive(session, opts = {}) {
         }
     }, 3600 * 1000);
 
-    logger.info(`Spawning optimized shared Live Stream Generator for [${session.streamKey}] with ${H264_ENCODER.name} (${H264_ENCODER.reason}, transcode-720p-480p)...`, { sys: getSystemInfo() });
-    session.ffmpegProcesses = { '720p': null, '480p': null };
+    logger.info(`Spawning FFmpeg copy-only Live Stream for [${session.streamKey}] (H.264 copy → HLS)...`, { sys: getSystemInfo() });
     session.ffmpegProcess = spawn('ffmpeg', buildFfmpegArgs(session), { stdio: ['pipe', 'pipe', 'pipe'] });
     session.isLive = true;
     session.ffmpegSpawnedAt = Date.now();
 
-    attachFfmpegLogging(session, '720p+480p', session.ffmpegProcess);
+    attachFfmpegLogging(session, session.ffmpegProcess);
 }
 
 // ─── Authentication & User Routes ──────────────────────────────────────────────
@@ -916,8 +757,6 @@ app.get(['/user', '/users'], requireAdmin, async (req, res) => {
                         viewerCount: statusClients.length,
                         peakViewers: Math.max(statusClients.length, activeS.peakViewersCount || 0),
                         totalChunks: activeS.totalChunksCount || 0,
-                        chunks720p: activeS.chunks720pCount || 0,
-                        chunks480p: activeS.chunks480pCount || 0,
                         failureCount: activeS.failureCount || 0
                     });
                 }
@@ -928,8 +767,6 @@ app.get(['/user', '/users'], requireAdmin, async (req, res) => {
             let totalViewersCount = 0;
             let peakViewers = 0;
             let totalChunks = 0;
-            let chunks720p = 0;
-            let chunks480p = 0;
             let failureCount = 0;
 
             for (const s of sessions) {
@@ -941,8 +778,6 @@ app.get(['/user', '/users'], requireAdmin, async (req, res) => {
                 if (peakV > peakViewers) peakViewers = peakV;
 
                 totalChunks += (s.totalChunks || 0);
-                chunks720p += (s.chunks720p || 0);
-                chunks480p += (s.chunks480p || 0);
                 failureCount += (s.failureCount || 0);
             }
 
@@ -965,8 +800,6 @@ app.get(['/user', '/users'], requireAdmin, async (req, res) => {
                 totalViewersCount,
                 peakViewers,
                 totalChunks,
-                chunks720p,
-                chunks480p,
                 failureCount,
                 stabilityRating,
                 sessions

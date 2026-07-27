@@ -869,7 +869,7 @@
                     });
                 }
 
-                // Setup MediaRecorder — VP8/WebM for reliable small timeslice chunks for live ingest.
+                // Setup MediaRecorder — H.264/MP4 preferred for zero-encode copy path on server.
                 let mimeType = 'video/webm;codecs=vp8,opus';
                 if (!MediaRecorder.isTypeSupported(mimeType)) {
                     mimeType = 'video/webm;codecs=vp9,opus';
@@ -880,6 +880,7 @@
 
                 let preferredMime = null;
                 const recorderOptions = [
+                    'video/mp4;codecs=h264,aac',
                     'video/webm;codecs=vp8,opus',
                     'video/webm;codecs=vp9,opus',
                     'video/webm',
@@ -891,15 +892,13 @@
 
                 mediaRecorder = new MediaRecorder(mediaStream, {
                     mimeType: preferredMime,
-                    audioBitsPerSecond: 128000, // 128 kbps audio to match HLS audio bitrate
-                    videoBitsPerSecond: 4500000 // 4.5 Mbps - matches server 720p encode bitrate
+                    audioBitsPerSecond: 128000
                 });
 
                 if (streamWs && streamWs.readyState === WebSocket.OPEN) {
                     streamWs.send(JSON.stringify({
                         type: 'HOST_MEDIA_SETTINGS',
                         mimeType: preferredMime,
-                        videoBitsPerSecond: 4500000,
                         audioBitsPerSecond: 128000,
                         trackSettings
                     }));

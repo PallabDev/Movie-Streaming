@@ -86,84 +86,6 @@
             padding-bottom: calc(env(safe-area-inset-bottom) + 1.25rem) !important;
         }
 
-        .sh-quality-menu {
-            display: none;
-            position: absolute;
-            bottom: 4rem;
-            right: 1.5rem;
-            background: rgba(15, 23, 42, 0.95);
-            backdrop-filter: blur(12px);
-            border: 1px solid rgba(255, 255, 255, 0.15);
-            border-radius: 12px;
-            padding: 0.5rem;
-            z-index: 50;
-            min-width: 160px;
-            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.5);
-        }
-
-        /* Make quality menu more compact on small/mobile screens */
-        @media (max-width: 640px) {
-            .sh-quality-menu {
-                bottom: 3.25rem;
-                /* slightly higher above bottom controls */
-                right: 0.75rem;
-                /* bring it closer to gear button */
-                min-width: 120px;
-                padding: 0.25rem;
-                border-radius: 10px;
-                box-shadow: 0 6px 18px rgba(0, 0, 0, 0.5);
-                font-size: 0.85rem;
-            }
-
-            /* Target Tailwind generated class 'text-[10px]' — escape square brackets for plain CSS */
-            .sh-quality-menu>.text-\[10px\] {
-                font-size: 0.7rem;
-                padding: 0.35rem 0.5rem;
-            }
-
-            .sh-quality-item {
-                padding: 0.35rem 0.6rem;
-                font-size: 0.82rem;
-                border-radius: 8px;
-            }
-
-            .sh-quality-item span {
-                display: inline-block;
-            }
-
-            .sh-quality-item i.fa-check {
-                margin-left: 6px;
-                font-size: 0.72rem;
-            }
-        }
-
-        .sh-quality-menu.active {
-            display: block;
-        }
-
-        .sh-quality-item {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding: 0.5rem 0.75rem;
-            color: #cbd5e1;
-            font-size: 0.85rem;
-            font-weight: 600;
-            border-radius: 8px;
-            cursor: pointer;
-            transition: all 0.2s ease;
-        }
-
-        .sh-quality-item:hover {
-            background: rgba(99, 102, 241, 0.2);
-            color: #ffffff;
-        }
-
-        .sh-quality-item.selected {
-            color: #818cf8;
-            background: rgba(99, 102, 241, 0.15);
-        }
-
         /* Smooth controls hide transition */
         #sh-controls {
             transition: opacity 0.22s ease, transform 0.18s ease;
@@ -217,8 +139,6 @@
                     class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-red-500/20 text-red-400 border border-red-500/30 flex items-center gap-1">
                     <span class="w-1.5 h-1.5 rounded-full bg-red-400 animate-ping"></span> LIVE
                 </span>
-                <span id="quality-badge"
-                    class="px-2 py-0.5 rounded text-[10px] font-mono bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">Auto</span>
                 <span id="conn-badge"
                     class="px-2 py-0.5 rounded text-[10px] font-semibold bg-green-500/20 text-green-400 border border-green-500/30 flex items-center gap-1">
                     <span id="conn-dot" class="w-1.5 h-1.5 rounded-full bg-green-400"></span>
@@ -244,32 +164,6 @@
                 </div>
 
                 <div class="flex items-center gap-3 relative">
-                    <!-- Quality Gear Button -->
-                    <button id="sh-quality-btn"
-                        class="w-10 h-10 rounded-xl bg-white/10 hover:bg-white/20 text-white flex items-center justify-center text-base transition-colors"
-                        title="Quality Settings">
-                        <i class="fa-solid fa-gear"></i>
-                    </button>
-
-                    <!-- Quality Dropdown Menu -->
-                    <div id="sh-quality-menu" class="sh-quality-menu">
-                        <div
-                            class="text-[10px] font-bold text-slate-400 uppercase tracking-wider px-3 py-1 mb-1 border-b border-white/10">
-                            Video Quality</div>
-                        <div class="sh-quality-item selected" data-quality="auto" onclick="setQuality('auto')">
-                            <span>Auto (ABR)</span>
-                            <i class="fa-solid fa-check text-xs"></i>
-                        </div>
-                        <div class="sh-quality-item" data-quality="720" onclick="setQuality(720)">
-                            <span>720p HD</span>
-                            <i class="fa-solid fa-check text-xs hidden"></i>
-                        </div>
-                        <div class="sh-quality-item" data-quality="480" onclick="setQuality(480)">
-                            <span>480p SD</span>
-                            <i class="fa-solid fa-check text-xs hidden"></i>
-                        </div>
-                    </div>
-
                     <!-- Fullscreen Button -->
                     <button id="sh-full-btn"
                         class="w-10 h-10 rounded-xl bg-white/10 hover:bg-white/20 text-white flex items-center justify-center text-base transition-colors">
@@ -295,9 +189,6 @@
                 const controls = document.getElementById('sh-controls');
                 const topHeader = document.getElementById('top-header');
                 const offlineScreen = document.getElementById('offline-screen');
-                const qualityBtn = document.getElementById('sh-quality-btn');
-                const qualityMenu = document.getElementById('sh-quality-menu');
-                const qualityBadge = document.getElementById('quality-badge');
                 const connBadge = document.getElementById('conn-badge');
                 const connDot = document.getElementById('conn-dot');
                 const connLabel = document.getElementById('conn-label');
@@ -321,7 +212,6 @@
                         controls.style.opacity = '0';
                         controls.style.pointerEvents = 'none';
                         if (topHeader) topHeader.style.opacity = '0';
-                        qualityMenu.classList.remove('active');
                     }
                 }
 
@@ -399,13 +289,6 @@
                             video.play().then(() => updatePlayIcon()).catch(() => updatePlayIcon());
                         });
 
-                        hls.on(Hls.Events.LEVEL_SWITCHED, (event, data) => {
-                            const level = hls.levels[data.level];
-                            if (level && qualityBadge) {
-                                qualityBadge.textContent = `${level.height || '720'}p ${hls.autoLevelEnabled ? '(Auto)' : ''}`;
-                            }
-                        });
-
                         hls.on(Hls.Events.ERROR, (event, data) => {
                             if (data.fatal) {
                                 switch (data.type) {
@@ -475,38 +358,6 @@
                     }
                 }
 
-                window.setQuality = function (targetHeight) {
-                    if (!hls || !hls.levels) return;
-                    if (targetHeight === 'auto' || targetHeight === -1) {
-                        hls.currentLevel = -1; // Auto ABR
-                    } else {
-                        const foundIndex = hls.levels.findIndex(l =>
-                            l.height === targetHeight ||
-                            (targetHeight === 720 && l.height >= 700) ||
-                            (targetHeight === 480 && l.height < 700)
-                        );
-                        if (foundIndex !== -1) {
-                            hls.currentLevel = foundIndex;
-                        }
-                    }
-
-                    const items = document.querySelectorAll('.sh-quality-item');
-                    items.forEach(i => { i.classList.remove('selected'); const c = i.querySelector('.fa-check'); if (c) c.classList.add('hidden'); });
-                    const sel = document.querySelector(`[data-quality="${targetHeight}"]`);
-                    if (sel) { sel.classList.add('selected'); const c = sel.querySelector('.fa-check'); if (c) c.classList.remove('hidden'); }
-                    qualityMenu.classList.remove('active');
-                };
-
-                qualityBtn.addEventListener('click', (e) => {
-                    e.stopPropagation();
-                    showControls();
-                    qualityMenu.classList.toggle('active');
-                });
-
-                document.addEventListener('click', () => {
-                    qualityMenu.classList.remove('active');
-                });
-
                 function formatTime(sec) {
                     if (!sec || !isFinite(sec)) return '00:00';
                     const s = Math.floor(sec % 60);
@@ -536,8 +387,8 @@
                 // Remove native click-to-toggle behavior: prevent clicks on player/video from toggling playback
                 ['click', 'pointerdown', 'pointerup', 'touchend', 'touchstart'].forEach(evt => {
                     player.addEventListener(evt, (e) => {
-                        // allow interactions inside controls or quality menu
-                        if (e.target && e.target.closest && (e.target.closest('#sh-controls') || e.target.closest('#sh-quality-menu') || e.target.closest('#sh-quality-btn'))) return;
+                        // allow interactions inside controls
+                        if (e.target && e.target.closest && (e.target.closest('#sh-controls'))) return;
                         // allow clicks on control buttons
                         if (e.target && (e.target.tagName === 'BUTTON' || e.target.tagName === 'A' || e.target.closest('button') || e.target.closest('a'))) return;
                         // On touchstart or pointerdown (touch), we still want to show controls but prevent native play/pause toggling
