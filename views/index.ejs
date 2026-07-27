@@ -878,14 +878,17 @@
                     }
                 }
 
-                // Prefer H.264-capable mime types when available so server passthrough can be used.
-                // Try a few options, then fall back to webm vp8/opus if H.264 isn't supported.
+                // Prefer WebM because Chrome emits small timeslice chunks reliably for live ingest.
+                // MP4/H.264 MediaRecorder can batch several seconds into one blob, starving FFmpeg.
                 let preferredMime = null;
-                const h264Options = [
+                const recorderOptions = [
+                    'video/webm;codecs=vp8,opus',
+                    'video/webm;codecs=vp9,opus',
+                    'video/webm',
                     'video/mp4;codecs="avc1.42E01E, mp4a.40.2"',
                     'video/webm;codecs="h264,opus"',
                 ];
-                for (const m of h264Options) {
+                for (const m of recorderOptions) {
                     try { if (MediaRecorder.isTypeSupported(m)) { preferredMime = m; break; } } catch (e) { }
                 }
                 if (!preferredMime) preferredMime = mimeType; // mimeType chosen earlier (vp8/vp9/webm fallback)
