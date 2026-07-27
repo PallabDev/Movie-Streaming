@@ -521,6 +521,7 @@
         let mediaStream = null;
         let mediaRecorder = null;
         let captureStatsInterval = null;
+        let recorderFlushInterval = null;
         let chunkIndex = 0;
         let isPageUnloading = false;
 
@@ -913,6 +914,11 @@
                 let lastFrameCheckAt = performance.now();
                 if (captureStatsInterval) clearInterval(captureStatsInterval);
                 captureStatsInterval = setInterval(() => {
+                    if (!mediaRecorder || mediaRecorder.state !== 'recording') {
+                        clearInterval(captureStatsInterval);
+                        captureStatsInterval = null;
+                        return;
+                    }
                     if (!streamWs || streamWs.readyState !== WebSocket.OPEN) return;
                     if (!previewVideo.getVideoPlaybackQuality) return;
 
@@ -942,6 +948,12 @@
 
                 // Request chunk every 500 ms for sub-second real-time streaming
                 mediaRecorder.start(500);
+                if (recorderFlushInterval) clearInterval(recorderFlushInterval);
+                recorderFlushInterval = setInterval(() => {
+                    if (mediaRecorder && mediaRecorder.state === 'recording') {
+                        try { mediaRecorder.requestData(); } catch (e) { }
+                    }
+                }, 500);
 
                 // Toggle button UI
                 toggleShareBtn.classList.remove('start');
@@ -967,6 +979,11 @@
             if (captureStatsInterval) {
                 clearInterval(captureStatsInterval);
                 captureStatsInterval = null;
+            }
+
+            if (recorderFlushInterval) {
+                clearInterval(recorderFlushInterval);
+                recorderFlushInterval = null;
             }
 
             if (mediaStream) {
