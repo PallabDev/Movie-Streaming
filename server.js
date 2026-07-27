@@ -138,6 +138,8 @@ function getOrCreateStreamSession(streamKey, title = 'Live Movie Stream', user =
         },
         viewers: new Set(),
         initSegment: null,
+        peakViewersCount: 0,
+        _sessionLoggedToDb: false,
         hostAlive: false
     };
 
@@ -403,8 +405,9 @@ streamWss.on('connection', (ws) => {
         }
         if (session && session.isLive) {
             if (session.disconnectTimer) clearTimeout(session.disconnectTimer);
-            session.disconnectTimer = setTimeout(() => {
+            session.disconnectTimer = setTimeout(async () => {
                 logger.info(`90-second reconnection window expired for [${key}]. Stopping FFmpeg process...`);
+                await logStreamSession(session);
                 stopFfmpegLive(session);
                 broadcastStatus(session, false);
                 broadcastAdminTelemetry();
@@ -429,6 +432,9 @@ viewWss.on('connection', (ws) => {
     }
 
     session.viewers.add(ws);
+    if (session.viewers.size > (session.peakViewersCount || 0)) {
+        session.peakViewersCount = session.viewers.size;
+    }
     logger.info(`Viewer connected to [${key}] (${getTotalViewerCount(session)} total)`);
 
     if (session.initSegment) {
@@ -491,6 +497,34 @@ function stopFfmpegLive(session) {
     session.hostAlive = false;
     session.ffmpegSpawnedAt = 0;
     if (session.oneHourTimer) { clearTimeout(session.oneHourTimer); session.oneHourTimer = null; }
+}
+
+async function logStreamSession(session) {
+    if (session._sessionLoggedToDb) return;
+    session._sessionLoggedToDb = true;
+
+    const durationSeconds = Math.floor((Date.now() - (session.createdAt?.getTime?.() || Date.now())) / 1000);
+    const endedAt = new Date();
+
+    try {
+        await db.insert(streamSessions).values({
+            streamKey: session.streamKey,
+            hostId: session.hostId,
+            title: session.title,
+            isLive: false,
+            startedAt: session.createdAt || new Date(),
+            endedAt: endedAt,
+            durationSeconds: durationSeconds,
+            viewerCount: session.viewers ? session.viewers.size : 0,
+            peakViewers: session.peakViewersCount || 0,
+            totalChunks: session.totalChunksCount || 0,
+            failureCount: session.failureCount || 0,
+            countedAgainstLimit: session.countedAgainstLimit || false
+        });
+        logger.info(`Session logged to DB: [${session.streamKey}] duration=${durationSeconds}s peak=${session.peakViewersCount || 0}`);
+    } catch (e) {
+        logger.error('Failed to log session to DB', e);
+    }
 }
 
 function commandSucceeds(command, args = []) {
@@ -591,6 +625,7 @@ async function startFfmpegLive(session, opts = {}) {
                 await db.update(users).set({ streamCount: sql`${users.streamCount} + 1` }).where(eq(users.id, session.hostId));
             } catch (e) { logger.error('Error updating user streamCount', e); }
         }
+        await logStreamSession(session);
     }, 3600 * 1000);
 
     logger.info(`Spawning FFmpeg copy-only Live Stream for [${session.streamKey}] (H.264 copy → HLS)...`, { sys: getSystemInfo() });
@@ -857,6 +892,7 @@ app.post(['/api/streams/delete/:streamKey', '/api/streams/delete'], requireAuth,
 
         const session = activeStreams.get(streamKey);
         if (session) {
+            await logStreamSession(session);
             stopFfmpegLive(session);
             clearLiveFolder(session);
             activeStreams.delete(streamKey);
@@ -1001,6 +1037,7 @@ app.post(['/stop-stream', '/stop-stream/:streamKey'], async (req, res) => {
     }
 
     try {
+        await logStreamSession(session);
         stopFfmpegLive(session);
         broadcastStatus(session, false);
         broadcastAdminTelemetry();
@@ -1028,8 +1065,9 @@ app.post(['/stream', '/stream/:streamKey'], async (req, res) => {
         if (session.disconnectTimer) {
                 logger.info(`Incoming HTTP chunk stream for [${key}] during network drop! Refreshing 90-second grace timer.`);
             clearTimeout(session.disconnectTimer);
-            session.disconnectTimer = setTimeout(() => {
+            session.disconnectTimer = setTimeout(async () => {
                 logger.info(`90-second reconnection window expired for [${key}]. Stopping FFmpeg process...`);
+                await logStreamSession(session);
                 stopFfmpegLive(session);
                 broadcastStatus(session, false);
                 broadcastAdminTelemetry();

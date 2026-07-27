@@ -32,19 +32,18 @@ export async function initDb() {
                 viewer_count INTEGER NOT NULL DEFAULT 0,
                 peak_viewers INTEGER NOT NULL DEFAULT 0,
                 total_chunks INTEGER NOT NULL DEFAULT 0,
-                chunks_1080p INTEGER NOT NULL DEFAULT 0,
-                chunks_720p INTEGER NOT NULL DEFAULT 0,
-                chunks_480p INTEGER NOT NULL DEFAULT 0,
                 failure_count INTEGER NOT NULL DEFAULT 0,
                 counted_against_limit BOOLEAN NOT NULL DEFAULT false
             );
 
             ALTER TABLE stream_sessions ADD COLUMN IF NOT EXISTS peak_viewers INTEGER NOT NULL DEFAULT 0;
             ALTER TABLE stream_sessions ADD COLUMN IF NOT EXISTS total_chunks INTEGER NOT NULL DEFAULT 0;
-            ALTER TABLE stream_sessions ADD COLUMN IF NOT EXISTS chunks_1080p INTEGER NOT NULL DEFAULT 0;
-            ALTER TABLE stream_sessions ADD COLUMN IF NOT EXISTS chunks_720p INTEGER NOT NULL DEFAULT 0;
-            ALTER TABLE stream_sessions ADD COLUMN IF NOT EXISTS chunks_480p INTEGER NOT NULL DEFAULT 0;
             ALTER TABLE stream_sessions ADD COLUMN IF NOT EXISTS failure_count INTEGER NOT NULL DEFAULT 0;
+
+            -- Drop unused columns (safe to fail if already dropped)
+            ALTER TABLE stream_sessions DROP COLUMN IF EXISTS chunks_1080p;
+            ALTER TABLE stream_sessions DROP COLUMN IF EXISTS chunks_720p;
+            ALTER TABLE stream_sessions DROP COLUMN IF EXISTS chunks_480p;
         `);
 
         // Seed Admin user: watch@watch.in / HexWatch78
