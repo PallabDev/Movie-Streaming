@@ -869,26 +869,13 @@
                     });
                 }
 
-                // Setup MediaRecorder — H.264/MP4 preferred for zero-encode copy path on server.
-                let mimeType = 'video/webm;codecs=vp8,opus';
-                if (!MediaRecorder.isTypeSupported(mimeType)) {
-                    mimeType = 'video/webm;codecs=vp9,opus';
-                    if (!MediaRecorder.isTypeSupported(mimeType)) {
-                        mimeType = 'video/webm';
-                    }
+                // Setup MediaRecorder — H.264/MP4 only for zero-encode copy path on server.
+                let preferredMime = 'video/mp4;codecs=h264,aac';
+                if (!MediaRecorder.isTypeSupported(preferredMime)) {
+                    preferredMime = 'video/mp4;codecs=avc1.42E01E,mp4a.40.2';
                 }
 
-                let preferredMime = null;
-                const recorderOptions = [
-                    'video/mp4;codecs=h264,aac',
-                    'video/webm;codecs=vp8,opus',
-                    'video/webm;codecs=vp9,opus',
-                    'video/webm',
-                ];
-                for (const m of recorderOptions) {
-                    try { if (MediaRecorder.isTypeSupported(m)) { preferredMime = m; break; } } catch (e) { }
-                }
-                if (!preferredMime) preferredMime = mimeType; // mimeType chosen earlier (vp8/vp9/webm fallback)
+                console.log(`[MediaRecorder] Using: ${preferredMime}`);
 
                 mediaRecorder = new MediaRecorder(mediaStream, {
                     mimeType: preferredMime,

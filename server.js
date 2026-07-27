@@ -589,7 +589,7 @@ function attachFfmpegLogging(session, proc) {
                         const speed = speedMatch ? speedMatch[1] : '1.0x';
                         const cpu = getCpuUsage();
                         const load = os.loadavg().map(l => l.toFixed(2)).join(' ');
-                        logger.info(`[FFmpeg ${session.streamKey}] Copy | Speed: ${speed} | FPS: ${fps} | CPU: ${cpu}% | Load: ${load}`);
+                        logger.info(`[FFmpeg ${session.streamKey}] Speed: ${speed} | FPS: ${fps} | CPU: ${cpu}% | Load: ${load}`);
                     }
                 } else if (msg.includes('Error') || msg.includes('Invalid') || msg.includes('failed')) {
                     logger.error(`[FFmpeg Error ${session.streamKey}]: ${msg}`);
@@ -628,7 +628,8 @@ async function startFfmpegLive(session, opts = {}) {
         await logStreamSession(session);
     }, 3600 * 1000);
 
-    logger.info(`Spawning FFmpeg copy-only Live Stream for [${session.streamKey}] (H.264 copy → HLS)...`, { sys: getSystemInfo() });
+    const mimeType = session.hostMediaSettings?.mimeType || 'unknown';
+    logger.info(`Spawning FFmpeg Live Stream for [${session.streamKey}] (input: ${mimeType})...`, { sys: getSystemInfo() });
     session.ffmpegProcess = spawn('ffmpeg', buildFfmpegArgs(session), { stdio: ['pipe', 'pipe', 'pipe'] });
     session.isLive = true;
     session.ffmpegSpawnedAt = Date.now();
