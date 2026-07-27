@@ -120,6 +120,7 @@ function getOrCreateStreamSession(streamKey, title = 'Live Movie Stream', user =
         hostName: user ? user.name : 'Host',
         isLive: false,
         ffmpegProcess: null,
+        ffmpegProcess720p: null,
         disconnectTimer: null,
         oneHourTimer: null,
         liveDir: path.join(liveDir, streamKey),
@@ -333,12 +334,17 @@ function tryHandleHostControlMessage(session, data, isBinary) {
 }
 
 function hasRunningFfmpeg(session) {
-    return !!(session.ffmpegProcess && session.ffmpegProcess.stdin && session.ffmpegProcess.stdin.writable);
+    const p1 = session.ffmpegProcess && session.ffmpegProcess.stdin && session.ffmpegProcess.stdin.writable;
+    const p2 = session.ffmpegProcess720p && session.ffmpegProcess720p.stdin && session.ffmpegProcess720p.stdin.writable;
+    return !!(p1 || p2);
 }
 
 function writeChunkToFfmpeg(session, buf) {
     if (session.ffmpegProcess && session.ffmpegProcess.stdin && session.ffmpegProcess.stdin.writable) {
         try { session.ffmpegProcess.stdin.write(buf); } catch (e) { }
+    }
+    if (session.ffmpegProcess720p && session.ffmpegProcess720p.stdin && session.ffmpegProcess720p.stdin.writable) {
+        try { session.ffmpegProcess720p.stdin.write(buf); } catch (e) { }
     }
 }
 
@@ -482,17 +488,20 @@ function stopFfmpegLive(session) {
         clearTimeout(session.disconnectTimer);
         session.disconnectTimer = null;
     }
-    if (session.ffmpegProcess) {
-        try {
-            if (session.ffmpegProcess.stdin) {
-                session.ffmpegProcess.stdin.removeAllListeners('error');
-                session.ffmpegProcess.stdin.on('error', () => { });
-                session.ffmpegProcess.stdin.end();
-            }
-            session.ffmpegProcess.kill('SIGKILL');
-        } catch (err) { }
-        session.ffmpegProcess = null;
+    for (const proc of [session.ffmpegProcess, session.ffmpegProcess720p]) {
+        if (proc) {
+            try {
+                if (proc.stdin) {
+                    proc.stdin.removeAllListeners('error');
+                    proc.stdin.on('error', () => { });
+                    proc.stdin.end();
+                }
+                proc.kill('SIGKILL');
+            } catch (err) { }
+        }
     }
+    session.ffmpegProcess = null;
+    session.ffmpegProcess720p = null;
     session.isLive = false;
     session.hostAlive = false;
     session.ffmpegSpawnedAt = 0;
@@ -540,36 +549,52 @@ function writeMasterPlaylist(session) {
     const master = [
         '#EXTM3U',
         '#EXT-X-VERSION:3',
-        '#EXT-X-STREAM-INF:BANDWIDTH=6128000,AVERAGE-BANDWIDTH=6128000,RESOLUTION=1280x720,FRAME-RATE=30.000,CODECS="avc1.4d401f,mp4a.40.2"',
-        'stream.m3u8',
+        '#EXT-X-STREAM-INF:BANDWIDTH=10128000,AVERAGE-BANDWIDTH=10128000,RESOLUTION=1920x1080,FRAME-RATE=60.000,CODECS="avc1.4d4028,mp4a.40.2"',
+        'stream1080p.m3u8',
+        '#EXT-X-STREAM-INF:BANDWIDTH=5128000,AVERAGE-BANDWIDTH=5128000,RESOLUTION=1280x720,FRAME-RATE=60.000,CODECS="avc1.4d401f,mp4a.40.2"',
+        'stream720p.m3u8',
         ''
     ].join('\n');
     fs.writeFileSync(path.join(session.liveDir, 'master.m3u8'), master);
 }
 
-function buildFfmpegArgs(session) {
+function buildFfmpegArgs1080p(session) {
     const hlsDir = session.liveDir.replace(/\\/g, '/');
-
     return [
-        '-y',
-        '-fflags', '+genpts+discardcorrupt',
-        '-probesize', '2M',
-        '-analyzeduration', '1000000',
+        '-y', '-fflags', '+genpts+discardcorrupt',
+        '-probesize', '2M', '-analyzeduration', '1000000',
         '-thread_queue_size', '1024',
         '-i', 'pipe:0',
         '-c:v', 'copy',
         '-c:a', 'aac', '-b:a', '128k', '-ar:a', '48000', '-ac:a', '2',
-        '-f', 'hls',
-        '-hls_time', '1',
-        '-hls_list_size', '20',
+        '-f', 'hls', '-hls_time', '2', '-hls_list_size', '20',
         '-hls_flags', 'delete_segments+independent_segments',
-        '-hls_segment_filename', `${hlsDir}/stream%d.ts`,
-        '-master_pl_name', 'master.m3u8',
-        `${hlsDir}/stream.m3u8`
+        '-hls_segment_filename', `${hlsDir}/stream1080p%d.ts`,
+        `${hlsDir}/stream1080p.m3u8`
     ];
 }
 
-function attachFfmpegLogging(session, proc) {
+function buildFfmpegArgs720p(session) {
+    const hlsDir = session.liveDir.replace(/\\/g, '/');
+    return [
+        '-y', '-fflags', '+genpts+discardcorrupt',
+        '-probesize', '2M', '-analyzeduration', '1000000',
+        '-thread_queue_size', '1024',
+        '-i', 'pipe:0',
+        '-vf', 'scale=1280:720:flags=lanczos',
+        '-c:v', 'libx264', '-threads:v', '2', '-preset', 'ultrafast', '-tune', 'zerolatency',
+        '-profile:v', 'main', '-pix_fmt', 'yuv420p',
+        '-b:v', '5000k', '-maxrate', '5000k', '-bufsize', '10000k',
+        '-r', '60', '-g', '120', '-keyint_min', '120', '-sc_threshold', '0',
+        '-c:a', 'aac', '-b:a', '128k', '-ar:a', '48000', '-ac:a', '2',
+        '-f', 'hls', '-hls_time', '2', '-hls_list_size', '20',
+        '-hls_flags', 'delete_segments+independent_segments',
+        '-hls_segment_filename', `${hlsDir}/stream720p%d.ts`,
+        `${hlsDir}/stream720p.m3u8`
+    ];
+}
+
+function attachFfmpegLogging(session, proc, label) {
     if (proc.stdin) proc.stdin.on('error', () => { });
 
     if (proc.stderr) {
@@ -589,21 +614,26 @@ function attachFfmpegLogging(session, proc) {
                         const speed = speedMatch ? speedMatch[1] : '1.0x';
                         const cpu = getCpuUsage();
                         const load = os.loadavg().map(l => l.toFixed(2)).join(' ');
-                        logger.info(`[FFmpeg ${session.streamKey}] Speed: ${speed} | FPS: ${fps} | CPU: ${cpu}% | Load: ${load}`);
+                        logger.info(`[FFmpeg ${session.streamKey} ${label}] Speed: ${speed} | FPS: ${fps} | CPU: ${cpu}% | Load: ${load}`);
                     }
                 } else if (msg.includes('Error') || msg.includes('Invalid') || msg.includes('failed')) {
-                    logger.error(`[FFmpeg Error ${session.streamKey}]: ${msg}`);
+                    logger.error(`[FFmpeg Error ${session.streamKey} ${label}]: ${msg}`);
                 }
             }
         });
     }
 
     proc.on('exit', (code, signal) => {
-        logger.warn(`FFmpeg exited for [${session.streamKey}] (code=${code}, signal=${signal}). Host WS alive: ${session.hostAlive}`);
-        session.ffmpegProcess = null;
-        session.ffmpegRestartBlocked = true;
-        logger.warn(`FFmpeg restart blocked for [${session.streamKey}] until stream reset; current MediaRecorder chunks may not include a fresh container header.`);
-        if (!session.hostAlive) session.isLive = false;
+        logger.warn(`FFmpeg ${label} exited for [${session.streamKey}] (code=${code}, signal=${signal}). Host WS alive: ${session.hostAlive}`);
+        if (label === '1080p') session.ffmpegProcess = null;
+        if (label === '720p') session.ffmpegProcess720p = null;
+        const anyRunning = (session.ffmpegProcess && session.ffmpegProcess.stdin && session.ffmpegProcess.stdin.writable) ||
+            (session.ffmpegProcess720p && session.ffmpegProcess720p.stdin && session.ffmpegProcess720p.stdin.writable);
+        if (!anyRunning) {
+            session.ffmpegRestartBlocked = true;
+            logger.warn(`FFmpeg restart blocked for [${session.streamKey}] until stream reset.`);
+            if (!session.hostAlive) session.isLive = false;
+        }
     });
 }
 
@@ -629,12 +659,14 @@ async function startFfmpegLive(session, opts = {}) {
     }, 3600 * 1000);
 
     const mimeType = session.hostMediaSettings?.mimeType || 'unknown';
-    logger.info(`Spawning FFmpeg Live Stream for [${session.streamKey}] (input: ${mimeType})...`, { sys: getSystemInfo() });
-    session.ffmpegProcess = spawn('ffmpeg', buildFfmpegArgs(session), { stdio: ['pipe', 'pipe', 'pipe'] });
+    logger.info(`Spawning FFmpeg Live Stream for [${session.streamKey}] (input: ${mimeType}, 1080p copy + 720p transcode)...`, { sys: getSystemInfo() });
+    session.ffmpegProcess = spawn('ffmpeg', buildFfmpegArgs1080p(session), { stdio: ['pipe', 'pipe', 'pipe'] });
+    session.ffmpegProcess720p = spawn('ffmpeg', buildFfmpegArgs720p(session), { stdio: ['pipe', 'pipe', 'pipe'] });
     session.isLive = true;
     session.ffmpegSpawnedAt = Date.now();
 
-    attachFfmpegLogging(session, session.ffmpegProcess);
+    attachFfmpegLogging(session, session.ffmpegProcess, '1080p');
+    attachFfmpegLogging(session, session.ffmpegProcess720p, '720p');
 }
 
 // ─── Authentication & User Routes ──────────────────────────────────────────────

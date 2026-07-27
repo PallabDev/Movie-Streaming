@@ -16,6 +16,7 @@ jspm_packages/
 media/
 public/live/
 PROJECT_SOURCE.md
+last_working_checkpoint
 
 # TypeScript v1 declaration files
 typings/

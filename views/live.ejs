@@ -268,11 +268,6 @@
                             fragLoadingTimeOut: 10000,
                             fragLoadingMaxRetry: 10,
                             fragLoadingRetryDelay: 500,
-                            // Prevent caching of segments - always fetch fresh
-                            xhrSetup: function(xhr, url) {
-                                const separator = url.includes('?') ? '&' : '?';
-                                xhr.open('GET', url + separator + '_t=' + Date.now(), true);
-                            }
                         });
 
                         hls.loadSource(masterUrl);
