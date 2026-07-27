@@ -549,9 +549,9 @@ function writeMasterPlaylist(session) {
     const master = [
         '#EXTM3U',
         '#EXT-X-VERSION:3',
-        '#EXT-X-STREAM-INF:BANDWIDTH=10128000,AVERAGE-BANDWIDTH=10128000,RESOLUTION=1920x1080,FRAME-RATE=60.000,CODECS="avc1.4d4028,mp4a.40.2"',
+        '#EXT-X-STREAM-INF:BANDWIDTH=8128000,AVERAGE-BANDWIDTH=8128000,RESOLUTION=1920x1080,FRAME-RATE=30.000,CODECS="avc1.4d4028,mp4a.40.2"',
         'stream1080p.m3u8',
-        '#EXT-X-STREAM-INF:BANDWIDTH=5128000,AVERAGE-BANDWIDTH=5128000,RESOLUTION=1280x720,FRAME-RATE=60.000,CODECS="avc1.4d401f,mp4a.40.2"',
+        '#EXT-X-STREAM-INF:BANDWIDTH=3128000,AVERAGE-BANDWIDTH=3128000,RESOLUTION=1280x720,FRAME-RATE=30.000,CODECS="avc1.4d401f,mp4a.40.2"',
         'stream720p.m3u8',
         ''
     ].join('\n');
@@ -581,10 +581,10 @@ function buildFfmpegArgs720p(session) {
         '-probesize', '2M', '-analyzeduration', '1000000',
         '-thread_queue_size', '1024',
         '-i', 'pipe:0',
-        '-vf', 'scale=1280:720:flags=bilinear',
-        '-c:v', 'libx264', '-threads:v', '2', '-preset', 'veryfast', '-tune', 'zerolatency',
+        '-vf', 'fps=30,scale=1280:720:flags=bilinear',
+        '-c:v', 'libx264', '-threads:v', '2', '-preset', 'ultrafast', '-tune', 'zerolatency',
         '-profile:v', 'main', '-pix_fmt', 'yuv420p',
-        '-b:v', '5000k', '-maxrate', '5000k', '-bufsize', '10000k',
+        '-b:v', '3000k', '-maxrate', '3000k', '-bufsize', '6000k',
         '-c:a', 'aac', '-b:a', '128k', '-ar:a', '48000', '-ac:a', '2',
         '-f', 'hls', '-hls_time', '2', '-hls_list_size', '20',
         '-hls_flags', 'delete_segments+independent_segments',
@@ -658,7 +658,7 @@ async function startFfmpegLive(session, opts = {}) {
     }, 3600 * 1000);
 
     const mimeType = session.hostMediaSettings?.mimeType || 'unknown';
-    logger.info(`Spawning FFmpeg Live Stream for [${session.streamKey}] (input: ${mimeType}, 1080p copy + 720p transcode)...`, { sys: getSystemInfo() });
+    logger.info(`Spawning FFmpeg Live Stream for [${session.streamKey}] (input: ${mimeType}, 1080p30 copy + 720p30 transcode)...`, { sys: getSystemInfo() });
     writeMasterPlaylist(session);
     session.ffmpegProcess = spawn('ffmpeg', buildFfmpegArgs1080p(session), { stdio: ['pipe', 'pipe', 'pipe'] });
     session.ffmpegProcess720p = spawn('ffmpeg', buildFfmpegArgs720p(session), { stdio: ['pipe', 'pipe', 'pipe'] });

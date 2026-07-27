@@ -29,6 +29,7 @@
         .gradient-text {
             background: linear-gradient(135deg, #6366f1 0%, #a855f7 50%, #ec4899 100%);
             -webkit-background-clip: text;
+            background-clip: text;
             -webkit-text-fill-color: transparent;
         }
     </style>
@@ -215,7 +216,7 @@
                                 <div class="bg-slate-900/80 p-4 rounded-xl border border-white/5">
                                     <div class="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">⚡ Chunk Statistics</div>
                                     <div class="text-xl font-bold text-indigo-400"><%= u.totalChunks %> <span class="text-xs text-slate-400 font-normal">Total Chunks</span></div>
-                                    <div class="text-[11px] text-slate-500 mt-1">1080p copy + 720p transcode → HLS</div>
+                                    <div class="text-[11px] text-slate-500 mt-1">1080p 30fps copy + 720p 30fps transcode -> HLS</div>
                                 </div>
 
                                 <!-- Card 4: Failure Tracking -->
@@ -298,10 +299,10 @@
                             <div class="pt-4 border-t border-white/5 flex items-center justify-between flex-wrap gap-3">
                                 <div class="flex items-center gap-3">
                                     <!-- Toggle Access -->
-                                    <button onclick="toggleUserAccess('<%= u.id %>', <%= !u.hasAccess %>)" 
-                                            class="px-3 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5 <%= u.hasAccess ? 'bg-amber-500/10 text-amber-400 hover:bg-amber-500/20 border border-amber-500/20' : 'bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 border border-emerald-500/20' %>">
-                                        <i class="fa-solid <%= u.hasAccess ? 'fa-user-xmark' : 'fa-user-check' %>"></i>
-                                        <span><%= u.hasAccess ? 'Revoke Access' : 'Approve Access' %></span>
+                                    <button data-user-id="<%= u.id %>" data-has-access="<%= u.hasAccess %>" onclick="toggleUserAccess(this.dataset.userId, this.dataset.hasAccess === 'true' ? 'false' : 'true')"
+                                            class="toggle-access-btn px-3 py-1.5 rounded-lg text-xs font-semibold transition-all flex items-center gap-1.5">
+                                        <i class="fa-solid"></i>
+                                        <span></span>
                                     </button>
 
                                     <!-- Reset Stream Count -->
@@ -335,6 +336,18 @@
     </main>
 
     <script>
+        // Initialize toggle access buttons (avoids EJS in inline attributes)
+        document.querySelectorAll('.toggle-access-btn').forEach(btn => {
+            const hasAccess = btn.dataset.hasAccess === 'true';
+            btn.classList.add(hasAccess ? 'bg-amber-500/10' : 'bg-emerald-500/10');
+            btn.classList.add(hasAccess ? 'text-amber-400' : 'text-emerald-400');
+            btn.classList.add(hasAccess ? 'hover:bg-amber-500/20' : 'hover:bg-emerald-500/20');
+            btn.classList.add(hasAccess ? 'border' : 'border');
+            btn.classList.add(hasAccess ? 'border-amber-500/20' : 'border-emerald-500/20');
+            btn.querySelector('i').classList.add('fa-solid', hasAccess ? 'fa-user-xmark' : 'fa-user-check');
+            btn.querySelector('span').textContent = hasAccess ? 'Revoke Access' : 'Approve Access';
+        });
+
         function toggleAccordion(userId) {
             const content = document.getElementById(`content-${userId}`);
             const arrow = document.getElementById(`arrow-${userId}`);

@@ -48,6 +48,8 @@
             padding: 0;
             width: 100%;
             height: 100%;
+            min-height: 100vh;
+            min-height: 100dvh;
             overflow: hidden;
             background: #000000;
         }
@@ -93,7 +95,7 @@
     </style>
 </head>
 
-<body class="flex items-center justify-center bg-black">
+<body class="flex items-center justify-center bg-black" style="display:flex; align-items:center; justify-content:center;">
 
     <div class="sh-player group" id="sh-player-container">
 
@@ -164,6 +166,28 @@
                 </div>
 
                 <div class="flex items-center gap-3 relative">
+                    <!-- Quality Badge -->
+                    <span id="quality-badge"
+                        class="px-2 py-0.5 rounded text-[10px] font-semibold bg-indigo-500/20 text-indigo-400 border border-indigo-500/30 cursor-pointer hover:bg-indigo-500/30 transition-colors"
+                        title="Click to change quality">Auto</span>
+
+                    <!-- Quality Dropdown -->
+                    <div id="quality-dropdown"
+                        class="absolute bottom-full right-0 mb-2 bg-slate-900/95 backdrop-blur-sm border border-white/10 rounded-xl shadow-2xl py-1 min-w-[140px] hidden z-30">
+                        <button data-quality="auto"
+                            class="quality-option w-full text-left px-4 py-2 text-xs font-semibold text-slate-300 hover:bg-white/10 hover:text-white transition-colors flex items-center gap-2">
+                            <i class="fa-solid fa-wand-magic-sparkles text-indigo-400 w-4"></i> Auto
+                        </button>
+                        <button data-quality="1080"
+                            class="quality-option w-full text-left px-4 py-2 text-xs font-semibold text-slate-300 hover:bg-white/10 hover:text-white transition-colors flex items-center gap-2">
+                            <i class="fa-solid fa-star text-amber-400 w-4"></i> 1080p
+                        </button>
+                        <button data-quality="720"
+                            class="quality-option w-full text-left px-4 py-2 text-xs font-semibold text-slate-300 hover:bg-white/10 hover:text-white transition-colors flex items-center gap-2">
+                            <i class="fa-solid fa-video text-green-400 w-4"></i> 720p
+                        </button>
+                    </div>
+
                     <!-- Fullscreen Button -->
                     <button id="sh-full-btn"
                         class="w-10 h-10 rounded-xl bg-white/10 hover:bg-white/20 text-white flex items-center justify-center text-base transition-colors">
@@ -192,6 +216,8 @@
                 const connBadge = document.getElementById('conn-badge');
                 const connDot = document.getElementById('conn-dot');
                 const connLabel = document.getElementById('conn-label');
+                const qualityBadge = document.getElementById('quality-badge');
+                const qualityDropdown = document.getElementById('quality-dropdown');
 
                 const currentStreamKey = '<%= typeof streamKey !== "undefined" ? streamKey : "default" %>';
                 const masterUrl = `/live-playlist/${encodeURIComponent(currentStreamKey)}/master.m3u8`;
@@ -277,6 +303,11 @@
                             hideOffline();
                             hideLoading();
                             showControls();
+                            // Initialize quality badge
+                            if (data.levels && data.levels.length > 0) {
+                                const autoHeight = data.levels[hls.currentLevel >= 0 ? hls.currentLevel : 0]?.height;
+                                qualityBadge.textContent = currentQuality === 'auto' ? (autoHeight ? autoHeight + 'p' : 'Auto') : currentQuality + 'p';
+                            }
                             // Seek to live edge on start/reconnect
                             if (video.duration && video.duration > 0) {
                                 video.currentTime = video.duration - 10;
@@ -438,6 +469,76 @@
                 }
 
                 fullBtn.addEventListener('click', toggleFullscreen);
+
+                // ─── Quality Switching ───────────────────────────────────────────────
+                let currentQuality = 'auto';
+
+                function setQuality(level) {
+                    if (!hls) return;
+                    if (level === 'auto') {
+                        hls.currentLevel = -1;
+                        currentQuality = 'auto';
+                        qualityBadge.textContent = 'Auto';
+                    } else {
+                        const targetHeight = parseInt(level);
+                        for (let i = 0; i < hls.levels.length; i++) {
+                            if (hls.levels[i].height === targetHeight) {
+                                hls.currentLevel = i;
+                                currentQuality = level;
+                                qualityBadge.textContent = targetHeight + 'p';
+                                return;
+                            }
+                        }
+                        // Fallback: find closest level
+                        let closest = 0;
+                        let minDiff = Infinity;
+                        for (let i = 0; i < hls.levels.length; i++) {
+                            const diff = Math.abs((hls.levels[i].height || 0) - targetHeight);
+                            if (diff < minDiff) { minDiff = diff; closest = i; }
+                        }
+                        hls.currentLevel = closest;
+                        currentQuality = String(hls.levels[closest].height || level);
+                        qualityBadge.textContent = (hls.levels[closest].height || '?') + 'p';
+                    }
+                    qualityDropdown.classList.add('hidden');
+                }
+
+                function updateQualityBadgeFromHls() {
+                    if (!hls || currentQuality !== 'auto') return;
+                    if (hls.currentLevel >= 0 && hls.levels[hls.currentLevel]) {
+                        qualityBadge.textContent = (hls.levels[hls.currentLevel].height || 'Auto') + 'p';
+                    }
+                }
+
+                // Toggle dropdown
+                qualityBadge.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    qualityDropdown.classList.toggle('hidden');
+                });
+
+                // Close dropdown on outside click
+                document.addEventListener('click', (e) => {
+                    if (!qualityDropdown.contains(e.target) && e.target !== qualityBadge) {
+                        qualityDropdown.classList.add('hidden');
+                    }
+                });
+
+                // Quality option clicks
+                document.querySelectorAll('.quality-option').forEach(btn => {
+                    btn.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        setQuality(btn.dataset.quality);
+                    });
+                });
+
+                // Update quality badge on level switch
+                let lastLevel = -1;
+                setInterval(() => {
+                    if (hls && hls.currentLevel !== lastLevel) {
+                        lastLevel = hls.currentLevel;
+                        updateQualityBadgeFromHls();
+                    }
+                }, 2000);
 
                 function connectStatusWebSocket() {
                     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
