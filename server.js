@@ -130,6 +130,7 @@ function getOrCreateStreamSession(streamKey, title = 'Live Movie Stream', user =
         chunks480pCount: 0,
         totalChunksCount: 0,
         failureCount: 0,
+        ffmpegRestartBlocked: false,
         hostIngestStats: {
             bytes: 0,
             chunks: 0,
@@ -361,7 +362,7 @@ streamWss.on('connection', (ws) => {
             const buf = Buffer.isBuffer(data) ? data : Buffer.from(data);
             logHostIngestStats(session, 'ws', buf.length);
 
-            if (!hasRunningFfmpeg(session)) {
+            if (!hasRunningFfmpeg(session) && !session.ffmpegRestartBlocked) {
                 try {
                     await startFfmpegLive(session);
                     broadcastStatus(session, true);
@@ -389,7 +390,10 @@ streamWss.on('connection', (ws) => {
     ws.on('close', () => {
         logger.info(`Host WebSocket disconnected for [${key}]. Keeping FFmpeg process alive for 90s reconnection window...`);
         const session = activeStreams.get(key);
-        if (session) session.hostAlive = false;
+        if (session) {
+            session.hostAlive = false;
+            session.ffmpegRestartBlocked = false;
+        }
         if (session && session.isLive) {
             if (session.disconnectTimer) clearTimeout(session.disconnectTimer);
             session.disconnectTimer = setTimeout(() => {
@@ -633,23 +637,15 @@ function getEncoderArgsForStream(quality, streamIndex, bitrate, bufsize) {
     ];
 }
 
-function isH264HostInput(session) {
-    const mimeType = (session.hostMediaSettings?.mimeType || '').toLowerCase();
-    return mimeType.includes('h264') || mimeType.includes('avc1');
-}
-
 function buildFfmpegArgs(session) {
     const hlsDir = session.liveDir.replace(/\\/g, '/');
-    const canCopy720p = isH264HostInput(session) && H264_ENCODER.name === 'libx264';
     const v720Filter = H264_ENCODER.name === 'h264_vaapi'
         ? 'fps=30,format=nv12,hwupload[v720]'
         : 'fps=30[v720]';
     const v480Filter = H264_ENCODER.name === 'h264_vaapi'
         ? 'scale=854:480:flags=fast_bilinear,fps=24,format=nv12,hwupload[v480]'
         : 'scale=854:480:flags=fast_bilinear,fps=24[v480]';
-    const filterComplex = canCopy720p
-        ? `[0:v]${v480Filter};[0:a][1:a]amix=inputs=2:duration=first:dropout_transition=0:normalize=0,aresample=async=1:first_pts=0,asplit=2[a720][a480]`
-        : `[0:v]split=2[v720src][v480src];[v720src]${v720Filter};[v480src]${v480Filter};[0:a][1:a]amix=inputs=2:duration=first:dropout_transition=0:normalize=0,aresample=async=1:first_pts=0,asplit=2[a720][a480]`;
+    const filterComplex = `[0:v]split=2[v720src][v480src];[v720src]${v720Filter};[v480src]${v480Filter};[0:a][1:a]amix=inputs=2:duration=first:dropout_transition=0:normalize=0,aresample=async=1:first_pts=0,asplit=2[a720][a480]`;
 
     return [
         '-y',
@@ -663,9 +659,9 @@ function buildFfmpegArgs(session) {
         '-i', 'anullsrc=channel_layout=stereo:sample_rate=48000',
         '-filter_complex', filterComplex,
 
-        '-map', canCopy720p ? '0:v:0' : '[v720]', '-map', '[a720]',
+        '-map', '[v720]', '-map', '[a720]',
         '-r:v:0', '30', '-g:v:0', '30', '-keyint_min:v:0', '30', '-sc_threshold:v:0', '0',
-        ...(canCopy720p ? ['-c:v:0', 'copy'] : getEncoderArgsForStream('720p', 0, '6000k', '12000k')),
+        ...getEncoderArgsForStream('720p', 0, '6000k', '12000k'),
         '-c:a:0', 'aac', '-b:a:0', '128k', '-ar:a:0', '48000', '-ac:a:0', '2',
 
         '-map', '[v480]', '-map', '[a480]',
@@ -718,6 +714,10 @@ function attachFfmpegLogging(session, quality, proc) {
         if (session.ffmpegProcesses) session.ffmpegProcesses[quality] = null;
         const anyRunning = session.ffmpegProcesses && Object.values(session.ffmpegProcesses).some(Boolean);
         session.ffmpegProcess = anyRunning ? session.ffmpegProcess : null;
+        if (session.hostAlive) {
+            session.ffmpegRestartBlocked = true;
+            logger.warn(`FFmpeg restart blocked for [${session.streamKey}] until host reconnects or stream resets; current MediaRecorder chunks may not include a fresh container header.`);
+        }
         if (!session.hostAlive && !anyRunning) session.isLive = false;
     });
 }
@@ -727,6 +727,7 @@ async function startFfmpegLive(session, opts = {}) {
 
     stopFfmpegLive(session);
     clearLiveFolder(session);
+    session.ffmpegRestartBlocked = false;
 
     // 1-Hour Stream Limit Timer
     session.countedAgainstLimit = false;
@@ -740,8 +741,7 @@ async function startFfmpegLive(session, opts = {}) {
         }
     }, 3600 * 1000);
 
-    const inputMode = isH264HostInput(session) ? 'h264-input-copy-720p' : 'transcode-720p-480p';
-    logger.info(`Spawning optimized shared Live Stream Generator for [${session.streamKey}] with ${H264_ENCODER.name} (${H264_ENCODER.reason}, ${inputMode})...`, { sys: getSystemInfo() });
+    logger.info(`Spawning optimized shared Live Stream Generator for [${session.streamKey}] with ${H264_ENCODER.name} (${H264_ENCODER.reason}, transcode-720p-480p)...`, { sys: getSystemInfo() });
     session.ffmpegProcesses = { '720p': null, '480p': null };
     session.ffmpegProcess = spawn('ffmpeg', buildFfmpegArgs(session), { stdio: ['pipe', 'pipe', 'pipe'] });
     session.isLive = true;
@@ -1191,7 +1191,7 @@ app.post(['/stream', '/stream/:streamKey'], async (req, res) => {
                 session.disconnectTimer = null;
             }, 90 * 1000);
         }
-        if (!hasRunningFfmpeg(session)) {
+        if (!hasRunningFfmpeg(session) && !session.ffmpegRestartBlocked) {
             try {
                 await startFfmpegLive(session);
                 broadcastStatus(session, true);
