@@ -454,12 +454,11 @@ async function startFfmpegLive(session, opts = {}) {
     const hlsDir = session.liveDir.replace(/\\/g, '/');
 
     const filterComplex = '[0:v]scale=1280:720:flags=fast_bilinear,split=2[v720][v480down];' +
-        '[v480down]scale=854:480:flags=fast_bilinear[v480];' +
+        '[v480down]scale=854:480:flags=fast_bilinear,fps=24[v480];' +
         '[0:a][1:a]amix=inputs=2:duration=first:dropout_transition=0:normalize=0,aresample=async=1:first_pts=0,asplit=2[a720][a480]';
 
     const args = [
         '-y',
-        '-threads', '0',
         '-fflags', '+genpts+discardcorrupt',
         '-probesize', '2M',
         '-analyzeduration', '1000000',
@@ -473,24 +472,24 @@ async function startFfmpegLive(session, opts = {}) {
     ];
 
     args.push(
-        // 720p H.264: 6 Mbps
+        // 720p H.264: 6 Mbps — 2 threads (480p gets the rest)
         '-map', '[v720]', '-map', '[a720]',
         '-c:v:0', 'libx264', '-preset', 'ultrafast', '-tune:v:0', 'zerolatency',
         '-profile:v:0', 'main', '-pix_fmt:v:0', 'yuv420p',
         '-b:v:0', '6000k', '-maxrate:v:0', '6000k', '-bufsize:v:0', '12000k',
         '-r:v:0', '30', '-g:v:0', '30', '-keyint_min:v:0', '30', '-sc_threshold:v:0', '0',
-        '-x264-params:v:0', 'keyint=30:min-keyint=30:scenecut=0:bframes=0:rc-lookahead=0:ref=1:me=dia:subme=0:trellis=0:mixed-refs=0:8x8dct=0:weightb=0:b-adapt=0:direct=none:no-mbtree=1:force-cfr=1:aq-mode=0:partitions=none:no-deblock=1:threads=4:sliced-threads=1',
+        '-x264-params:v:0', 'keyint=30:min-keyint=30:scenecut=0:bframes=0:rc-lookahead=0:ref=1:me=dia:subme=0:trellis=0:mixed-refs=0:8x8dct=0:weightb=0:b-adapt=0:direct=none:no-mbtree=1:force-cfr=1:aq-mode=0:partitions=none:no-deblock=1:threads=2:sliced-threads=1',
         '-c:a:0', 'aac', '-b:a:0', '128k', '-ar:a:0', '48000', '-ac:a:0', '2'
     );
 
     args.push(
-        // 480p H.264: 2 Mbps
+        // 480p H.264: 2 Mbps — 24fps, 2 threads
         '-map', '[v480]', '-map', '[a480]',
         '-c:v:1', 'libx264', '-preset', 'ultrafast', '-tune:v:1', 'zerolatency',
         '-profile:v:1', 'main', '-pix_fmt:v:1', 'yuv420p',
         '-b:v:1', '2000k', '-maxrate:v:1', '2000k', '-bufsize:v:1', '4000k',
-        '-r:v:1', '30', '-g:v:1', '30', '-keyint_min:v:1', '30', '-sc_threshold:v:1', '0',
-        '-x264-params:v:1', 'keyint=30:min-keyint=30:scenecut=0:bframes=0:rc-lookahead=0:ref=1:me=dia:subme=0:trellis=0:mixed-refs=0:8x8dct=0:weightb=0:b-adapt=0:direct=none:no-mbtree=1:force-cfr=1:aq-mode=0:partitions=none:no-deblock=1:threads=4:sliced-threads=1',
+        '-r:v:1', '24', '-g:v:1', '24', '-keyint_min:v:1', '24', '-sc_threshold:v:1', '0',
+        '-x264-params:v:1', 'keyint=24:min-keyint=24:scenecut=0:bframes=0:rc-lookahead=0:ref=1:me=dia:subme=0:trellis=0:mixed-refs=0:8x8dct=0:weightb=0:b-adapt=0:direct=none:no-mbtree=1:force-cfr=1:aq-mode=0:partitions=none:no-deblock=1:threads=2:sliced-threads=1',
         '-c:a:1', 'aac', '-b:a:1', '96k', '-ar:a:1', '48000', '-ac:a:1', '2'
     );
 
