@@ -392,7 +392,6 @@ streamWss.on('connection', (ws) => {
         const session = activeStreams.get(key);
         if (session) {
             session.hostAlive = false;
-            session.ffmpegRestartBlocked = false;
         }
         if (session && session.isLive) {
             if (session.disconnectTimer) clearTimeout(session.disconnectTimer);
@@ -714,10 +713,8 @@ function attachFfmpegLogging(session, quality, proc) {
         if (session.ffmpegProcesses) session.ffmpegProcesses[quality] = null;
         const anyRunning = session.ffmpegProcesses && Object.values(session.ffmpegProcesses).some(Boolean);
         session.ffmpegProcess = anyRunning ? session.ffmpegProcess : null;
-        if (session.hostAlive) {
-            session.ffmpegRestartBlocked = true;
-            logger.warn(`FFmpeg restart blocked for [${session.streamKey}] until host reconnects or stream resets; current MediaRecorder chunks may not include a fresh container header.`);
-        }
+        session.ffmpegRestartBlocked = true;
+        logger.warn(`FFmpeg restart blocked for [${session.streamKey}] until stream reset; current MediaRecorder chunks may not include a fresh container header.`);
         if (!session.hostAlive && !anyRunning) session.isLive = false;
     });
 }
@@ -1134,6 +1131,7 @@ app.post(['/reset-stream', '/reset-stream/:streamKey'], async (req, res) => {
     try {
         stopFfmpegLive(session);
         clearLiveFolder(session);
+        session.ffmpegRestartBlocked = false;
         broadcastStatus(session, false);
         res.json({ success: true, message: `Stream ${key} reset`, streamKey: key });
     } catch (err) {
