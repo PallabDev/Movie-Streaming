@@ -321,28 +321,10 @@ function tryHandleHostControlMessage(session, data, isBinary) {
 }
 
 function hasRunningFfmpeg(session) {
-    if (session.ffmpegProcesses) {
-        return ['720p', '480p'].every(quality => {
-            const proc = session.ffmpegProcesses[quality];
-            return proc && proc.stdin && proc.stdin.writable;
-        });
-    }
     return !!(session.ffmpegProcess && session.ffmpegProcess.stdin && session.ffmpegProcess.stdin.writable);
 }
 
 function writeChunkToFfmpeg(session, buf) {
-    if (session.ffmpegProcesses) {
-        for (const [quality, proc] of Object.entries(session.ffmpegProcesses)) {
-            if (!proc || !proc.stdin || !proc.stdin.writable) continue;
-            try {
-                proc.stdin.write(buf);
-            } catch (e) {
-                logger.warn(`[FFmpeg ${session.streamKey} ${quality}] stdin write failed: ${e.message}`);
-            }
-        }
-        return;
-    }
-
     if (session.ffmpegProcess && session.ffmpegProcess.stdin && session.ffmpegProcess.stdin.writable) {
         try { session.ffmpegProcess.stdin.write(buf); } catch (e) { }
     }
@@ -622,25 +604,48 @@ function getEncoderArgs(quality, bitrate, bufsize) {
     ];
 }
 
-function buildFfmpegArgs(session, quality) {
+function getEncoderArgsForStream(quality, streamIndex, bitrate, bufsize) {
+    if (H264_ENCODER.name === 'h264_nvenc') {
+        return [
+            `-c:v:${streamIndex}`, 'h264_nvenc', `-preset:v:${streamIndex}`, 'p1',
+            `-tune:v:${streamIndex}`, 'll', `-rc:v:${streamIndex}`, 'cbr',
+            `-b:v:${streamIndex}`, bitrate, `-maxrate:v:${streamIndex}`, bitrate, `-bufsize:v:${streamIndex}`, bufsize,
+            `-profile:v:${streamIndex}`, 'main', `-pix_fmt:v:${streamIndex}`, 'yuv420p'
+        ];
+    }
+
+    if (H264_ENCODER.name === 'h264_vaapi') {
+        return [
+            `-c:v:${streamIndex}`, 'h264_vaapi',
+            `-b:v:${streamIndex}`, bitrate, `-maxrate:v:${streamIndex}`, bitrate, `-bufsize:v:${streamIndex}`, bufsize,
+            `-profile:v:${streamIndex}`, '578'
+        ];
+    }
+
+    const keyint = quality === '720p' ? '30' : '24';
+    return [
+        `-c:v:${streamIndex}`, 'libx264', `-threads:v:${streamIndex}`, '0',
+        `-preset:v:${streamIndex}`, 'ultrafast', `-tune:v:${streamIndex}`, 'zerolatency',
+        `-profile:v:${streamIndex}`, 'main', `-pix_fmt:v:${streamIndex}`, 'yuv420p',
+        `-b:v:${streamIndex}`, bitrate, `-maxrate:v:${streamIndex}`, bitrate, `-bufsize:v:${streamIndex}`, bufsize,
+        `-x264-params:v:${streamIndex}`, `keyint=${keyint}:min-keyint=${keyint}:scenecut=0:bframes=0:rc-lookahead=0:ref=1:me=dia:subme=0:trellis=0:mixed-refs=0:8x8dct=0:weightb=0:b-adapt=0:direct=none:no-mbtree=1:force-cfr=1:aq-mode=0:partitions=none:no-deblock=1`
+    ];
+}
+
+function buildFfmpegArgs(session) {
     const hlsDir = session.liveDir.replace(/\\/g, '/');
-    const is720 = quality === '720p';
-    const width = is720 ? 1280 : 854;
-    const height = is720 ? 720 : 480;
-    const fps = is720 ? 30 : 24;
-    const bitrate = is720 ? '6000k' : '2000k';
-    const bufsize = is720 ? '12000k' : '4000k';
-    const audioBitrate = is720 ? '128k' : '96k';
-    const segmentPrefix = is720 ? 'stream_720p' : 'stream_480p';
-    const scaled = `scale=${width}:${height}:flags=fast_bilinear`;
-    const videoFilter = H264_ENCODER.name === 'h264_vaapi'
-        ? `${scaled},fps=${fps},format=nv12,hwupload`
-        : `${scaled},fps=${fps}`;
-    const filterComplex = `[0:v]${videoFilter}[vout];` +
-        '[0:a][1:a]amix=inputs=2:duration=first:dropout_transition=0:normalize=0,aresample=async=1:first_pts=0[aout]';
+    const v720Filter = H264_ENCODER.name === 'h264_vaapi'
+        ? 'fps=30,format=nv12,hwupload[v720]'
+        : 'fps=30[v720]';
+    const v480Filter = H264_ENCODER.name === 'h264_vaapi'
+        ? 'scale=854:480:flags=fast_bilinear,fps=24,format=nv12,hwupload[v480]'
+        : 'scale=854:480:flags=fast_bilinear,fps=24[v480]';
+    const filterComplex = `[0:v]split=2[v720src][v480src];[v720src]${v720Filter};[v480src]${v480Filter};` +
+        '[0:a][1:a]amix=inputs=2:duration=first:dropout_transition=0:normalize=0,aresample=async=1:first_pts=0,asplit=2[a720][a480]';
 
     return [
         '-y',
+        ...(H264_ENCODER.name === 'h264_vaapi' ? ['-vaapi_device', '/dev/dri/renderD128'] : []),
         '-fflags', '+genpts+discardcorrupt',
         '-probesize', '2M',
         '-analyzeduration', '1000000',
@@ -649,20 +654,25 @@ function buildFfmpegArgs(session, quality) {
         '-f', 'lavfi',
         '-i', 'anullsrc=channel_layout=stereo:sample_rate=48000',
         '-filter_complex', filterComplex,
-        '-map', '[vout]',
-        '-map', '[aout]',
-        '-r', String(fps),
-        '-g', String(fps),
-        '-keyint_min', String(fps),
-        '-sc_threshold', '0',
-        ...getEncoderArgs(quality, bitrate, bufsize),
-        '-c:a', 'aac', '-b:a', audioBitrate, '-ar', '48000', '-ac', '2',
+
+        '-map', '[v720]', '-map', '[a720]',
+        '-r:v:0', '30', '-g:v:0', '30', '-keyint_min:v:0', '30', '-sc_threshold:v:0', '0',
+        ...getEncoderArgsForStream('720p', 0, '6000k', '12000k'),
+        '-c:a:0', 'aac', '-b:a:0', '128k', '-ar:a:0', '48000', '-ac:a:0', '2',
+
+        '-map', '[v480]', '-map', '[a480]',
+        '-r:v:1', '24', '-g:v:1', '24', '-keyint_min:v:1', '24', '-sc_threshold:v:1', '0',
+        ...getEncoderArgsForStream('480p', 1, '2000k', '4000k'),
+        '-c:a:1', 'aac', '-b:a:1', '96k', '-ar:a:1', '48000', '-ac:a:1', '2',
+
         '-f', 'hls',
         '-hls_time', '1',
         '-hls_list_size', '20',
         '-hls_flags', 'delete_segments+independent_segments',
-        '-hls_segment_filename', `${hlsDir}/${segmentPrefix}%d.ts`,
-        `${hlsDir}/${segmentPrefix}.m3u8`
+        '-hls_segment_filename', `${hlsDir}/stream_%v%d.ts`,
+        '-master_pl_name', 'master.m3u8',
+        '-var_stream_map', 'v:0,a:0,name:720p v:1,a:1,name:480p',
+        `${hlsDir}/stream_%v.m3u8`
     ];
 }
 
@@ -722,19 +732,13 @@ async function startFfmpegLive(session, opts = {}) {
         }
     }, 3600 * 1000);
 
-    writeMasterPlaylist(session);
-
-    logger.info(`Spawning split Live Stream Generators for [${session.streamKey}] with ${H264_ENCODER.name} (${H264_ENCODER.reason})...`, { sys: getSystemInfo() });
-    session.ffmpegProcesses = {
-        '720p': spawn('ffmpeg', buildFfmpegArgs(session, '720p'), { stdio: ['pipe', 'pipe', 'pipe'] }),
-        '480p': spawn('ffmpeg', buildFfmpegArgs(session, '480p'), { stdio: ['pipe', 'pipe', 'pipe'] })
-    };
-    session.ffmpegProcess = session.ffmpegProcesses['720p'];
+    logger.info(`Spawning optimized shared Live Stream Generator for [${session.streamKey}] with ${H264_ENCODER.name} (${H264_ENCODER.reason})...`, { sys: getSystemInfo() });
+    session.ffmpegProcesses = { '720p': null, '480p': null };
+    session.ffmpegProcess = spawn('ffmpeg', buildFfmpegArgs(session), { stdio: ['pipe', 'pipe', 'pipe'] });
     session.isLive = true;
     session.ffmpegSpawnedAt = Date.now();
 
-    attachFfmpegLogging(session, '720p', session.ffmpegProcesses['720p']);
-    attachFfmpegLogging(session, '480p', session.ffmpegProcesses['480p']);
+    attachFfmpegLogging(session, '720p+480p', session.ffmpegProcess);
 }
 
 // ─── Authentication & User Routes ──────────────────────────────────────────────
