@@ -869,8 +869,7 @@
                     });
                 }
 
-                // Setup MediaRecorder — prefer H.264/MP4 for faster server-side decode (VP8 is CPU-heavy to decode).
-                // Falls back to WebM VP8 if H.264 is not supported.
+                // Setup MediaRecorder — VP8/WebM for reliable small timeslice chunks for live ingest.
                 let mimeType = 'video/webm;codecs=vp8,opus';
                 if (!MediaRecorder.isTypeSupported(mimeType)) {
                     mimeType = 'video/webm;codecs=vp9,opus';
@@ -881,7 +880,6 @@
 
                 let preferredMime = null;
                 const recorderOptions = [
-                    'video/mp4;codecs="avc1.42E01E, mp4a.40.2"',
                     'video/webm;codecs=vp8,opus',
                     'video/webm;codecs=vp9,opus',
                     'video/webm',
@@ -894,14 +892,14 @@
                 mediaRecorder = new MediaRecorder(mediaStream, {
                     mimeType: preferredMime,
                     audioBitsPerSecond: 128000, // 128 kbps audio to match HLS audio bitrate
-                    videoBitsPerSecond: 6000000 // 6 Mbps - matches server 720p encode bitrate
+                    videoBitsPerSecond: 4500000 // 4.5 Mbps - matches server 720p encode bitrate
                 });
 
                 if (streamWs && streamWs.readyState === WebSocket.OPEN) {
                     streamWs.send(JSON.stringify({
                         type: 'HOST_MEDIA_SETTINGS',
                         mimeType: preferredMime,
-                        videoBitsPerSecond: 6000000,
+                        videoBitsPerSecond: 4500000,
                         audioBitsPerSecond: 128000,
                         trackSettings
                     }));

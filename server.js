@@ -658,7 +658,7 @@ function buildFfmpegArgs(session) {
     const v480Filter = H264_ENCODER.name === 'h264_vaapi'
         ? 'scale=854:480:flags=fast_bilinear,fps=24,format=nv12,hwupload[v480]'
         : 'scale=854:480:flags=fast_bilinear,fps=24[v480]';
-    const filterComplex = `[0:v]split=2[v720src][v480src];[v720src]${v720Filter};[v480src]${v480Filter};[0:a][1:a]amix=inputs=2:duration=first:dropout_transition=0:normalize=0,aresample=async=1:first_pts=0,asplit=2[a720][a480]`;
+    const filterComplex = `[0:v]split=2[v720src][v480src];[v720src]${v720Filter};[v480src]${v480Filter};[0:a]aformat=channel_layouts=stereo:sample_rates=48000,aresample=async=1:first_pts=0,asplit=2[a720][a480]`;
 
     return [
         '-y',
@@ -668,8 +668,6 @@ function buildFfmpegArgs(session) {
         '-analyzeduration', '1000000',
         '-thread_queue_size', '1024',
         '-i', 'pipe:0',
-        '-f', 'lavfi',
-        '-i', 'anullsrc=channel_layout=stereo:sample_rate=48000',
         '-filter_complex', filterComplex,
 
         '-map', '[v720]', '-map', '[a720]',
