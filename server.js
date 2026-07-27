@@ -297,6 +297,7 @@ function tryHandleHostControlMessage(session, data, isBinary) {
         const raw = typeof data === 'string' ? data : data.toString();
         const parsed = JSON.parse(raw);
         if (parsed.type === 'HOST_MEDIA_SETTINGS') {
+            session.hostMediaSettings = parsed;
             logger.info(`[Host Media ${session.streamKey}] ${JSON.stringify({
                 mimeType: parsed.mimeType,
                 videoBitsPerSecond: parsed.videoBitsPerSecond,
@@ -632,16 +633,23 @@ function getEncoderArgsForStream(quality, streamIndex, bitrate, bufsize) {
     ];
 }
 
+function isH264HostInput(session) {
+    const mimeType = (session.hostMediaSettings?.mimeType || '').toLowerCase();
+    return mimeType.includes('h264') || mimeType.includes('avc1');
+}
+
 function buildFfmpegArgs(session) {
     const hlsDir = session.liveDir.replace(/\\/g, '/');
+    const canCopy720p = isH264HostInput(session) && H264_ENCODER.name === 'libx264';
     const v720Filter = H264_ENCODER.name === 'h264_vaapi'
         ? 'fps=30,format=nv12,hwupload[v720]'
         : 'fps=30[v720]';
     const v480Filter = H264_ENCODER.name === 'h264_vaapi'
         ? 'scale=854:480:flags=fast_bilinear,fps=24,format=nv12,hwupload[v480]'
         : 'scale=854:480:flags=fast_bilinear,fps=24[v480]';
-    const filterComplex = `[0:v]split=2[v720src][v480src];[v720src]${v720Filter};[v480src]${v480Filter};` +
-        '[0:a][1:a]amix=inputs=2:duration=first:dropout_transition=0:normalize=0,aresample=async=1:first_pts=0,asplit=2[a720][a480]';
+    const filterComplex = canCopy720p
+        ? `[0:v]${v480Filter};[0:a][1:a]amix=inputs=2:duration=first:dropout_transition=0:normalize=0,aresample=async=1:first_pts=0,asplit=2[a720][a480]`
+        : `[0:v]split=2[v720src][v480src];[v720src]${v720Filter};[v480src]${v480Filter};[0:a][1:a]amix=inputs=2:duration=first:dropout_transition=0:normalize=0,aresample=async=1:first_pts=0,asplit=2[a720][a480]`;
 
     return [
         '-y',
@@ -655,9 +663,9 @@ function buildFfmpegArgs(session) {
         '-i', 'anullsrc=channel_layout=stereo:sample_rate=48000',
         '-filter_complex', filterComplex,
 
-        '-map', '[v720]', '-map', '[a720]',
+        '-map', canCopy720p ? '0:v:0' : '[v720]', '-map', '[a720]',
         '-r:v:0', '30', '-g:v:0', '30', '-keyint_min:v:0', '30', '-sc_threshold:v:0', '0',
-        ...getEncoderArgsForStream('720p', 0, '6000k', '12000k'),
+        ...(canCopy720p ? ['-c:v:0', 'copy'] : getEncoderArgsForStream('720p', 0, '6000k', '12000k')),
         '-c:a:0', 'aac', '-b:a:0', '128k', '-ar:a:0', '48000', '-ac:a:0', '2',
 
         '-map', '[v480]', '-map', '[a480]',
@@ -732,7 +740,8 @@ async function startFfmpegLive(session, opts = {}) {
         }
     }, 3600 * 1000);
 
-    logger.info(`Spawning optimized shared Live Stream Generator for [${session.streamKey}] with ${H264_ENCODER.name} (${H264_ENCODER.reason})...`, { sys: getSystemInfo() });
+    const inputMode = isH264HostInput(session) ? 'h264-input-copy-720p' : 'transcode-720p-480p';
+    logger.info(`Spawning optimized shared Live Stream Generator for [${session.streamKey}] with ${H264_ENCODER.name} (${H264_ENCODER.reason}, ${inputMode})...`, { sys: getSystemInfo() });
     session.ffmpegProcesses = { '720p': null, '480p': null };
     session.ffmpegProcess = spawn('ffmpeg', buildFfmpegArgs(session), { stdio: ['pipe', 'pipe', 'pipe'] });
     session.isLive = true;
