@@ -581,11 +581,10 @@ function buildFfmpegArgs720p(session) {
         '-probesize', '2M', '-analyzeduration', '1000000',
         '-thread_queue_size', '1024',
         '-i', 'pipe:0',
-        '-vf', 'scale=1280:720:flags=lanczos',
-        '-c:v', 'libx264', '-threads:v', '2', '-preset', 'ultrafast', '-tune', 'zerolatency',
+        '-vf', 'scale=1280:720:flags=bilinear',
+        '-c:v', 'libx264', '-threads:v', '2', '-preset', 'veryfast', '-tune', 'zerolatency',
         '-profile:v', 'main', '-pix_fmt', 'yuv420p',
         '-b:v', '5000k', '-maxrate', '5000k', '-bufsize', '10000k',
-        '-r', '60', '-g', '120', '-keyint_min', '120', '-sc_threshold', '0',
         '-c:a', 'aac', '-b:a', '128k', '-ar:a', '48000', '-ac:a', '2',
         '-f', 'hls', '-hls_time', '2', '-hls_list_size', '20',
         '-hls_flags', 'delete_segments+independent_segments',
@@ -660,6 +659,7 @@ async function startFfmpegLive(session, opts = {}) {
 
     const mimeType = session.hostMediaSettings?.mimeType || 'unknown';
     logger.info(`Spawning FFmpeg Live Stream for [${session.streamKey}] (input: ${mimeType}, 1080p copy + 720p transcode)...`, { sys: getSystemInfo() });
+    writeMasterPlaylist(session);
     session.ffmpegProcess = spawn('ffmpeg', buildFfmpegArgs1080p(session), { stdio: ['pipe', 'pipe', 'pipe'] });
     session.ffmpegProcess720p = spawn('ffmpeg', buildFfmpegArgs720p(session), { stdio: ['pipe', 'pipe', 'pipe'] });
     session.isLive = true;
