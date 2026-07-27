@@ -183,9 +183,13 @@
                                         <button data-userid="<%= u.id %>" data-hasaccess="<%= u.hasAccess %>" onclick="toggleAccess(this.dataset.userid, this.dataset.hasaccess !== 'true')" class="px-3 py-1.5 rounded-lg text-xs font-semibold transition-all <%= u.hasAccess ? 'bg-amber-500/10 text-amber-400 hover:bg-amber-500/20 border border-amber-500/30' : 'bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30 border border-emerald-500/40' %>">
                                             <%= u.hasAccess ? 'Revoke Access' : 'Approve Access' %>
                                         </button>
-                                        <button data-userid="<%= u.id %>" data-nextlimit="<%= u.streamLimit + 5 %>" onclick="updateLimit(this.dataset.userid, this.dataset.nextlimit)" class="px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-indigo-300 border border-white/10">
-                                            +5 Quota
-                                        </button>
+                                        <span class="inline-flex items-center gap-1 border border-white/10 rounded-lg overflow-hidden">
+                                            <button data-userid="<%= u.id %>" data-delta="-5" onclick="adjustLimit(this.dataset.userid, parseInt(this.dataset.delta))" class="px-2.5 py-1.5 text-xs font-semibold bg-slate-800 hover:bg-red-900/50 text-red-300 transition-colors">-5</button>
+                                            <button data-userid="<%= u.id %>" data-delta="-1" onclick="adjustLimit(this.dataset.userid, parseInt(this.dataset.delta))" class="px-2 py-1.5 text-xs font-semibold bg-slate-800 hover:bg-slate-600 text-slate-300 transition-colors">-1</button>
+                                            <span class="px-2 py-1.5 text-xs font-mono text-indigo-300 bg-slate-900 min-w-[3rem] text-center"><%= u.streamLimit %></span>
+                                            <button data-userid="<%= u.id %>" data-delta="1" onclick="adjustLimit(this.dataset.userid, parseInt(this.dataset.delta))" class="px-2 py-1.5 text-xs font-semibold bg-slate-800 hover:bg-slate-600 text-slate-300 transition-colors">+1</button>
+                                            <button data-userid="<%= u.id %>" data-delta="5" onclick="adjustLimit(this.dataset.userid, parseInt(this.dataset.delta))" class="px-2.5 py-1.5 text-xs font-semibold bg-slate-800 hover:bg-emerald-900/50 text-emerald-300 transition-colors">+5</button>
+                                        </span>
                                         <button data-userid="<%= u.id %>" onclick="resetCount(this.dataset.userid)" class="px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-300 border border-white/10">
                                             Reset Count
                                         </button>
@@ -287,6 +291,19 @@
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ userId, streamLimit })
+                });
+                const data = await res.json();
+                if (data.success) location.reload();
+                else alert('Error: ' + data.error);
+            } catch (err) { alert('Network error: ' + err.message); }
+        }
+
+        async function adjustLimit(userId, delta) {
+            try {
+                const res = await fetch('/api/admin/users/limit-adjust', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ userId, delta })
                 });
                 const data = await res.json();
                 if (data.success) location.reload();

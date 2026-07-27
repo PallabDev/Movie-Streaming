@@ -5,7 +5,7 @@ import path from 'path';
 import fs from 'fs';
 import os from 'os';
 import { fileURLToPath } from 'url';
-import { spawn, spawnSync } from 'child_process';
+import { spawn } from 'child_process';
 import { WebSocketServer } from 'ws';
 import { EventEmitter } from 'events';
 import cookieParser from 'cookie-parser';
@@ -257,64 +257,8 @@ streamWss.on('connection', (ws) => {
             session.disconnectTimer = null;
         }
         session.isLive = true;
-        // prepare a small probe buffer for initial incoming chunks
-        session._probeBuffer = session._probeBuffer || { chunks: [], size: 0, probed: false };
-        session._probeTimeout = session._probeTimeout || null;
-
         broadcastStatus(session, true);
         broadcastAdminTelemetry();
-    }
-
-    function runProbeNow() {
-        try {
-            if (!session || session._probeBuffer.probed) return;
-            session._probeBuffer.probed = true;
-            if (session._probeTimeout) { clearTimeout(session._probeTimeout); session._probeTimeout = null; }
-
-            const buf = Buffer.concat(session._probeBuffer.chunks || []);
-            if (buf.length < 256) return; // insufficient data to probe
-
-            const tmpPath = path.join(session.liveDir, 'probe_init.bin');
-            try { fs.writeFileSync(tmpPath, buf); } catch (e) { logger.warn('Failed to write probe tmp file', e); }
-
-            // Run ffprobe synchronously on the saved init segment
-            let isH264 = false;
-            try {
-                const probe = spawnSync('ffprobe', ['-v', 'error', '-select_streams', 'v:0', '-show_entries', 'stream=codec_name,width,height', '-of', 'json', tmpPath], { encoding: 'utf8' });
-                if (probe && probe.stdout) {
-                    const info = JSON.parse(probe.stdout);
-                    const s = info.streams && info.streams[0];
-                    if (s && s.codec_name) {
-                        const codec = (s.codec_name || '').toLowerCase();
-                        if (codec === 'h264') {
-                            isH264 = true;
-                        }
-                    }
-                }
-            } catch (e) { logger.warn('ffprobe failed', e); }
-
-            try { if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath); } catch (e) { }
-
-            if (isH264) {
-                logger.info(`Probe: input appears to be H.264 for [${key}] -- restarting FFmpeg with 720p/480p transcode`);
-                (async () => {
-                    try {
-                        stopFfmpegLive(session);
-                        await startFfmpegLive(session, { passthrough: true });
-                        // write the previously buffered data into the new ffmpeg stdin so it can continue
-                        if (session.ffmpegProcess && session.ffmpegProcess.stdin && session._probeBuffer.chunks.length) {
-                            try {
-                                for (const c of session._probeBuffer.chunks) session.ffmpegProcess.stdin.write(c);
-                            } catch (e) { }
-                        }
-                    } catch (e) { logger.warn('Failed to restart ffmpeg with passthrough', e); }
-                })();
-            }
-
-            // free memory
-            session._probeBuffer.chunks = [];
-            session._probeBuffer.size = 0;
-        } catch (e) { logger.warn('runProbeNow error', e); }
     }
 
     ws.on('message', (data) => {
@@ -327,28 +271,18 @@ streamWss.on('connection', (ws) => {
 
             const buf = Buffer.isBuffer(data) ? data : Buffer.from(data);
 
-            // Collect initial probe buffer (first ~256KB or 2s)
-            try {
-                if (session._probeBuffer && !session._probeBuffer.probed) {
-                    session._probeBuffer.chunks.push(buf);
-                    session._probeBuffer.size = (session._probeBuffer.size || 0) + buf.length;
-                    // if size exceeds threshold trigger probe immediately
-                    if (session._probeBuffer.size > 256 * 1024) {
-                        runProbeNow();
-                    } else {
-                        // schedule probe after 2s from first chunk
-                        if (!session._probeTimeout) {
-                            session._probeTimeout = setTimeout(runProbeNow, 2000);
-                        }
-                    }
-                }
-            } catch (e) { }
-
             if (session.ffmpegProcess && session.ffmpegProcess.stdin && session.ffmpegProcess.stdin.writable) {
                 try {
                     session.ffmpegProcess.stdin.write(buf);
                 } catch (e) { }
             }
+
+            // Track host chunk rate for slow upload detection
+            if (!session._hostChunkLog) session._hostChunkLog = [];
+            session._hostChunkLog.push(Date.now());
+            // Keep only last 10 seconds of chunk timestamps
+            const cutoff = Date.now() - 10000;
+            session._hostChunkLog = session._hostChunkLog.filter(t => t > cutoff);
         }
     });
 
@@ -443,7 +377,28 @@ viewWss.on('connection', (ws) => {
 
 setInterval(() => {
     broadcastAdminTelemetry();
+    broadcastHostHealth();
 }, 2000);
+
+function broadcastHostHealth() {
+    for (const session of activeStreams.values()) {
+        if (!session.isLive) continue;
+        const chunkLog = session._hostChunkLog || [];
+        const recentChunks = chunkLog.filter(t => t > Date.now() - 5000);
+        const chunksPerSec = recentChunks.length / 5;
+        let health = 'good';
+        if (chunksPerSec < 0.5) health = 'poor';
+        else if (chunksPerSec < 1.5) health = 'slow';
+
+        const msg = JSON.stringify({ type: 'HOST_HEALTH', health, chunksPerSec: Math.round(chunksPerSec) });
+        // Broadcast to all status-ws viewers watching this stream
+        for (const client of wss.clients) {
+            if (client.streamKey === session.streamKey && client.readyState === 1 && client.role === 'viewer') {
+                try { client.send(msg); } catch (e) { }
+            }
+        }
+    }
+}
 
 // ─── FFmpeg Live Process Manager ────────────────────────────────────────────────
 function stopFfmpegLive(session) {
@@ -487,18 +442,9 @@ async function startFfmpegLive(session, opts = {}) {
 
     const hlsDir = session.liveDir.replace(/\\/g, '/');
 
-    const usePassthrough = !!opts.passthrough;
-
-    let filterComplex = '';
-    if (!usePassthrough) {
-        filterComplex = '[0:v]scale=1280:720:flags=fast_bilinear,split=2[v720][v480down];' +
-            '[v480down]scale=854:480:flags=fast_bilinear[v480];' +
-            '[0:a][1:a]amix=inputs=2:duration=first:dropout_transition=0:normalize=0,aresample=async=1:first_pts=0,asplit=2[a720][a480]';
-    } else {
-        filterComplex = '[0:v]scale=1280:720:flags=fast_bilinear,split=2[v720][v480down];' +
-            '[v480down]scale=854:480:flags=fast_bilinear[v480];' +
-            '[0:a][1:a]amix=inputs=2:duration=first:dropout_transition=0:normalize=0,aresample=async=1:first_pts=0,asplit=2[a720][a480]';
-    }
+    const filterComplex = '[0:v]scale=1280:720:flags=fast_bilinear,split=2[v720][v480down];' +
+        '[v480down]scale=854:480:flags=fast_bilinear[v480];' +
+        '[0:a][1:a]amix=inputs=2:duration=first:dropout_transition=0:normalize=0,aresample=async=1:first_pts=0,asplit=2[a720][a480]';
 
     const args = [
         '-y',
@@ -694,6 +640,15 @@ app.post('/api/admin/users/limit', requireAdmin, async (req, res) => {
     } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 });
 
+app.post('/api/admin/users/limit-adjust', requireAdmin, async (req, res) => {
+    try {
+        const { userId, delta } = req.body;
+        const d = parseInt(delta) || 0;
+        await db.update(users).set({ streamLimit: sql`GREATEST(1, ${users.streamLimit} + ${d})` }).where(eq(users.id, userId));
+        res.json({ success: true });
+    } catch (err) { res.status(500).json({ success: false, error: err.message }); }
+});
+
 app.post('/api/admin/users/reset-count', requireAdmin, async (req, res) => {
     try {
         const { userId } = req.body;
@@ -853,10 +808,6 @@ app.post(['/api/streams/delete/:streamKey', '/api/streams/delete'], requireAuth,
             const dummySession = { streamKey, liveDir: path.join(liveDir, streamKey) };
             clearLiveFolder(dummySession);
         }
-
-        try {
-            await db.delete(streamSessions).where(eq(streamSessions.streamKey, streamKey));
-        } catch (e) { }
 
         broadcastAdminTelemetry();
         logger.info(`Stream [${streamKey}] deleted.`);

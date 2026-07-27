@@ -377,7 +377,12 @@
                             levelLoadingRetryDelay: 500,
                             fragLoadingTimeOut: 10000,
                             fragLoadingMaxRetry: 10,
-                            fragLoadingRetryDelay: 500
+                            fragLoadingRetryDelay: 500,
+                            // Prevent caching of segments - always fetch fresh
+                            xhrSetup: function(xhr, url) {
+                                const separator = url.includes('?') ? '&' : '?';
+                                xhr.open('GET', url + separator + '_t=' + Date.now(), true);
+                            }
                         });
 
                         hls.loadSource(masterUrl);
@@ -387,6 +392,10 @@
                             hideOffline();
                             hideLoading();
                             showControls();
+                            // Seek to live edge on start/reconnect
+                            if (video.duration && video.duration > 0) {
+                                video.currentTime = video.duration - 10;
+                            }
                             video.play().then(() => updatePlayIcon()).catch(() => updatePlayIcon());
                         });
 
@@ -421,11 +430,11 @@
                         let viewerConnTimer = null;
 
                         function updateConnViewer(level) {
-                            const colors = { good: '#22c55e', stable: '#10b981', poor: '#ef4444' };
-                            const labels = { good: 'Good', stable: 'Stable', poor: 'Poor' };
-                            const bgColors = { good: 'bg-green-500/20', stable: 'bg-green-500/20', poor: 'bg-red-500/20' };
-                            const textColors = { good: 'text-green-400', stable: 'text-green-400', poor: 'text-red-400' };
-                            const borderColors = { good: 'border-green-500/30', stable: 'border-green-500/30', poor: 'border-red-500/30' };
+                            const colors = { good: '#22c55e', stable: '#10b981', slow: '#f59e0b', poor: '#ef4444' };
+                            const labels = { good: 'Good', stable: 'Stable', slow: 'Slow Upload', poor: 'Poor' };
+                            const bgColors = { good: 'bg-green-500/20', stable: 'bg-green-500/20', slow: 'bg-amber-500/20', poor: 'bg-red-500/20' };
+                            const textColors = { good: 'text-green-400', stable: 'text-green-400', slow: 'text-amber-400', poor: 'text-red-400' };
+                            const borderColors = { good: 'border-green-500/30', stable: 'border-green-500/30', slow: 'border-amber-500/30', poor: 'border-red-500/30' };
                             if (connDot) connDot.style.background = colors[level] || colors.stable;
                             if (connLabel) connLabel.textContent = labels[level] || 'Stable';
                             if (connBadge) {
@@ -598,6 +607,12 @@
                                     if (!hls) initHlsPlayer();
                                 } else {
                                     showOffline();
+                                }
+                            } else if (data.type === 'HOST_HEALTH') {
+                                if (data.health === 'poor') {
+                                    updateConnViewer('poor');
+                                } else if (data.health === 'slow') {
+                                    updateConnViewer('slow');
                                 }
                             }
                         } catch (err) { }
