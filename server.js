@@ -130,8 +130,7 @@ function getOrCreateStreamSession(streamKey, title = 'Live Movie Stream', user =
         totalChunksCount: 0,
         failureCount: 0,
         hostQuality: 1080,
-        hostAbrEnabled: false,
-        hostBitrate: 8000,
+        hostBitrate: 6000,
         ffmpegRestartBlocked: false,
         hostIngestStats: {
             bytes: 0,
@@ -315,7 +314,6 @@ function tryHandleHostControlMessage(session, data, isBinary) {
         if (parsed.type === 'HOST_MEDIA_SETTINGS') {
             session.hostMediaSettings = parsed;
             if (parsed.quality) session.hostQuality = parsed.quality;
-            if (typeof parsed.abrEnabled === 'boolean') session.hostAbrEnabled = parsed.abrEnabled;
             if (parsed.bitrate) session.hostBitrate = parsed.bitrate;
             logger.info(`[Host Media ${session.streamKey}] ${JSON.stringify({
                 mimeType: parsed.mimeType,
@@ -323,9 +321,37 @@ function tryHandleHostControlMessage(session, data, isBinary) {
                 audioBitsPerSecond: parsed.audioBitsPerSecond,
                 trackSettings: parsed.trackSettings,
                 quality: session.hostQuality,
-                abr: session.hostAbrEnabled,
                 bitrate: session.hostBitrate
             })}`);
+
+            // If FFmpeg is already running, kill and restart with new settings
+            if (hasRunningFfmpeg(session)) {
+                logger.info(`[Settings Change ${session.streamKey}] Killing existing FFmpeg to restart with new settings`);
+                for (const proc of [session.ffmpegProcess, session.ffmpegProcess720p, session.ffmpegProcess480p]) {
+                    if (proc) {
+                        try {
+                            // Remove exit handler so it doesn't set ffmpegRestartBlocked
+                            proc.removeAllListeners('exit');
+                            if (proc.stdin) { proc.stdin.removeAllListeners('error'); proc.stdin.on('error', () => { }); proc.stdin.end(); }
+                            proc.kill('SIGKILL');
+                        } catch (err) { }
+                    }
+                }
+                session.ffmpegProcess = null;
+                session.ffmpegProcess720p = null;
+                session.ffmpegProcess480p = null;
+                session.isLive = false;
+                session.ffmpegSpawnedAt = 0;
+            }
+            // Always ensure next chunk can trigger FFmpeg spawn with new settings
+            session.ffmpegRestartBlocked = false;
+            session._settingsRestart = true;
+            // Reset throttle state so it doesn't fire while FFmpeg is respawning
+            session._firstChunkReceived = false;
+            session._throttled = false;
+            session._lastChunkAt = Date.now();
+            // Write updated master playlist
+            try { writeMasterPlaylist(session); } catch (e) { }
             return true;
         }
         if (parsed.type === 'HOST_CAPTURE_STATS') {
@@ -415,8 +441,10 @@ streamWss.on('connection', (ws) => {
             logHostIngestStats(session, 'ws', buf.length);
 
             if (!hasRunningFfmpeg(session) && !session.ffmpegRestartBlocked) {
+                const isSettingsRestart = !!session._settingsRestart;
+                session._settingsRestart = false;
                 try {
-                    await startFfmpegLive(session);
+                    await startFfmpegLive(session, { settingsRestart: isSettingsRestart });
                     broadcastStatus(session, true);
                 } catch (e) {
                     logger.error(`Failed to start FFmpeg on first chunk for [${key}]: ${e.message}`);
@@ -598,31 +626,21 @@ function commandSucceeds(command, args = []) {
 }
 
 function writeMasterPlaylist(session) {
-    const quality = session.hostQuality || 1080;
-    const abr = session.hostAbrEnabled;
-    const bitrate = session.hostBitrate || 8000;
+    const bitrate = session.hostBitrate || 6000;
 
     let lines = ['#EXTM3U', '#EXT-X-VERSION:3'];
 
-    if (quality === 1080) {
-        const bw1080 = bitrate * 1000;
-        lines.push(`#EXT-X-STREAM-INF:BANDWIDTH=${bw1080},AVERAGE-BANDWIDTH=${bw1080},RESOLUTION=1920x1080,FRAME-RATE=30.000,CODECS="avc1.4d4028,mp4a.40.2"`);
-        lines.push('stream1080p.m3u8');
-        if (abr) {
-            const bw720 = 3000000;
-            lines.push(`#EXT-X-STREAM-INF:BANDWIDTH=${bw720},AVERAGE-BANDWIDTH=${bw720},RESOLUTION=1280x720,FRAME-RATE=30.000,CODECS="avc1.4d401f,mp4a.40.2"`);
-            lines.push('stream720p.m3u8');
-        }
-    } else {
-        const bw720 = bitrate * 1000;
-        lines.push(`#EXT-X-STREAM-INF:BANDWIDTH=${bw720},AVERAGE-BANDWIDTH=${bw720},RESOLUTION=1280x720,FRAME-RATE=30.000,CODECS="avc1.4d401f,mp4a.40.2"`);
-        lines.push('stream720p.m3u8');
-        if (abr) {
-            const bw480 = 1500000;
-            lines.push(`#EXT-X-STREAM-INF:BANDWIDTH=${bw480},AVERAGE-BANDWIDTH=${bw480},RESOLUTION=854x480,FRAME-RATE=30.000,CODECS="avc1.4d401e,mp4a.40.2"`);
-            lines.push('stream480p.m3u8');
-        }
-    }
+    const bw1080 = bitrate * 1000;
+    lines.push(`#EXT-X-STREAM-INF:BANDWIDTH=${bw1080},AVERAGE-BANDWIDTH=${bw1080},RESOLUTION=1920x1080,FRAME-RATE=30.000,CODECS="avc1.4d4028,mp4a.40.2"`);
+    lines.push('stream1080p.m3u8');
+
+    const bw720 = 4000000;
+    lines.push(`#EXT-X-STREAM-INF:BANDWIDTH=${bw720},AVERAGE-BANDWIDTH=${bw720},RESOLUTION=1280x720,FRAME-RATE=30.000,CODECS="avc1.4d401f,mp4a.40.2"`);
+    lines.push('stream720p.m3u8');
+
+    const bw480 = 1200000;
+    lines.push(`#EXT-X-STREAM-INF:BANDWIDTH=${bw480},AVERAGE-BANDWIDTH=${bw480},RESOLUTION=854x480,FRAME-RATE=30.000,CODECS="avc1.4d401e,mp4a.40.2"`);
+    lines.push('stream480p.m3u8');
 
     lines.push('');
     fs.writeFileSync(path.join(session.liveDir, 'master.m3u8'), lines.join('\n'));
@@ -646,7 +664,6 @@ function buildFfmpegArgs1080p(session) {
 
 function buildFfmpegArgs720p(session) {
     const hlsDir = session.liveDir.replace(/\\/g, '/');
-    const bitrate = session.hostBitrate && session.hostQuality === 720 ? session.hostBitrate : 3000;
     return [
         '-y', '-fflags', '+genpts+discardcorrupt',
         '-probesize', '2M', '-analyzeduration', '1000000',
@@ -655,7 +672,7 @@ function buildFfmpegArgs720p(session) {
         '-vf', 'fps=30,scale=1280:720:flags=bilinear',
         '-c:v', 'libx264', '-threads:v', '2', '-preset', 'ultrafast', '-tune', 'zerolatency',
         '-profile:v', 'main', '-pix_fmt', 'yuv420p',
-        '-b:v', `${bitrate}k`, '-maxrate', `${bitrate}k`, '-bufsize', `${bitrate * 2}k`,
+        '-b:v', '4000k', '-maxrate', '4000k', '-bufsize', '8000k',
         '-c:a', 'aac', '-b:a', '128k', '-ar:a', '48000', '-ac:a', '2',
         '-f', 'hls', '-hls_time', '2', '-hls_list_size', '20',
         '-hls_flags', 'delete_segments+independent_segments',
@@ -690,7 +707,7 @@ function buildFfmpegArgs480p(session) {
         '-vf', 'fps=30,scale=854:480:flags=bilinear',
         '-c:v', 'libx264', '-threads:v', '2', '-preset', 'ultrafast', '-tune', 'zerolatency',
         '-profile:v', 'main', '-pix_fmt', 'yuv420p',
-        '-b:v', '1500k', '-maxrate', '1500k', '-bufsize', '3000k',
+        '-b:v', '1200k', '-maxrate', '1200k', '-bufsize', '2400k',
         '-c:a', 'aac', '-b:a', '96k', '-ar:a', '44100', '-ac:a', '2',
         '-f', 'hls', '-hls_time', '2', '-hls_list_size', '20',
         '-hls_flags', 'delete_segments+independent_segments',
@@ -747,8 +764,12 @@ function attachFfmpegLogging(session, proc, label) {
 async function startFfmpegLive(session, opts = {}) {
     if (session.cleanupTimer) { clearTimeout(session.cleanupTimer); session.cleanupTimer = null; }
 
+    const isSettingsRestart = opts.settingsRestart === true;
+
     stopFfmpegLive(session);
-    clearLiveFolder(session);
+    if (!isSettingsRestart) {
+        clearLiveFolder(session);
+    }
     session.ffmpegRestartBlocked = false;
     resetHostIngestStats(session);
 
@@ -766,28 +787,17 @@ async function startFfmpegLive(session, opts = {}) {
     }, 3600 * 1000);
 
     const quality = session.hostQuality || 1080;
-    const abr = session.hostAbrEnabled;
     const mimeType = session.hostMediaSettings?.mimeType || 'unknown';
 
     writeMasterPlaylist(session);
 
-    if (quality === 1080) {
-        logger.info(`Spawning FFmpeg for [${session.streamKey}] — 1080p copy passthrough${abr ? ' + 720p transcode (ABR)' : ''} (input: ${mimeType})...`, { sys: getSystemInfo() });
-        session.ffmpegProcess = spawn('ffmpeg', buildFfmpegArgs1080p(session), { stdio: ['pipe', 'pipe', 'pipe'] });
-        attachFfmpegLogging(session, session.ffmpegProcess, '1080p');
-        if (abr) {
-            session.ffmpegProcess720p = spawn('ffmpeg', buildFfmpegArgs720p(session), { stdio: ['pipe', 'pipe', 'pipe'] });
-            attachFfmpegLogging(session, session.ffmpegProcess720p, '720p');
-        }
-    } else {
-        logger.info(`Spawning FFmpeg for [${session.streamKey}] — 720p copy passthrough${abr ? ' + 480p transcode (ABR)' : ''} (input: ${mimeType})...`, { sys: getSystemInfo() });
-        session.ffmpegProcess720p = spawn('ffmpeg', buildFfmpegArgs720pCopy(session), { stdio: ['pipe', 'pipe', 'pipe'] });
-        attachFfmpegLogging(session, session.ffmpegProcess720p, '720p');
-        if (abr) {
-            session.ffmpegProcess480p = spawn('ffmpeg', buildFfmpegArgs480p(session), { stdio: ['pipe', 'pipe', 'pipe'] });
-            attachFfmpegLogging(session, session.ffmpegProcess480p, '480p');
-        }
-    }
+    logger.info(`Spawning FFmpeg for [${session.streamKey}] — 1080p copy + 720p transcode + 480p transcode (input: ${mimeType})...`, { sys: getSystemInfo() });
+    session.ffmpegProcess = spawn('ffmpeg', buildFfmpegArgs1080p(session), { stdio: ['pipe', 'pipe', 'pipe'] });
+    attachFfmpegLogging(session, session.ffmpegProcess, '1080p');
+    session.ffmpegProcess720p = spawn('ffmpeg', buildFfmpegArgs720p(session), { stdio: ['pipe', 'pipe', 'pipe'] });
+    attachFfmpegLogging(session, session.ffmpegProcess720p, '720p');
+    session.ffmpegProcess480p = spawn('ffmpeg', buildFfmpegArgs480p(session), { stdio: ['pipe', 'pipe', 'pipe'] });
+    attachFfmpegLogging(session, session.ffmpegProcess480p, '480p');
 
     session.isLive = true;
     session.ffmpegSpawnedAt = Date.now();

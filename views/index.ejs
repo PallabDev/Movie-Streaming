@@ -498,61 +498,6 @@
             <span id="btnText">Share Screen</span>
         </button>
 
-        <button id="settingsBtn" title="Stream Settings"
-            style="width: 42px; height: 42px; border-radius: 50%; background: rgba(255, 255, 255, 0.1); color: #ffffff; display: flex; align-items: center; justify-content: center; transition: all 0.2s ease; border: none; cursor: pointer;">
-            <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="2" fill="none"
-                stroke-linecap="round" stroke-linejoin="round">
-                <circle cx="12" cy="12" r="3"></circle>
-                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
-            </svg>
-        </button>
-
-        <!-- Stream Settings Popup -->
-        <div id="settingsPopup" style="display: none; position: fixed; bottom: 5.5rem; left: 50%; transform: translateX(-50%); background: rgba(15, 23, 42, 0.95); backdrop-filter: blur(16px); border: 1px solid rgba(255,255,255,0.12); border-radius: 16px; padding: 20px 24px; z-index: 200; min-width: 300px; box-shadow: 0 20px 50px rgba(0,0,0,0.6);">
-            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:16px;">
-                <span style="font-size:0.95rem; font-weight:700; color:#fff;">Stream Settings</span>
-                <button id="closeSettingsBtn" style="background:none; border:none; color:#94a3b8; cursor:pointer; padding:4px; line-height:1;">
-                    <svg viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" stroke-width="2" fill="none"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-                </button>
-            </div>
-
-            <div style="display:flex; flex-direction:column; gap:14px;">
-                <!-- Quality -->
-                <div>
-                    <label style="font-size:0.78rem; color:#94a3b8; text-transform:uppercase; letter-spacing:0.5px; display:block; margin-bottom:6px;">Quality</label>
-                    <div style="display:flex; gap:8px;">
-                        <button class="quality-opt active" data-quality="1080" style="flex:1; padding:8px 0; border-radius:8px; border:1px solid rgba(99,102,241,0.4); background:rgba(99,102,241,0.15); color:#a5b4fc; font-size:0.82rem; font-weight:600; cursor:pointer; transition:all 0.2s;">1080p</button>
-                        <button class="quality-opt" data-quality="720" style="flex:1; padding:8px 0; border-radius:8px; border:1px solid rgba(255,255,255,0.1); background:rgba(255,255,255,0.04); color:#94a3b8; font-size:0.82rem; font-weight:600; cursor:pointer; transition:all 0.2s;">720p</button>
-                    </div>
-                </div>
-
-                <!-- ABR -->
-                <div>
-                    <div style="display:flex; justify-content:space-between; align-items:center;">
-                        <div>
-                            <label style="font-size:0.78rem; color:#94a3b8; text-transform:uppercase; letter-spacing:0.5px; display:block;">ABR (Adaptive Bitrate)</label>
-                            <span id="abrDescription" style="font-size:0.72rem; color:#64748b; margin-top:2px;">Adds 720p fallback stream</span>
-                        </div>
-                        <label style="position:relative; display:inline-block; width:42px; height:24px; cursor:pointer;">
-                            <input type="checkbox" id="abrToggle" style="display:none;">
-                            <span id="abrSlider" style="position:absolute; top:0; left:0; right:0; bottom:0; background:#334155; border-radius:24px; transition:all 0.3s;"></span>
-                            <span id="abrDot" style="position:absolute; top:2px; left:2px; width:20px; height:20px; background:#fff; border-radius:50%; transition:all 0.3s;"></span>
-                        </label>
-                    </div>
-                </div>
-
-                <!-- Bitrate -->
-                <div>
-                    <label style="font-size:0.78rem; color:#94a3b8; text-transform:uppercase; letter-spacing:0.5px; display:block; margin-bottom:6px;">Video Bitrate (kbps)</label>
-                    <div style="display:flex; align-items:center; gap:10px;">
-                        <input type="range" id="bitrateSlider" min="2000" max="8000" step="500" value="8000"
-                            style="flex:1; accent-color:#6366f1; height:4px;">
-                        <span id="bitrateValue" style="font-size:0.85rem; font-weight:600; color:#a5b4fc; min-width:55px; text-align:right;">8000k</span>
-                    </div>
-                </div>
-            </div>
-        </div>
-
         <a id="watchLiveBtn" href="#" title="Copy Stream Link"
             style="width: 42px; height: 42px; border-radius: 50%; background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%); color: white; display: flex; align-items: center; justify-content: center; transition: all 0.2s ease; box-shadow: 0 4px 15px rgba(59, 130, 246, 0.4); cursor: pointer;">
             <!-- Standard Share Icon (arrow out of box) from Feather/typical sets -->
@@ -596,110 +541,21 @@
 
         // ─── Stream Settings ──────────────────────────────────────────────
         let streamQuality = 1080;
-        let abrEnabled = false;
-        let streamBitrate = 8000;
+        let streamBitrate = 6000;
         let throttleSoundPlayed = false;
+        let _settingsRestartPending = false;
 
-        const settingsBtn = document.getElementById('settingsBtn');
-        const settingsPopup = document.getElementById('settingsPopup');
-        const closeSettingsBtn = document.getElementById('closeSettingsBtn');
-        const abrToggle = document.getElementById('abrToggle');
-        const abrSlider = document.getElementById('abrSlider');
-        const abrDot = document.getElementById('abrDot');
-        const abrDescription = document.getElementById('abrDescription');
-        const bitrateSlider = document.getElementById('bitrateSlider');
-        const bitrateValue = document.getElementById('bitrateValue');
         const throttleOverlay = document.getElementById('throttleOverlay');
-        const qualityOpts = document.querySelectorAll('.quality-opt');
-
-        function updateAbrUI() {
-            if (abrEnabled) {
-                abrSlider.style.background = '#6366f1';
-                abrDot.style.transform = 'translateX(18px)';
-            } else {
-                abrSlider.style.background = '#334155';
-                abrDot.style.transform = 'translateX(0)';
-            }
-            if (streamQuality === 1080) {
-                abrDescription.textContent = abrEnabled ? 'Adds 720p fallback stream' : 'Off — 1080p only';
-            } else {
-                abrDescription.textContent = abrEnabled ? 'Adds 480p fallback stream' : 'Off — 720p only';
-            }
-        }
-
-        function updateBitrateUI() {
-            bitrateValue.textContent = streamBitrate + 'k';
-        }
-
-        function updateQualityUI() {
-            qualityOpts.forEach(btn => {
-                const q = parseInt(btn.dataset.quality);
-                if (q === streamQuality) {
-                    btn.classList.add('active');
-                    btn.style.borderColor = 'rgba(99,102,241,0.4)';
-                    btn.style.background = 'rgba(99,102,241,0.15)';
-                    btn.style.color = '#a5b4fc';
-                } else {
-                    btn.classList.remove('active');
-                    btn.style.borderColor = 'rgba(255,255,255,0.1)';
-                    btn.style.background = 'rgba(255,255,255,0.04)';
-                    btn.style.color = '#94a3b8';
-                }
-            });
-            updateAbrUI();
-        }
-
-        settingsBtn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            settingsPopup.style.display = settingsPopup.style.display === 'none' ? 'block' : 'none';
-        });
-        closeSettingsBtn.addEventListener('click', () => { settingsPopup.style.display = 'none'; });
-        document.addEventListener('click', (e) => {
-            if (!settingsPopup.contains(e.target) && e.target !== settingsBtn) settingsPopup.style.display = 'none';
-        });
-
-        qualityOpts.forEach(btn => {
-            btn.addEventListener('click', () => {
-                streamQuality = parseInt(btn.dataset.quality);
-                if (streamQuality === 1080) streamBitrate = 8000;
-                else streamBitrate = 6000;
-                bitrateSlider.min = streamQuality === 1080 ? 3000 : 2000;
-                bitrateSlider.max = 8000;
-                bitrateSlider.value = streamBitrate;
-                updateBitrateUI();
-                updateQualityUI();
-                sendSettingsToServer();
-            });
-        });
-
-        abrToggle.addEventListener('change', () => {
-            abrEnabled = abrToggle.checked;
-            updateAbrUI();
-            sendSettingsToServer();
-        });
-
-        bitrateSlider.addEventListener('input', () => {
-            streamBitrate = parseInt(bitrateSlider.value);
-            updateBitrateUI();
-        });
-        bitrateSlider.addEventListener('change', () => {
-            streamBitrate = parseInt(bitrateSlider.value);
-            sendSettingsToServer();
-        });
 
         function sendSettingsToServer() {
             if (streamWs && streamWs.readyState === WebSocket.OPEN) {
                 streamWs.send(JSON.stringify({
                     type: 'HOST_MEDIA_SETTINGS',
                     quality: streamQuality,
-                    abrEnabled: abrEnabled,
                     bitrate: streamBitrate
                 }));
             }
         }
-
-        updateQualityUI();
-        updateBitrateUI();
 
         window.addEventListener('pagehide', () => {
             isPageUnloading = true;
@@ -1075,9 +931,9 @@
                 let trackSettings = null;
                 if (videoTrack) {
                     trackSettings = videoTrack.getSettings();
+                    console.log(`[Capture] Actual resolution: ${trackSettings.width}x${trackSettings.height} @ ${trackSettings.frameRate}fps`);
                     const fps = Math.round(trackSettings.frameRate) || 30;
-                    const abrLabel = abrEnabled ? ` + ${streamQuality === 1080 ? '720p' : '480p'} ABR` : '';
-                    if (topQualityBadge) topQualityBadge.textContent = `${streamQuality}p ${fps}FPS${abrLabel}`;
+                    if (topQualityBadge) topQualityBadge.textContent = `${streamQuality}p ${fps}FPS ${streamBitrate}k`;
 
                     videoTrack.addEventListener('ended', () => {
                         if (!isPageUnloading && document.visibilityState !== 'hidden') stopSharing();
@@ -1085,6 +941,8 @@
                 }
 
                 // Setup MediaRecorder — H.264/MP4 only for zero-encode copy path on server.
+                // Clone stream so preview video and encoder don't compete for frames
+                const recorderStream = mediaStream.clone();
                 let preferredMime = 'video/mp4;codecs=h264,aac';
                 if (!MediaRecorder.isTypeSupported(preferredMime)) {
                     preferredMime = 'video/mp4;codecs=avc1.42E01E,mp4a.40.2';
@@ -1093,7 +951,7 @@
                 console.log(`[MediaRecorder] Using: ${preferredMime}`);
 
                 const encoderBitrate = streamBitrate * 1000;
-                mediaRecorder = new MediaRecorder(mediaStream, {
+                mediaRecorder = new MediaRecorder(recorderStream, {
                     mimeType: preferredMime,
                     videoBitsPerSecond: encoderBitrate,
                     audioBitsPerSecond: 128000
@@ -1107,13 +965,16 @@
                         audioBitsPerSecond: 128000,
                         trackSettings,
                         quality: streamQuality,
-                        abrEnabled: abrEnabled,
                         bitrate: streamBitrate
                     }));
                 }
 
                 let lastFrameCount = 0;
                 let lastFrameCheckAt = performance.now();
+                let lastChunkBytes = 0;
+                let lastChunkTime = performance.now();
+                let lastDroppedFrames = 0;
+                let lastChunkArrival = performance.now();
                 if (captureStatsInterval) clearInterval(captureStatsInterval);
                 captureStatsInterval = setInterval(() => {
                     if (!mediaRecorder || mediaRecorder.state !== 'recording') {
@@ -1121,7 +982,6 @@
                         captureStatsInterval = null;
                         return;
                     }
-                    if (!streamWs || streamWs.readyState !== WebSocket.OPEN) return;
                     if (!previewVideo.getVideoPlaybackQuality) return;
 
                     const quality = previewVideo.getVideoPlaybackQuality();
@@ -1129,21 +989,38 @@
                     const elapsedSec = (now - lastFrameCheckAt) / 1000;
                     const frameDelta = quality.totalVideoFrames - lastFrameCount;
                     const measuredFps = elapsedSec > 0 ? frameDelta / elapsedSec : 0;
+                    const dropPct = quality.totalVideoFrames > 0 ? ((quality.droppedVideoFrames / quality.totalVideoFrames) * 100).toFixed(1) : '0.0';
+                    const dropDelta = quality.droppedVideoFrames - (lastDroppedFrames || 0);
+                    const chunkInterval = (now - lastChunkTime) / 1000;
+                    const outBitrate = chunkInterval > 0 ? ((lastChunkBytes * 8) / chunkInterval / 1000).toFixed(0) : '0';
 
-                    streamWs.send(JSON.stringify({
-                        type: 'HOST_CAPTURE_STATS',
-                        measuredFps: Number(measuredFps.toFixed(2)),
-                        totalVideoFrames: quality.totalVideoFrames,
-                        droppedVideoFrames: quality.droppedVideoFrames,
-                        chunkIndex
-                    }));
+                    console.log(`[Encode] ${measuredFps.toFixed(1)}fps | chunks: ${chunkIndex} | drop: ${dropPct}% (${dropDelta}/${frameDelta}) | out: ${outBitrate}kbps | target: ${streamBitrate}kbps`);
+
+                    if (streamWs && streamWs.readyState === WebSocket.OPEN) {
+                        streamWs.send(JSON.stringify({
+                            type: 'HOST_CAPTURE_STATS',
+                            measuredFps: Number(measuredFps.toFixed(2)),
+                            totalVideoFrames: quality.totalVideoFrames,
+                            droppedVideoFrames: quality.droppedVideoFrames,
+                            chunkIndex
+                        }));
+                    }
 
                     lastFrameCount = quality.totalVideoFrames;
+                    lastDroppedFrames = quality.droppedVideoFrames;
                     lastFrameCheckAt = now;
+                    lastChunkBytes = 0;
+                    lastChunkTime = now;
                 }, 5000);
 
                 mediaRecorder.ondataavailable = (event) => {
                     if (event.data && event.data.size > 0) {
+                        const now = performance.now();
+                        const gap = (now - lastChunkArrival).toFixed(0);
+                        const sizeKB = (event.data.size / 1024).toFixed(0);
+                        console.log(`[Chunk] #${chunkIndex} ${sizeKB}KB (gap: ${gap}ms)`);
+                        lastChunkArrival = now;
+                        lastChunkBytes += event.data.size;
                         sendChunk(event.data, chunkIndex++);
                     }
                 };
@@ -1158,6 +1035,7 @@
 
                 previewVideo.play();
                 hideStreamLoader();
+                if (topQualityBadge) topQualityBadge.textContent = `${streamQuality}p ${streamBitrate}k`;
             } catch (err) {
                 console.error("Error accessing screen share:", err);
                 hideStreamLoader();
@@ -1167,6 +1045,7 @@
         function stopSharing() {
             if (isPageUnloading || document.visibilityState === 'hidden') return;
 
+            _settingsRestartPending = false;
             if (mediaRecorder && mediaRecorder.state !== 'inactive') {
                 mediaRecorder.stop();
                 mediaRecorder = null;
@@ -1196,7 +1075,6 @@
             isThrottled = false;
             throttleSoundPlayed = false;
             throttleOverlay.style.display = 'none';
-            settingsPopup.style.display = 'none';
             stopConnMonitor();
 
             toggleShareBtn.classList.remove('stop');

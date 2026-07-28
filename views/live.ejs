@@ -557,10 +557,8 @@
                         const text = await res.text();
                         if (lastMasterContent && text !== lastMasterContent) {
                             console.log('[HLS] Playlist changed — reloading quality levels');
-                            const prevLevel = hls.currentLevel;
                             const prevQuality = currentQuality;
-                            hls.loadSource(masterUrl);
-                            hls.on(Hls.Events.MANIFEST_PARSED, function onReparsed(e, data) {
+                            function onReparsed(e, data) {
                                 hls.off(Hls.Events.MANIFEST_PARSED, onReparsed);
                                 rebuildQualityDropdown(data.levels);
                                 if (data.levels && data.levels.length > 0) {
@@ -573,7 +571,9 @@
                                     const h = data.levels[hls.currentLevel >= 0 ? hls.currentLevel : 0]?.height;
                                     qualityBadge.textContent = currentQuality === 'auto' ? (h ? h + 'p' : 'Auto') : currentQuality + 'p';
                                 }
-                            });
+                            }
+                            hls.on(Hls.Events.MANIFEST_PARSED, onReparsed);
+                            hls.loadSource(masterUrl + '?t=' + Date.now());
                         }
                         lastMasterContent = text;
                     } catch (e) { }
