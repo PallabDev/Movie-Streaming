@@ -570,6 +570,7 @@ function stopFfmpegLive(session) {
     for (const proc of [session.ffmpegProcess, session.ffmpegProcess720p, session.ffmpegProcess480p]) {
         if (proc) {
             try {
+                proc.removeAllListeners('exit');
                 if (proc.stdin) {
                     proc.stdin.removeAllListeners('error');
                     proc.stdin.on('error', () => { });
@@ -669,8 +670,8 @@ function buildFfmpegArgs720p(session) {
         '-probesize', '2M', '-analyzeduration', '1000000',
         '-thread_queue_size', '1024',
         '-i', 'pipe:0',
-        '-vf', 'fps=30,scale=1280:720:flags=bilinear',
-        '-c:v', 'libx264', '-threads:v', '2', '-preset', 'ultrafast', '-tune', 'zerolatency',
+        '-vf', 'scale=1280:720:flags=bilinear',
+        '-c:v', 'libx264', '-threads:v', '4', '-preset', 'ultrafast', '-tune', 'zerolatency',
         '-profile:v', 'main', '-pix_fmt', 'yuv420p',
         '-b:v', '4000k', '-maxrate', '4000k', '-bufsize', '8000k',
         '-c:a', 'aac', '-b:a', '128k', '-ar:a', '48000', '-ac:a', '2',
@@ -704,8 +705,8 @@ function buildFfmpegArgs480p(session) {
         '-probesize', '2M', '-analyzeduration', '1000000',
         '-thread_queue_size', '1024',
         '-i', 'pipe:0',
-        '-vf', 'fps=30,scale=854:480:flags=bilinear',
-        '-c:v', 'libx264', '-threads:v', '2', '-preset', 'ultrafast', '-tune', 'zerolatency',
+        '-vf', 'scale=854:480:flags=bilinear',
+        '-c:v', 'libx264', '-threads:v', '4', '-preset', 'ultrafast', '-tune', 'zerolatency',
         '-profile:v', 'main', '-pix_fmt', 'yuv420p',
         '-b:v', '1200k', '-maxrate', '1200k', '-bufsize', '2400k',
         '-c:a', 'aac', '-b:a', '96k', '-ar:a', '44100', '-ac:a', '2',
