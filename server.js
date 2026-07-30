@@ -16,6 +16,7 @@ import { users, streamSessions } from './db/schema.js';
 import logger, { getCpuUsage, getSystemInfo } from './logger.js';
 import { initDb } from './db/migrate.js';
 import { eq, desc, sql } from 'drizzle-orm';
+import { WebRtcIngestSession } from './webrtcIngest.js';
 
 EventEmitter.defaultMaxListeners = 50;
 
@@ -59,7 +60,6 @@ app.use(express.static(path.join(__dirname, 'public'), {
         }
     }
 }));
-app.use('/stream', express.raw({ type: '*/*', limit: '100mb' }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
@@ -120,8 +120,7 @@ function getOrCreateStreamSession(streamKey, title = 'Live Movie Stream', user =
         hostName: user ? user.name : 'Host',
         isLive: false,
         ffmpegProcess: null,
-        ffmpegProcess720p: null,
-        ffmpegProcess480p: null,
+        webrtcIngest: null,
         disconnectTimer: null,
         oneHourTimer: null,
         liveDir: path.join(liveDir, streamKey),
@@ -130,16 +129,8 @@ function getOrCreateStreamSession(streamKey, title = 'Live Movie Stream', user =
         totalChunksCount: 0,
         failureCount: 0,
         hostQuality: 1080,
-        hostBitrate: 6000,
+        hostBitrate: 8000,
         ffmpegRestartBlocked: false,
-        hostIngestStats: {
-            bytes: 0,
-            chunks: 0,
-            lastBytes: 0,
-            lastChunks: 0,
-            lastLoggedAt: 0,
-            lastChunkAt: 0
-        },
         viewers: new Set(),
         initSegment: null,
         peakViewersCount: 0,
@@ -257,109 +248,60 @@ function broadcastAdminTelemetry() {
     }
 }
 
-function logHostIngestStats(session, source, chunkBytes) {
-    if (!session.hostIngestStats) {
-        session.hostIngestStats = { bytes: 0, chunks: 0, lastBytes: 0, lastChunks: 0, lastLoggedAt: 0, lastChunkAt: 0 };
-    }
-
-    const now = Date.now();
-    const stats = session.hostIngestStats;
-    const gapMs = stats.lastChunkAt ? now - stats.lastChunkAt : 0;
-    stats.lastChunkAt = now;
-    stats.bytes += chunkBytes;
-    stats.chunks += 1;
-
-    if (!stats.lastLoggedAt) {
-        stats.lastLoggedAt = now;
-        stats.lastBytes = stats.bytes;
-        stats.lastChunks = stats.chunks;
-        return;
-    }
-
-    const elapsedSec = (now - stats.lastLoggedAt) / 1000;
-    if (elapsedSec < 5) return;
-
-    const bytesDelta = stats.bytes - stats.lastBytes;
-    const chunksDelta = stats.chunks - stats.lastChunks;
-    const mbps = (bytesDelta * 8) / elapsedSec / 1000000;
-    const chunksPerSec = chunksDelta / elapsedSec;
-
-    logger.info(
-        `[Host Ingest ${session.streamKey}] Source: ${source} | ${mbps.toFixed(2)} Mbps | ` +
-        `${chunksPerSec.toFixed(2)} chunks/s | Last chunk: ${(chunkBytes / 1024).toFixed(1)} KB | Gap: ${gapMs}ms`
-    );
-
-    stats.lastLoggedAt = now;
-    stats.lastBytes = stats.bytes;
-    stats.lastChunks = stats.chunks;
-}
-
-function resetHostIngestStats(session) {
-    session.hostIngestStats = {
-        bytes: 0,
-        chunks: 0,
-        lastBytes: 0,
-        lastChunks: 0,
-        lastLoggedAt: 0,
-        lastChunkAt: 0
-    };
-    session._hostChunkLog = [];
-}
-
-function tryHandleHostControlMessage(session, data, isBinary) {
+function tryHandleHostControlMessage(session, data, isBinary, ws) {
     if (isBinary) return false;
     try {
         const raw = typeof data === 'string' ? data : data.toString();
         const parsed = JSON.parse(raw);
+
+        if (parsed.type === 'WEBRTC_OFFER') {
+            logger.info(`[WebRTC ${session.streamKey}] Received SDP offer from host`);
+            if (session.webrtcIngest) {
+                try { session.webrtcIngest.close(); } catch (e) { }
+                session.webrtcIngest = null;
+            }
+            session.webrtcIngest = new WebRtcIngestSession(session, ws, async () => {
+                if (!hasRunningFfmpeg(session) && !session.ffmpegRestartBlocked) {
+                    try {
+                        await startFfmpegLive(session);
+                        broadcastStatus(session, true);
+                    } catch (e) {
+                        logger.error(`Failed to start FFmpeg on WebRTC ready for [${session.streamKey}]: ${e.message}`);
+                    }
+                }
+            });
+            session.webrtcIngest.handleOffer(parsed.sdp);
+            session.hostAlive = true;
+            session.isLive = true;
+            session._lastChunkAt = Date.now();
+            broadcastStatus(session, true);
+            broadcastAdminTelemetry();
+            return true;
+        }
+
+        if (parsed.type === 'WEBRTC_ICE_CANDIDATE') {
+            if (session.webrtcIngest && parsed.candidate) {
+                session.webrtcIngest.handleIceCandidate(parsed.candidate);
+            }
+            return true;
+        }
+
         if (parsed.type === 'HOST_MEDIA_SETTINGS') {
             session.hostMediaSettings = parsed;
             if (parsed.quality) session.hostQuality = parsed.quality;
             if (parsed.bitrate) session.hostBitrate = parsed.bitrate;
             logger.info(`[Host Media ${session.streamKey}] ${JSON.stringify({
-                mimeType: parsed.mimeType,
-                videoBitsPerSecond: parsed.videoBitsPerSecond,
-                audioBitsPerSecond: parsed.audioBitsPerSecond,
-                trackSettings: parsed.trackSettings,
                 quality: session.hostQuality,
                 bitrate: session.hostBitrate
             })}`);
-
-            // If FFmpeg is already running, kill and restart with new settings
-            if (hasRunningFfmpeg(session)) {
-                logger.info(`[Settings Change ${session.streamKey}] Killing existing FFmpeg to restart with new settings`);
-                for (const proc of [session.ffmpegProcess, session.ffmpegProcess720p, session.ffmpegProcess480p]) {
-                    if (proc) {
-                        try {
-                            // Remove exit handler so it doesn't set ffmpegRestartBlocked
-                            proc.removeAllListeners('exit');
-                            if (proc.stdin) { proc.stdin.removeAllListeners('error'); proc.stdin.on('error', () => { }); proc.stdin.end(); }
-                            proc.kill('SIGKILL');
-                        } catch (err) { }
-                    }
-                }
-                session.ffmpegProcess = null;
-                session.ffmpegProcess720p = null;
-                session.ffmpegProcess480p = null;
-                session.isLive = false;
-                session.ffmpegSpawnedAt = 0;
-            }
-            // Always ensure next chunk can trigger FFmpeg spawn with new settings
-            session.ffmpegRestartBlocked = false;
-            session._settingsRestart = true;
-            // Reset throttle state so it doesn't fire while FFmpeg is respawning
-            session._firstChunkReceived = false;
-            session._throttled = false;
-            session._lastChunkAt = Date.now();
-            // Write updated master playlist
-            try { writeMasterPlaylist(session); } catch (e) { }
             return true;
         }
+
         if (parsed.type === 'HOST_CAPTURE_STATS') {
             logger.info(`[Host Capture ${session.streamKey}] ${JSON.stringify({
                 measuredFps: parsed.measuredFps,
                 totalVideoFrames: parsed.totalVideoFrames,
-                droppedVideoFrames: parsed.droppedVideoFrames,
-                chunkIndex: parsed.chunkIndex
+                droppedVideoFrames: parsed.droppedVideoFrames
             })}`);
             return true;
         }
@@ -370,22 +312,7 @@ function tryHandleHostControlMessage(session, data, isBinary) {
 }
 
 function hasRunningFfmpeg(session) {
-    const p1 = session.ffmpegProcess && session.ffmpegProcess.stdin && session.ffmpegProcess.stdin.writable;
-    const p2 = session.ffmpegProcess720p && session.ffmpegProcess720p.stdin && session.ffmpegProcess720p.stdin.writable;
-    const p3 = session.ffmpegProcess480p && session.ffmpegProcess480p.stdin && session.ffmpegProcess480p.stdin.writable;
-    return !!(p1 || p2 || p3);
-}
-
-function writeChunkToFfmpeg(session, buf) {
-    const hasP1 = session.ffmpegProcess && session.ffmpegProcess.stdin && session.ffmpegProcess.stdin.writable;
-    const hasP2 = session.ffmpegProcess720p && session.ffmpegProcess720p.stdin && session.ffmpegProcess720p.stdin.writable;
-    const hasP3 = session.ffmpegProcess480p && session.ffmpegProcess480p.stdin && session.ffmpegProcess480p.stdin.writable;
-    if (!hasP1 && !hasP2 && !hasP3) {
-        logger.warn(`[FFmpeg Write ${session.streamKey}] No writable stdin!`);
-    }
-    if (hasP1) { try { session.ffmpegProcess.stdin.write(buf); } catch (e) { } }
-    if (hasP2) { try { session.ffmpegProcess720p.stdin.write(buf); } catch (e) { } }
-    if (hasP3) { try { session.ffmpegProcess480p.stdin.write(buf); } catch (e) { } }
+    return !!(session.ffmpegProcess && !session.ffmpegProcess.killed);
 }
 
 streamWss.on('connection', (ws) => {
@@ -403,74 +330,12 @@ streamWss.on('connection', (ws) => {
         session.isLive = true;
         broadcastStatus(session, true);
         broadcastAdminTelemetry();
-
-        if (session._throttleCheckTimer) clearInterval(session._throttleCheckTimer);
-        session._throttled = false;
-        session._lastChunkAt = Date.now();
-        session._firstChunkReceived = false;
-        session._throttleCheckTimer = setInterval(() => {
-            if (!session.isLive || !session.hostAlive) {
-                clearInterval(session._throttleCheckTimer);
-                session._throttleCheckTimer = null;
-                return;
-            }
-            if (!session._firstChunkReceived) return;
-            const gap = Date.now() - (session._lastChunkAt || 0);
-            if (gap > 3000 && !session._throttled) {
-                session._throttled = true;
-                try {
-                    const c = Array.from(streamWss.clients).find(cl => cl.streamKey === key && cl.readyState === 1);
-                    if (c) c.send(JSON.stringify({ type: 'HOST_THROTTLE', gapMs: gap }));
-                } catch (e) { }
-                logger.warn(`[Throttle ${key}] No chunks received for ${gap}ms — sending throttle warning to host`);
-            }
-        }, 1000);
     }
 
     ws.on('message', async (data, isBinary) => {
         const session = activeStreams.get(key);
         if (session) {
-            if (tryHandleHostControlMessage(session, data, isBinary)) return;
-
-            if (session.disconnectTimer) {
-                clearTimeout(session.disconnectTimer);
-                session.disconnectTimer = null;
-            }
-
-            const buf = Buffer.isBuffer(data) ? data : Buffer.from(data);
-            logHostIngestStats(session, 'ws', buf.length);
-
-            if (!hasRunningFfmpeg(session) && !session.ffmpegRestartBlocked) {
-                const isSettingsRestart = !!session._settingsRestart;
-                session._settingsRestart = false;
-                try {
-                    await startFfmpegLive(session, { settingsRestart: isSettingsRestart });
-                    broadcastStatus(session, true);
-                } catch (e) {
-                    logger.error(`Failed to start FFmpeg on first chunk for [${key}]: ${e.message}`);
-                }
-            }
-
-            writeChunkToFfmpeg(session, buf);
-
-            // Track host chunk rate for slow upload detection
-            if (!session._hostChunkLog) session._hostChunkLog = [];
-            session._hostChunkLog.push(Date.now());
-            // Keep only last 10 seconds of chunk timestamps
-            const cutoff = Date.now() - 10000;
-            session._hostChunkLog = session._hostChunkLog.filter(t => t > cutoff);
-
-            session._lastChunkAt = Date.now();
-            if (!session._firstChunkReceived) {
-                session._firstChunkReceived = true;
-                logger.info(`[Chunk ${key}] First binary chunk received — throttle monitor now active`);
-            }
-
-            if (session._throttled) {
-                session._throttled = false;
-                try { ws.send(JSON.stringify({ type: 'HOST_CLEAR' })); } catch (e) { }
-                logger.info(`[Throttle ${key}] Connection recovered — cleared throttle warning`);
-            }
+            if (await tryHandleHostControlMessage(session, data, isBinary, ws)) return;
         }
     });
 
@@ -484,7 +349,6 @@ streamWss.on('connection', (ws) => {
         const session = activeStreams.get(key);
         if (session) {
             session.hostAlive = false;
-            if (session._throttleCheckTimer) { clearInterval(session._throttleCheckTimer); session._throttleCheckTimer = null; }
         }
         if (session && session.isLive) {
             if (session.disconnectTimer) clearTimeout(session.disconnectTimer);
@@ -542,15 +406,11 @@ setInterval(() => {
 function broadcastHostHealth() {
     for (const session of activeStreams.values()) {
         if (!session.isLive) continue;
-        const chunkLog = session._hostChunkLog || [];
-        const recentChunks = chunkLog.filter(t => t > Date.now() - 5000);
-        const chunksPerSec = recentChunks.length / 5;
         let health = 'good';
-        if (chunksPerSec < 0.5) health = 'poor';
-        else if (chunksPerSec < 1.5) health = 'slow';
+        if (!session.hostAlive) health = 'poor';
+        else if (!hasRunningFfmpeg(session)) health = 'slow';
 
-        const msg = JSON.stringify({ type: 'HOST_HEALTH', health, chunksPerSec: Math.round(chunksPerSec) });
-        // Broadcast to all status-ws viewers watching this stream
+        const msg = JSON.stringify({ type: 'HOST_HEALTH', health });
         for (const client of wss.clients) {
             if (client.streamKey === session.streamKey && client.readyState === 1 && client.role === 'viewer') {
                 try { client.send(msg); } catch (e) { }
@@ -565,24 +425,24 @@ function stopFfmpegLive(session) {
         clearTimeout(session.disconnectTimer);
         session.disconnectTimer = null;
     }
-    if (session._throttleCheckTimer) { clearInterval(session._throttleCheckTimer); session._throttleCheckTimer = null; }
-    session._throttled = false;
-    for (const proc of [session.ffmpegProcess, session.ffmpegProcess720p, session.ffmpegProcess480p]) {
-        if (proc) {
-            try {
-                proc.removeAllListeners('exit');
-                if (proc.stdin) {
-                    proc.stdin.removeAllListeners('error');
-                    proc.stdin.on('error', () => { });
-                    proc.stdin.end();
-                }
-                proc.kill('SIGKILL');
-            } catch (err) { }
-        }
+
+    if (session.webrtcIngest) {
+        try { session.webrtcIngest.close(); } catch (e) { }
+        session.webrtcIngest = null;
+    }
+
+    if (session.ffmpegProcess) {
+        try {
+            session.ffmpegProcess.removeAllListeners('exit');
+            if (session.ffmpegProcess.stdin) {
+                session.ffmpegProcess.stdin.removeAllListeners('error');
+                session.ffmpegProcess.stdin.on('error', () => { });
+                session.ffmpegProcess.stdin.end();
+            }
+            session.ffmpegProcess.kill('SIGKILL');
+        } catch (err) { }
     }
     session.ffmpegProcess = null;
-    session.ffmpegProcess720p = null;
-    session.ffmpegProcess480p = null;
     session.isLive = false;
     session.hostAlive = false;
     session.ffmpegSpawnedAt = 0;
@@ -627,93 +487,39 @@ function commandSucceeds(command, args = []) {
 }
 
 function writeMasterPlaylist(session) {
-    const bitrate = session.hostBitrate || 6000;
-
-    let lines = ['#EXTM3U', '#EXT-X-VERSION:3'];
-
+    const bitrate = session.hostBitrate || 8000;
     const bw1080 = bitrate * 1000;
-    lines.push(`#EXT-X-STREAM-INF:BANDWIDTH=${bw1080},AVERAGE-BANDWIDTH=${bw1080},RESOLUTION=1920x1080,FRAME-RATE=30.000,CODECS="avc1.4d4028,mp4a.40.2"`);
-    lines.push('stream1080p.m3u8');
 
-    const bw720 = 4000000;
-    lines.push(`#EXT-X-STREAM-INF:BANDWIDTH=${bw720},AVERAGE-BANDWIDTH=${bw720},RESOLUTION=1280x720,FRAME-RATE=30.000,CODECS="avc1.4d401f,mp4a.40.2"`);
-    lines.push('stream720p.m3u8');
-
-    const bw480 = 1200000;
-    lines.push(`#EXT-X-STREAM-INF:BANDWIDTH=${bw480},AVERAGE-BANDWIDTH=${bw480},RESOLUTION=854x480,FRAME-RATE=30.000,CODECS="avc1.4d401e,mp4a.40.2"`);
-    lines.push('stream480p.m3u8');
-
-    lines.push('');
+    let lines = [
+        '#EXTM3U',
+        '#EXT-X-VERSION:3',
+        `#EXT-X-STREAM-INF:BANDWIDTH=${bw1080},AVERAGE-BANDWIDTH=${bw1080},RESOLUTION=1920x1080,FRAME-RATE=30.000,CODECS="avc1.4d4028,mp4a.40.2"`,
+        'stream1080p.m3u8',
+        ''
+    ];
     fs.writeFileSync(path.join(session.liveDir, 'master.m3u8'), lines.join('\n'));
 }
 
 function buildFfmpegArgs1080p(session) {
     const hlsDir = session.liveDir.replace(/\\/g, '/');
+    const sdpPath = path.join(session.liveDir, 'input.sdp').replace(/\\/g, '/');
+    const videoCodec = session.webrtcIngest?.videoCodec || 'vp8';
+    const videoCodecArgs = videoCodec === 'vp8'
+        ? ['-c:v', 'libx264', '-preset', 'ultrafast', '-tune', 'zerolatency', '-b:v', '8M', '-maxrate', '8M', '-bufsize', '16M']
+        : ['-c:v', 'copy'];
     return [
-        '-y', '-fflags', '+genpts+discardcorrupt',
-        '-probesize', '2M', '-analyzeduration', '1000000',
-        '-thread_queue_size', '1024',
-        '-i', 'pipe:0',
-        '-c:v', 'copy',
+        '-y',
+        '-protocol_whitelist', 'file,udp,rtp',
+        '-fflags', '+genpts+discardcorrupt',
+        '-analyzeduration', '2000000',
+        '-probesize', '2M',
+        '-i', sdpPath,
+        ...videoCodecArgs,
         '-c:a', 'aac', '-b:a', '128k', '-ar:a', '48000', '-ac:a', '2',
         '-f', 'hls', '-hls_time', '2', '-hls_list_size', '20',
         '-hls_flags', 'delete_segments+independent_segments',
         '-hls_segment_filename', `${hlsDir}/stream1080p%d.ts`,
         `${hlsDir}/stream1080p.m3u8`
-    ];
-}
-
-function buildFfmpegArgs720p(session) {
-    const hlsDir = session.liveDir.replace(/\\/g, '/');
-    return [
-        '-y', '-fflags', '+genpts+discardcorrupt',
-        '-probesize', '2M', '-analyzeduration', '1000000',
-        '-thread_queue_size', '1024',
-        '-i', 'pipe:0',
-        '-vf', 'scale=1280:720:flags=bilinear',
-        '-c:v', 'libx264', '-threads:v', '4', '-preset', 'ultrafast', '-tune', 'zerolatency',
-        '-profile:v', 'main', '-pix_fmt', 'yuv420p',
-        '-b:v', '4000k', '-maxrate', '4000k', '-bufsize', '8000k',
-        '-c:a', 'aac', '-b:a', '128k', '-ar:a', '48000', '-ac:a', '2',
-        '-f', 'hls', '-hls_time', '2', '-hls_list_size', '20',
-        '-hls_flags', 'delete_segments+independent_segments',
-        '-hls_segment_filename', `${hlsDir}/stream720p%d.ts`,
-        `${hlsDir}/stream720p.m3u8`
-    ];
-}
-
-function buildFfmpegArgs720pCopy(session) {
-    const hlsDir = session.liveDir.replace(/\\/g, '/');
-    return [
-        '-y', '-fflags', '+genpts+discardcorrupt',
-        '-probesize', '2M', '-analyzeduration', '1000000',
-        '-thread_queue_size', '1024',
-        '-i', 'pipe:0',
-        '-c:v', 'copy',
-        '-c:a', 'aac', '-b:a', '128k', '-ar:a', '48000', '-ac:a', '2',
-        '-f', 'hls', '-hls_time', '2', '-hls_list_size', '20',
-        '-hls_flags', 'delete_segments+independent_segments',
-        '-hls_segment_filename', `${hlsDir}/stream720p%d.ts`,
-        `${hlsDir}/stream720p.m3u8`
-    ];
-}
-
-function buildFfmpegArgs480p(session) {
-    const hlsDir = session.liveDir.replace(/\\/g, '/');
-    return [
-        '-y', '-fflags', '+genpts+discardcorrupt',
-        '-probesize', '2M', '-analyzeduration', '1000000',
-        '-thread_queue_size', '1024',
-        '-i', 'pipe:0',
-        '-vf', 'scale=854:480:flags=bilinear',
-        '-c:v', 'libx264', '-threads:v', '4', '-preset', 'ultrafast', '-tune', 'zerolatency',
-        '-profile:v', 'main', '-pix_fmt', 'yuv420p',
-        '-b:v', '1200k', '-maxrate', '1200k', '-bufsize', '2400k',
-        '-c:a', 'aac', '-b:a', '96k', '-ar:a', '44100', '-ac:a', '2',
-        '-f', 'hls', '-hls_time', '2', '-hls_list_size', '20',
-        '-hls_flags', 'delete_segments+independent_segments',
-        '-hls_segment_filename', `${hlsDir}/stream480p%d.ts`,
-        `${hlsDir}/stream480p.m3u8`
     ];
 }
 
@@ -729,7 +535,7 @@ function attachFfmpegLogging(session, proc, label) {
                 if (!msg) continue;
                 if (msg.includes('fps=') || msg.includes('speed=')) {
                     const now = Date.now();
-                    if (now - lastLoggedTime > 2000) {
+                    if (now - lastLoggedTime > 3000) {
                         lastLoggedTime = now;
                         const fpsMatch = msg.match(/fps=\s*([\d.]+)/);
                         const speedMatch = msg.match(/speed=\s*([\d.x]+)/);
@@ -748,31 +554,29 @@ function attachFfmpegLogging(session, proc, label) {
 
     proc.on('exit', (code, signal) => {
         logger.warn(`FFmpeg ${label} exited for [${session.streamKey}] (code=${code}, signal=${signal}). Host WS alive: ${session.hostAlive}`);
-        if (label === '1080p') session.ffmpegProcess = null;
-        if (label === '720p') session.ffmpegProcess720p = null;
-        if (label === '480p') session.ffmpegProcess480p = null;
-        const anyRunning = (session.ffmpegProcess && session.ffmpegProcess.stdin && session.ffmpegProcess.stdin.writable) ||
-            (session.ffmpegProcess720p && session.ffmpegProcess720p.stdin && session.ffmpegProcess720p.stdin.writable) ||
-            (session.ffmpegProcess480p && session.ffmpegProcess480p.stdin && session.ffmpegProcess480p.stdin.writable);
-        if (!anyRunning) {
-            session.ffmpegRestartBlocked = true;
-            logger.warn(`FFmpeg restart blocked for [${session.streamKey}] until stream reset.`);
-            if (!session.hostAlive) session.isLive = false;
-        }
+        session.ffmpegProcess = null;
+        if (!session.hostAlive) session.isLive = false;
     });
 }
 
 async function startFfmpegLive(session, opts = {}) {
     if (session.cleanupTimer) { clearTimeout(session.cleanupTimer); session.cleanupTimer = null; }
 
-    const isSettingsRestart = opts.settingsRestart === true;
+    if (session.disconnectTimer) { clearTimeout(session.disconnectTimer); session.disconnectTimer = null; }
 
-    stopFfmpegLive(session);
-    if (!isSettingsRestart) {
-        clearLiveFolder(session);
+    if (session.ffmpegProcess) {
+        try {
+            session.ffmpegProcess.removeAllListeners('exit');
+            if (session.ffmpegProcess.stdin) {
+                session.ffmpegProcess.stdin.removeAllListeners('error');
+                session.ffmpegProcess.stdin.on('error', () => { });
+                session.ffmpegProcess.stdin.end();
+            }
+            session.ffmpegProcess.kill('SIGKILL');
+        } catch (err) { }
+        session.ffmpegProcess = null;
     }
     session.ffmpegRestartBlocked = false;
-    resetHostIngestStats(session);
 
     // 1-Hour Stream Limit Timer
     session.countedAgainstLimit = false;
@@ -787,18 +591,11 @@ async function startFfmpegLive(session, opts = {}) {
         await logStreamSession(session);
     }, 3600 * 1000);
 
-    const quality = session.hostQuality || 1080;
-    const mimeType = session.hostMediaSettings?.mimeType || 'unknown';
-
     writeMasterPlaylist(session);
 
-    logger.info(`Spawning FFmpeg for [${session.streamKey}] — 1080p copy + 720p transcode + 480p transcode (input: ${mimeType})...`, { sys: getSystemInfo() });
+    logger.info(`Spawning FFmpeg for [${session.streamKey}] — 1080p WebRTC passthrough...`, { sys: getSystemInfo() });
     session.ffmpegProcess = spawn('ffmpeg', buildFfmpegArgs1080p(session), { stdio: ['pipe', 'pipe', 'pipe'] });
-    attachFfmpegLogging(session, session.ffmpegProcess, '1080p');
-    session.ffmpegProcess720p = spawn('ffmpeg', buildFfmpegArgs720p(session), { stdio: ['pipe', 'pipe', 'pipe'] });
-    attachFfmpegLogging(session, session.ffmpegProcess720p, '720p');
-    session.ffmpegProcess480p = spawn('ffmpeg', buildFfmpegArgs480p(session), { stdio: ['pipe', 'pipe', 'pipe'] });
-    attachFfmpegLogging(session, session.ffmpegProcess480p, '480p');
+    attachFfmpegLogging(session, session.ffmpegProcess, '1080p Passthrough');
 
     session.isLive = true;
     session.ffmpegSpawnedAt = Date.now();
@@ -1182,7 +979,6 @@ app.post(['/reset-stream', '/reset-stream/:streamKey'], async (req, res) => {
         stopFfmpegLive(session);
         clearLiveFolder(session);
         session.ffmpegRestartBlocked = false;
-        resetHostIngestStats(session);
         broadcastStatus(session, false);
         res.json({ success: true, message: `Stream ${key} reset`, streamKey: key });
     } catch (err) {
@@ -1221,43 +1017,6 @@ app.post(['/stop-stream', '/stop-stream/:streamKey'], async (req, res) => {
     } catch (err) { res.status(500).json({ success: false, error: err.message }); }
 });
 
-// Binary Chunk Stream HTTP Fallback
-app.post(['/stream', '/stream/:streamKey'], async (req, res) => {
-    const key = req.params.streamKey || req.headers['x-stream-key'] || 'default';
-    const chunkIndex = parseInt(req.headers['x-chunk-index'] || '0');
-
-    res.status(200).json({ success: true, chunkIndex });
-
-    const session = activeStreams.get(key);
-    if (session) {
-        if (session.disconnectTimer) {
-                logger.info(`Incoming HTTP chunk stream for [${key}] during network drop! Refreshing 90-second grace timer.`);
-            clearTimeout(session.disconnectTimer);
-            session.disconnectTimer = setTimeout(async () => {
-                logger.info(`90-second reconnection window expired for [${key}]. Stopping FFmpeg process...`);
-                await logStreamSession(session);
-                stopFfmpegLive(session);
-                broadcastStatus(session, false);
-                broadcastAdminTelemetry();
-                session.disconnectTimer = null;
-            }, 90 * 1000);
-        }
-        if (!hasRunningFfmpeg(session) && !session.ffmpegRestartBlocked) {
-            try {
-                await startFfmpegLive(session);
-                broadcastStatus(session, true);
-            } catch (e) {
-                logger.error(`Failed to start FFmpeg on HTTP chunk for [${key}]: ${e.message}`);
-            }
-        }
-        if (hasRunningFfmpeg(session)) {
-            const buf = Buffer.isBuffer(req.body) ? req.body : Buffer.from(req.body);
-            logHostIngestStats(session, 'http', buf.length);
-            writeChunkToFfmpeg(session, buf);
-        }
-    }
-});
-
 app.use((err, req, res, next) => {
     if (err && (err.type === 'aborted' || err.status === 400)) {
         return res.status(400).json({ success: false, error: 'Request aborted' });
@@ -1266,5 +1025,5 @@ app.use((err, req, res, next) => {
 });
 
 server.listen(PORT, () => {
-    logger.info(`CoWatch Multi-Stream Platform running at ${APP_URL} (Port ${PORT})`, { sys: getSystemInfo() });
+    console.log(`Server is running on http://localhost:${PORT}`);
 });

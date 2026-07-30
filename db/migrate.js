@@ -5,8 +5,6 @@ import { eq } from 'drizzle-orm';
 
 export async function initDb() {
     try {
-        console.log('🗄️ Initializing PostgreSQL Database tables...');
-
         await pool.query(`
             CREATE TABLE IF NOT EXISTS users (
                 id SERIAL PRIMARY KEY,
@@ -46,7 +44,7 @@ export async function initDb() {
             ALTER TABLE stream_sessions DROP COLUMN IF EXISTS chunks_480p;
         `);
 
-        // Seed Admin user: watch@watch.in / HexWatch78
+        // Seed Admin user if needed
         const adminEmail = 'watch@watch.in';
         const existingAdmin = await db.select().from(users).where(eq(users.email, adminEmail));
 
@@ -61,12 +59,7 @@ export async function initDb() {
                 streamLimit: 99999,
                 streamCount: 0
             });
-            console.log('👑 Admin user seeded: watch@watch.in / HexWatch78');
-        } else {
-            console.log('👑 Admin user verified: watch@watch.in');
         }
-
-        console.log('✅ PostgreSQL Database schema and seeding complete.');
     } catch (err) {
         console.error('❌ Database initialization error:', err);
     }

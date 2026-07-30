@@ -385,11 +385,8 @@
                         <strong style="color:#fff; font-size:13px;">LIVE</strong>
                     </span>
                     <span id="topQualityBadge"
-                        style="background:#0f172a;color:#9fc7ff;padding:6px 10px;border-radius:10px;font-size:13px;border:1px solid rgba(255,255,255,0.04);">720p
-                        30FPS</span>
-                    <span id="topChunksBadge"
-                        style="background:#072f18;color:#9fe6c4;padding:6px 10px;border-radius:10px;font-size:13px;border:1px solid rgba(255,255,255,0.04);">Chunks
-                        Sent: 0</span>
+                        style="background:#0f172a;color:#9fc7ff;padding:6px 10px;border-radius:10px;font-size:13px;border:1px solid rgba(255,255,255,0.04);">1080p
+                        WebRTC</span>
                     <span id="topConnBadge"
                         style="background:#072f18;color:#9fe6c4;padding:6px 10px;border-radius:10px;font-size:13px;border:1px solid rgba(255,255,255,0.04);display:flex;align-items:center;gap:6px;">
                         <span id="connDot" style="width:8px;height:8px;border-radius:50%;background:#10b981;display:inline-block;"></span>
@@ -669,6 +666,8 @@
         const currentStreamKey = '<%= typeof streamKey !== "undefined" ? streamKey : "default" %>';
         let streamWs = null;
 
+        let peerConnection = null;
+
         function connectStreamWebSocket() {
             return new Promise((resolve) => {
                 if (streamWs && streamWs.readyState === WebSocket.OPEN) {
@@ -683,56 +682,37 @@
                 const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
                 const wsUrl = `${protocol}//${window.location.host}/stream-ws?key=${encodeURIComponent(currentStreamKey)}`;
                 streamWs = new WebSocket(wsUrl);
-                streamWs.binaryType = 'arraybuffer';
 
                 streamWs.onopen = () => {
-                    console.log('⚡ WebSocket Stream Ingest Connected for [' + currentStreamKey + ']');
+                    console.log('⚡ WebSocket Signaling Connected for [' + currentStreamKey + ']');
                     resolve();
                 };
 
                 streamWs.onerror = (err) => {
-                    console.warn('WebSocket stream error:', err);
-                    resolve(); // resolve anyway, sendChunk will use HTTP fallback
+                    console.warn('WebSocket signaling error:', err);
+                    resolve();
                 };
 
-                streamWs.onmessage = (event) => {
+                streamWs.onmessage = async (event) => {
                     try {
                         const msg = JSON.parse(event.data);
-                        if (msg.type === 'HOST_THROTTLE') {
-                            isThrottled = true;
-                            throttleOverlay.style.display = 'block';
-                            if (!throttleSoundPlayed) {
-                                try {
-                                    const ctx = new (window.AudioContext || window.webkitAudioContext)();
-                                    const osc = ctx.createOscillator();
-                                    const gain = ctx.createGain();
-                                    osc.connect(gain);
-                                    gain.connect(ctx.destination);
-                                    osc.type = 'sine';
-                                    osc.frequency.setValueAtTime(480, ctx.currentTime);
-                                    osc.frequency.setValueAtTime(400, ctx.currentTime + 0.15);
-                                    osc.frequency.setValueAtTime(350, ctx.currentTime + 0.3);
-                                    gain.gain.setValueAtTime(0.3, ctx.currentTime);
-                                    gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.5);
-                                    osc.start(ctx.currentTime);
-                                    osc.stop(ctx.currentTime + 0.5);
-                                    throttleSoundPlayed = true;
-                                } catch (e) { }
+                        if (msg.type === 'WEBRTC_ANSWER') {
+                            if (peerConnection) {
+                                await peerConnection.setRemoteDescription(new RTCSessionDescription({ type: 'answer', sdp: msg.sdp }));
+                                console.log('⚡ WebRTC Answer set successfully!');
                             }
-                        } else if (msg.type === 'HOST_CLEAR') {
-                            isThrottled = false;
-                            throttleOverlay.style.display = 'none';
-                            throttleSoundPlayed = false;
+                        } else if (msg.type === 'WEBRTC_ICE_CANDIDATE') {
+                            if (peerConnection && msg.candidate) {
+                                await peerConnection.addIceCandidate(new RTCIceCandidate(msg.candidate));
+                            }
                         }
                     } catch (e) { }
                 };
 
                 streamWs.onclose = () => {
-                    console.warn('WebSocket stream closed');
+                    console.warn('WebSocket closed');
                     if (mediaStream) {
-                        setTimeout(() => {
-                            connectStreamWebSocket();
-                        }, 500);
+                        setTimeout(connectStreamWebSocket, 1000);
                     }
                 };
 
@@ -740,7 +720,7 @@
             });
         }
 
-        // Status WS: update basic host UI (no viewer count displayed)
+        // Status WS: update basic host UI
         function connectHostStatusWebSocket() {
             const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
             const wsUrl = `${protocol}//${window.location.host}/status-ws?key=${encodeURIComponent(currentStreamKey)}`;
@@ -750,7 +730,7 @@
                 try {
                     const data = JSON.parse(event.data);
                     if (data.type === 'STATUS') {
-                        if (topStatusBox) topStatusBox.style.display = data.live ? 'block' : 'none';
+                        if (topStatusBox) topStatusBox.style.display = data.live ? 'flex' : 'none';
                     }
                 } catch (e) { }
             };
@@ -758,10 +738,6 @@
             statusWs.onclose = () => setTimeout(connectHostStatusWebSocket, 3000);
         }
         connectHostStatusWebSocket();
-
-        // Connection Quality Monitor
-        let connStats = { sent: 0, failed: 0, wsConnected: false, wsOk: 0, wsFail: 0 };
-        let connCheckInterval = null;
 
         function updateConnBadge(status, color) {
             if (connDot) connDot.style.background = color;
@@ -775,72 +751,12 @@
             }
         }
 
-        function evaluateConnection() {
-            const total = connStats.sent;
-            if (total < 3) return;
-            const failRate = connStats.failed / total;
-            const wsFailRate = (connStats.wsFail) / Math.max(connStats.wsOk + connStats.wsFail, 1);
-
-            if (connStats.wsConnected && failRate < 0.05 && wsFailRate < 0.1) {
-                updateConnBadge('Stable Connection', '#10b981');
-            } else if (failRate < 0.2 && wsFailRate < 0.3) {
-                updateConnBadge('Good Connection', '#22c55e');
-            } else if (failRate < 0.5) {
-                updateConnBadge('Unstable Connection', '#f59e0b');
-            } else {
-                updateConnBadge('Poor Connection', '#ef4444');
-            }
-        }
-
         function startConnMonitor() {
-            connStats = { sent: 0, failed: 0, wsConnected: false, wsOk: 0, wsFail: 0 };
-            if (connCheckInterval) clearInterval(connCheckInterval);
-            connCheckInterval = setInterval(evaluateConnection, 3000);
+            updateConnBadge('Connecting WebRTC...', '#f59e0b');
         }
 
         function stopConnMonitor() {
-            if (connCheckInterval) { clearInterval(connCheckInterval); connCheckInterval = null; }
             updateConnBadge('Offline', '#6b7280');
-        }
-
-        async function sendChunk(blob, index) {
-            try {
-                if (isThrottled) return;
-                const arrayBuffer = await blob.arrayBuffer();
-                connStats.sent++;
-                if (streamWs && streamWs.readyState === WebSocket.OPEN) {
-                    connStats.wsConnected = true;
-                    try {
-                        streamWs.send(arrayBuffer);
-                        connStats.wsOk++;
-                    } catch (e) {
-                        connStats.wsFail++;
-                        connStats.failed++;
-                    }
-                } else {
-                    connStats.wsConnected = false;
-                    try {
-                        await fetch('/stream/' + currentStreamKey, {
-                            method: 'POST',
-                            headers: {
-                                'Content-Type': 'application/octet-stream',
-                                'x-chunk-index': index,
-                                'x-stream-key': currentStreamKey
-                            },
-                            body: arrayBuffer
-                        });
-                        connStats.wsOk++;
-                    } catch (e) {
-                        connStats.wsFail++;
-                        connStats.failed++;
-                    }
-                }
-                if (topChunksBadge) topChunksBadge.textContent = `Chunks Sent: ${index + 1}`;
-                if (downloadBtn) downloadBtn.style.display = 'inline-flex';
-            } catch (err) {
-                console.error("Failed to send chunk:", err);
-                connStats.failed++;
-            }
         }
 
         function showStreamLoader(title, subtitle) {
@@ -855,7 +771,6 @@
             modal.style.display = 'none';
         }
 
-        // Tab background throttling prevention (Silent Web Audio Keep-Alive)
         let keepAliveAudioCtx = null;
         function enableBackgroundKeepAlive() {
             try {
@@ -863,7 +778,7 @@
                     keepAliveAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
                     const osc = keepAliveAudioCtx.createOscillator();
                     const gain = keepAliveAudioCtx.createGain();
-                    gain.gain.value = 0.0001; // Virtually silent audio node
+                    gain.gain.value = 0.0001;
                     osc.connect(gain);
                     gain.connect(keepAliveAudioCtx.destination);
                     osc.start();
@@ -874,26 +789,83 @@
             } catch (e) { }
         }
 
-        document.addEventListener('visibilitychange', () => {
-            if (document.hidden && mediaRecorder && mediaRecorder.state === 'recording') {
-                try { mediaRecorder.requestData(); } catch (e) { }
+        async function startWebRtcSession() {
+            if (peerConnection) {
+                try { peerConnection.close(); } catch (e) { }
+                peerConnection = null;
             }
-        });
+
+            peerConnection = new RTCPeerConnection({
+                iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+            });
+
+            peerConnection.onicecandidate = (event) => {
+                if (event.candidate && streamWs && streamWs.readyState === WebSocket.OPEN) {
+                    streamWs.send(JSON.stringify({
+                        type: 'WEBRTC_ICE_CANDIDATE',
+                        candidate: event.candidate
+                    }));
+                }
+            };
+
+            peerConnection.oniceconnectionstatechange = () => {
+                console.log(`[WebRTC State] ${peerConnection.iceConnectionState}`);
+                if (peerConnection.iceConnectionState === 'connected' || peerConnection.iceConnectionState === 'completed') {
+                    updateConnBadge('Stable 1080p WebRTC', '#10b981');
+                } else if (peerConnection.iceConnectionState === 'failed') {
+                    updateConnBadge('WebRTC Reconnecting', '#ef4444');
+                }
+            };
+
+            if (mediaStream) {
+                mediaStream.getTracks().forEach(track => {
+                    peerConnection.addTrack(track, mediaStream);
+                });
+            }
+
+            const senders = peerConnection.getSenders();
+            const videoSender = senders.find(s => s.track && s.track.kind === 'video');
+            if (videoSender) {
+                try {
+                    const params = videoSender.getParameters();
+                    if (!params.encodings) params.encodings = [{}];
+                    params.encodings[0].maxBitrate = 8000000;
+                    params.encodings[0].maxFramerate = 30;
+                    await videoSender.setParameters(params);
+                } catch (e) { console.warn('setParameters error', e); }
+            }
+
+            const offer = await peerConnection.createOffer({
+                offerToReceiveAudio: false,
+                offerToReceiveVideo: false
+            });
+
+            let sdp = offer.sdp;
+            if (!sdp.includes('b=AS:')) {
+                sdp = sdp.replace(/(m=video [^\r\n]+\r\n)/, '$1b=AS:8000\r\nb=TIAS:8000000\r\n');
+            }
+            await peerConnection.setLocalDescription({ type: 'offer', sdp });
+
+            if (streamWs && streamWs.readyState === WebSocket.OPEN) {
+                streamWs.send(JSON.stringify({
+                    type: 'WEBRTC_OFFER',
+                    sdp: peerConnection.localDescription.sdp
+                }));
+            }
+        }
 
         async function startSharing() {
             if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
-                alert("Screen Sharing requires HTTPS or localhost.\n\nBrowsers block media capture on unencrypted HTTP IP addresses (http://222.167.207.36:5992).\n\nTo enable Screen Share over HTTP for testing:\n1. Open chrome://flags/#unsafely-treat-insecure-origin-as-secure in Chrome.\n2. Add 'http://222.167.207.36:5992' and set to Enabled.\n3. Relaunch Chrome.");
+                alert("Screen Sharing requires HTTPS or localhost.");
                 return;
             }
 
             try {
                 enableBackgroundKeepAlive();
-                const captureWidth = streamQuality === 1080 ? 1920 : 1280;
-                const captureHeight = streamQuality === 1080 ? 1080 : 720;
                 const constraints = {
                     video: {
-                        width: { ideal: captureWidth, max: captureWidth },
-                        height: { ideal: captureHeight, max: captureHeight },
+                        width: { ideal: 1920, max: 1920 },
+                        height: { ideal: 1080, max: 1080 },
                         frameRate: { ideal: 30, max: 30 }
                     },
                     audio: {
@@ -907,135 +879,36 @@
 
                 mediaStream = await navigator.mediaDevices.getDisplayMedia(constraints);
 
-                showStreamLoader("Preparing Live Stream Engine...", "Clearing old video segments and connecting to ingest server...");
+                showStreamLoader("Preparing Live Stream Engine...", "Initializing 1080p WebRTC stream & FFmpeg passthrough...");
 
                 await fetch('/reset-stream/' + currentStreamKey, { method: 'POST' });
-                chunkIndex = 0;
-                isThrottled = false;
-                throttleSoundPlayed = false;
-                throttleOverlay.style.display = 'none';
-                if (topChunksBadge) topChunksBadge.textContent = 'Chunks Sent: 0';
-                if (downloadBtn) downloadBtn.style.display = 'none';
                 startConnMonitor();
 
                 await connectStreamWebSocket();
+                await startWebRtcSession();
 
-                // Set stream to video element
                 previewVideo.srcObject = mediaStream;
                 previewVideo.classList.add('active');
                 placeholder.style.display = 'none';
                 if (topStatusBox) topStatusBox.style.display = 'flex';
 
-                // Detect actual settings
                 const videoTrack = mediaStream.getVideoTracks()[0];
-                let trackSettings = null;
                 if (videoTrack) {
-                    trackSettings = videoTrack.getSettings();
-                    console.log(`[Capture] Actual resolution: ${trackSettings.width}x${trackSettings.height} @ ${trackSettings.frameRate}fps`);
-                    const fps = Math.round(trackSettings.frameRate) || 30;
-                    if (topQualityBadge) topQualityBadge.textContent = `${streamQuality}p ${fps}FPS ${streamBitrate}k`;
+                    const trackSettings = videoTrack.getSettings();
+                    console.log(`[Capture] Resolution: ${trackSettings.width}x${trackSettings.height} @ ${trackSettings.frameRate}fps`);
+                    if (topQualityBadge) topQualityBadge.textContent = `1080p 30FPS Passthrough`;
 
                     videoTrack.addEventListener('ended', () => {
                         if (!isPageUnloading && document.visibilityState !== 'hidden') stopSharing();
                     });
                 }
 
-                // Setup MediaRecorder — H.264/MP4 only for zero-encode copy path on server.
-                // Clone stream so preview video and encoder don't compete for frames
-                const recorderStream = mediaStream.clone();
-                let preferredMime = 'video/mp4;codecs=h264,aac';
-                if (!MediaRecorder.isTypeSupported(preferredMime)) {
-                    preferredMime = 'video/mp4;codecs=avc1.42E01E,mp4a.40.2';
-                }
-
-                console.log(`[MediaRecorder] Using: ${preferredMime}`);
-
-                const encoderBitrate = streamBitrate * 1000;
-                mediaRecorder = new MediaRecorder(recorderStream, {
-                    mimeType: preferredMime,
-                    videoBitsPerSecond: encoderBitrate,
-                    audioBitsPerSecond: 128000
-                });
-
-                if (streamWs && streamWs.readyState === WebSocket.OPEN) {
-                    streamWs.send(JSON.stringify({
-                        type: 'HOST_MEDIA_SETTINGS',
-                        mimeType: preferredMime,
-                        videoBitsPerSecond: encoderBitrate,
-                        audioBitsPerSecond: 128000,
-                        trackSettings,
-                        quality: streamQuality,
-                        bitrate: streamBitrate
-                    }));
-                }
-
-                let lastFrameCount = 0;
-                let lastFrameCheckAt = performance.now();
-                let lastChunkBytes = 0;
-                let lastChunkTime = performance.now();
-                let lastDroppedFrames = 0;
-                let lastChunkArrival = performance.now();
-                if (captureStatsInterval) clearInterval(captureStatsInterval);
-                captureStatsInterval = setInterval(() => {
-                    if (!mediaRecorder || mediaRecorder.state !== 'recording') {
-                        clearInterval(captureStatsInterval);
-                        captureStatsInterval = null;
-                        return;
-                    }
-                    if (!previewVideo.getVideoPlaybackQuality) return;
-
-                    const quality = previewVideo.getVideoPlaybackQuality();
-                    const now = performance.now();
-                    const elapsedSec = (now - lastFrameCheckAt) / 1000;
-                    const frameDelta = quality.totalVideoFrames - lastFrameCount;
-                    const measuredFps = elapsedSec > 0 ? frameDelta / elapsedSec : 0;
-                    const dropPct = quality.totalVideoFrames > 0 ? ((quality.droppedVideoFrames / quality.totalVideoFrames) * 100).toFixed(1) : '0.0';
-                    const dropDelta = quality.droppedVideoFrames - (lastDroppedFrames || 0);
-                    const chunkInterval = (now - lastChunkTime) / 1000;
-                    const outBitrate = chunkInterval > 0 ? ((lastChunkBytes * 8) / chunkInterval / 1000).toFixed(0) : '0';
-
-                    console.log(`[Encode] ${measuredFps.toFixed(1)}fps | chunks: ${chunkIndex} | drop: ${dropPct}% (${dropDelta}/${frameDelta}) | out: ${outBitrate}kbps | target: ${streamBitrate}kbps`);
-
-                    if (streamWs && streamWs.readyState === WebSocket.OPEN) {
-                        streamWs.send(JSON.stringify({
-                            type: 'HOST_CAPTURE_STATS',
-                            measuredFps: Number(measuredFps.toFixed(2)),
-                            totalVideoFrames: quality.totalVideoFrames,
-                            droppedVideoFrames: quality.droppedVideoFrames,
-                            chunkIndex
-                        }));
-                    }
-
-                    lastFrameCount = quality.totalVideoFrames;
-                    lastDroppedFrames = quality.droppedVideoFrames;
-                    lastFrameCheckAt = now;
-                    lastChunkBytes = 0;
-                    lastChunkTime = now;
-                }, 5000);
-
-                mediaRecorder.ondataavailable = (event) => {
-                    if (event.data && event.data.size > 0) {
-                        const now = performance.now();
-                        const gap = (now - lastChunkArrival).toFixed(0);
-                        const sizeKB = (event.data.size / 1024).toFixed(0);
-                        console.log(`[Chunk] #${chunkIndex} ${sizeKB}KB (gap: ${gap}ms)`);
-                        lastChunkArrival = now;
-                        lastChunkBytes += event.data.size;
-                        sendChunk(event.data, chunkIndex++);
-                    }
-                };
-
-                // Request chunk every 500 ms for sub-second real-time streaming
-                mediaRecorder.start(500);
-
-                // Toggle button UI
                 toggleShareBtn.classList.remove('start');
                 toggleShareBtn.classList.add('stop');
                 btnText.textContent = 'Stop Sharing';
 
                 previewVideo.play();
                 hideStreamLoader();
-                if (topQualityBadge) topQualityBadge.textContent = `${streamQuality}p ${streamBitrate}k`;
             } catch (err) {
                 console.error("Error accessing screen share:", err);
                 hideStreamLoader();
@@ -1045,15 +918,9 @@
         function stopSharing() {
             if (isPageUnloading || document.visibilityState === 'hidden') return;
 
-            _settingsRestartPending = false;
-            if (mediaRecorder && mediaRecorder.state !== 'inactive') {
-                mediaRecorder.stop();
-                mediaRecorder = null;
-            }
-
-            if (captureStatsInterval) {
-                clearInterval(captureStatsInterval);
-                captureStatsInterval = null;
+            if (peerConnection) {
+                try { peerConnection.close(); } catch (e) { }
+                peerConnection = null;
             }
 
             if (mediaStream) {
@@ -1072,9 +939,6 @@
             previewVideo.classList.remove('active');
             placeholder.style.display = 'flex';
             if (topStatusBox) topStatusBox.style.display = 'none';
-            isThrottled = false;
-            throttleSoundPlayed = false;
-            throttleOverlay.style.display = 'none';
             stopConnMonitor();
 
             toggleShareBtn.classList.remove('stop');
