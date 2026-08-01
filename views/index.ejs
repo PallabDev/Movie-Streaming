@@ -385,7 +385,7 @@
                         <strong style="color:#fff; font-size:13px;">LIVE</strong>
                     </span>
                     <span id="topQualityBadge"
-                        style="background:#0f172a;color:#9fc7ff;padding:6px 10px;border-radius:10px;font-size:13px;border:1px solid rgba(255,255,255,0.04);">1080p
+                        style="background:#0f172a;color:#9fc7ff;padding:6px 10px;border-radius:10px;font-size:13px;border:1px solid rgba(255,255,255,0.04);">720p
                         WebRTC</span>
                     <span id="topConnBadge"
                         style="background:#072f18;color:#9fe6c4;padding:6px 10px;border-radius:10px;font-size:13px;border:1px solid rgba(255,255,255,0.04);display:flex;align-items:center;gap:6px;">
@@ -537,8 +537,8 @@
         let isThrottled = false;
 
         // ─── Stream Settings ──────────────────────────────────────────────
-        let streamQuality = 1080;
-        let streamBitrate = 6000;
+        let streamQuality = 720;
+        let streamBitrate = 4000;
         let throttleSoundPlayed = false;
         let _settingsRestartPending = false;
 
@@ -811,7 +811,7 @@
             peerConnection.oniceconnectionstatechange = () => {
                 console.log(`[WebRTC State] ${peerConnection.iceConnectionState}`);
                 if (peerConnection.iceConnectionState === 'connected' || peerConnection.iceConnectionState === 'completed') {
-                    updateConnBadge('Stable 1080p WebRTC', '#10b981');
+                    updateConnBadge('Stable 720p WebRTC', '#10b981');
                 } else if (peerConnection.iceConnectionState === 'failed') {
                     updateConnBadge('WebRTC Reconnecting', '#ef4444');
                 }
@@ -823,13 +823,26 @@
                 });
             }
 
+            const transceivers = peerConnection.getTransceivers();
+            for (const t of transceivers) {
+                if (t.receiver.track.kind === 'video') {
+                    try {
+                        const caps = RTCRtpReceiver.getCapabilities('video');
+                        if (caps && caps.codecs) {
+                            const h264 = caps.codecs.filter(c => c.mimeType === 'video/H264');
+                            if (h264.length) t.setCodecPreferences(h264);
+                        }
+                    } catch (e) { console.warn('setCodecPreferences error', e); }
+                }
+            }
+
             const senders = peerConnection.getSenders();
             const videoSender = senders.find(s => s.track && s.track.kind === 'video');
             if (videoSender) {
                 try {
                     const params = videoSender.getParameters();
                     if (!params.encodings) params.encodings = [{}];
-                    params.encodings[0].maxBitrate = 8000000;
+                    params.encodings[0].maxBitrate = 4000000;
                     params.encodings[0].maxFramerate = 30;
                     await videoSender.setParameters(params);
                 } catch (e) { console.warn('setParameters error', e); }
@@ -842,7 +855,7 @@
 
             let sdp = offer.sdp;
             if (!sdp.includes('b=AS:')) {
-                sdp = sdp.replace(/(m=video [^\r\n]+\r\n)/, '$1b=AS:8000\r\nb=TIAS:8000000\r\n');
+                sdp = sdp.replace(/(m=video [^\r\n]+\r\n)/, '$1b=AS:4000\r\nb=TIAS:4000000\r\n');
             }
             await peerConnection.setLocalDescription({ type: 'offer', sdp });
 
@@ -864,8 +877,8 @@
                 enableBackgroundKeepAlive();
                 const constraints = {
                     video: {
-                        width: { ideal: 1920, max: 1920 },
-                        height: { ideal: 1080, max: 1080 },
+                        width: { ideal: 1280, max: 1280 },
+                        height: { ideal: 720, max: 720 },
                         frameRate: { ideal: 30, max: 30 }
                     },
                     audio: {
@@ -879,7 +892,7 @@
 
                 mediaStream = await navigator.mediaDevices.getDisplayMedia(constraints);
 
-                showStreamLoader("Preparing Live Stream Engine...", "Initializing 1080p WebRTC stream & FFmpeg passthrough...");
+                showStreamLoader("Preparing Live Stream Engine...", "Initializing 720p WebRTC stream & FFmpeg passthrough...");
 
                 await fetch('/reset-stream/' + currentStreamKey, { method: 'POST' });
                 startConnMonitor();
@@ -896,7 +909,7 @@
                 if (videoTrack) {
                     const trackSettings = videoTrack.getSettings();
                     console.log(`[Capture] Resolution: ${trackSettings.width}x${trackSettings.height} @ ${trackSettings.frameRate}fps`);
-                    if (topQualityBadge) topQualityBadge.textContent = `1080p 30FPS Passthrough`;
+                    if (topQualityBadge) topQualityBadge.textContent = `720p 30FPS Passthrough`;
 
                     videoTrack.addEventListener('ended', () => {
                         if (!isPageUnloading && document.visibilityState !== 'hidden') stopSharing();

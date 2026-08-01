@@ -128,8 +128,8 @@ function getOrCreateStreamSession(streamKey, title = 'Live Movie Stream', user =
         createdAt: new Date(),
         totalChunksCount: 0,
         failureCount: 0,
-        hostQuality: 1080,
-        hostBitrate: 8000,
+        hostQuality: 720,
+        hostBitrate: 4000,
         ffmpegRestartBlocked: false,
         viewers: new Set(),
         initSegment: null,
@@ -487,26 +487,22 @@ function commandSucceeds(command, args = []) {
 }
 
 function writeMasterPlaylist(session) {
-    const bitrate = session.hostBitrate || 8000;
-    const bw1080 = bitrate * 1000;
+    const bitrate = session.hostBitrate || 4000;
+    const bw720 = bitrate * 1000;
 
     let lines = [
         '#EXTM3U',
         '#EXT-X-VERSION:3',
-        `#EXT-X-STREAM-INF:BANDWIDTH=${bw1080},AVERAGE-BANDWIDTH=${bw1080},RESOLUTION=1920x1080,FRAME-RATE=30.000,CODECS="avc1.4d4028,mp4a.40.2"`,
-        'stream1080p.m3u8',
+        `#EXT-X-STREAM-INF:BANDWIDTH=${bw720},AVERAGE-BANDWIDTH=${bw720},RESOLUTION=1280x720,FRAME-RATE=30.000,CODECS="avc1.4d401f,mp4a.40.2"`,
+        'stream720p.m3u8',
         ''
     ];
     fs.writeFileSync(path.join(session.liveDir, 'master.m3u8'), lines.join('\n'));
 }
 
-function buildFfmpegArgs1080p(session) {
+function buildFfmpegArgs720p(session) {
     const hlsDir = session.liveDir.replace(/\\/g, '/');
     const sdpPath = path.join(session.liveDir, 'input.sdp').replace(/\\/g, '/');
-    const videoCodec = session.webrtcIngest?.videoCodec || 'vp8';
-    const videoCodecArgs = videoCodec === 'vp8'
-        ? ['-c:v', 'libx264', '-preset', 'ultrafast', '-tune', 'zerolatency', '-b:v', '8M', '-maxrate', '8M', '-bufsize', '16M']
-        : ['-c:v', 'copy'];
     return [
         '-y',
         '-protocol_whitelist', 'file,udp,rtp',
@@ -514,12 +510,12 @@ function buildFfmpegArgs1080p(session) {
         '-analyzeduration', '2000000',
         '-probesize', '2M',
         '-i', sdpPath,
-        ...videoCodecArgs,
+        '-c:v', 'copy',
         '-c:a', 'aac', '-b:a', '128k', '-ar:a', '48000', '-ac:a', '2',
         '-f', 'hls', '-hls_time', '2', '-hls_list_size', '20',
         '-hls_flags', 'delete_segments+independent_segments',
-        '-hls_segment_filename', `${hlsDir}/stream1080p%d.ts`,
-        `${hlsDir}/stream1080p.m3u8`
+        '-hls_segment_filename', `${hlsDir}/stream720p%d.ts`,
+        `${hlsDir}/stream720p.m3u8`
     ];
 }
 
@@ -593,9 +589,9 @@ async function startFfmpegLive(session, opts = {}) {
 
     writeMasterPlaylist(session);
 
-    logger.info(`Spawning FFmpeg for [${session.streamKey}] — 1080p WebRTC passthrough...`, { sys: getSystemInfo() });
-    session.ffmpegProcess = spawn('ffmpeg', buildFfmpegArgs1080p(session), { stdio: ['pipe', 'pipe', 'pipe'] });
-    attachFfmpegLogging(session, session.ffmpegProcess, '1080p Passthrough');
+    logger.info(`Spawning FFmpeg for [${session.streamKey}] — 720p H264 passthrough...`, { sys: getSystemInfo() });
+    session.ffmpegProcess = spawn('ffmpeg', buildFfmpegArgs720p(session), { stdio: ['pipe', 'pipe', 'pipe'] });
+    attachFfmpegLogging(session, session.ffmpegProcess, '720p Passthrough');
 
     session.isLive = true;
     session.ffmpegSpawnedAt = Date.now();
