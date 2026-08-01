@@ -7,7 +7,7 @@ import logger from './logger.js';
 const WEBRTC_ICE_SERVERS = [{ urls: 'stun:stun.l.google.com:19302' }];
 const WEBRTC_CODECS = {
     audio: [useOPUS()],
-    video: [useH264(), useVP8()]
+    video: [useVP8(), useH264()]
 };
 
 export class WebRtcIngestSession {
@@ -53,6 +53,7 @@ export class WebRtcIngestSession {
         this.pc.onTrack.subscribe(track => {
             logger.info(`[WebRTC ${this.session.streamKey}] Received remote track: kind=${track.kind}`);
             if (track.kind === 'video') {
+                let videoPacketCount = 0;
                 track.onReceiveRtp.subscribe(rtp => {
                     const buf = rtp.serialize();
                     this.stats.bytes += buf.length;
@@ -61,10 +62,17 @@ export class WebRtcIngestSession {
                         try { this.videoSocket.send(buf, this.videoPort, '127.0.0.1'); } catch (e) { }
                     }
                     if (this.onVideoRtp) {
-                        try { this.onVideoRtp(rtp); } catch (e) { }
+                        try { this.onVideoRtp(rtp); } catch (e) { 
+                            logger.error(`[WebRTC ${this.session.streamKey}] onVideoRtp callback error: ${e.message}`);
+                        }
+                    }
+                    videoPacketCount++;
+                    if (videoPacketCount <= 3) {
+                        logger.info(`[WebRTC ${this.session.streamKey}] ingest video RTP #${videoPacketCount}: pt=${rtp.header.payloadType} ssrc=${rtp.header.ssrc} len=${rtp.payload?.length} hasCallback=${!!this.onVideoRtp}`);
                     }
                 });
             } else if (track.kind === 'audio') {
+                let audioPacketCount = 0;
                 track.onReceiveRtp.subscribe(rtp => {
                     const buf = rtp.serialize();
                     this.stats.bytes += buf.length;
@@ -73,7 +81,13 @@ export class WebRtcIngestSession {
                         try { this.audioSocket.send(buf, this.audioPort, '127.0.0.1'); } catch (e) { }
                     }
                     if (this.onAudioRtp) {
-                        try { this.onAudioRtp(rtp); } catch (e) { }
+                        try { this.onAudioRtp(rtp); } catch (e) { 
+                            logger.error(`[WebRTC ${this.session.streamKey}] onAudioRtp callback error: ${e.message}`);
+                        }
+                    }
+                    audioPacketCount++;
+                    if (audioPacketCount <= 3) {
+                        logger.info(`[WebRTC ${this.session.streamKey}] ingest audio RTP #${audioPacketCount}: pt=${rtp.header.payloadType} ssrc=${rtp.header.ssrc}`);
                     }
                 });
             }
@@ -113,6 +127,20 @@ export class WebRtcIngestSession {
             try { await this.pc.addIceCandidate(candidate); } catch (e) {
                 logger.warn(`[WebRTC ${this.session.streamKey}] Error adding ICE candidate: ${e.message}`);
             }
+        }
+    }
+
+    requestVideoKeyframe() {
+        try {
+            const receiver = this.pc?.getReceivers?.().find(r => r.kind === 'video' || r.track?.kind === 'video');
+            const mediaSsrc = receiver?.track?.ssrc || Object.keys(receiver?.remoteStreams || {})[0];
+            if (!receiver || !mediaSsrc || typeof receiver.sendRtcpPLI !== 'function') return false;
+            receiver.sendRtcpPLI(Number(mediaSsrc)).catch(() => { });
+            logger.info(`[WebRTC ${this.session.streamKey}] Requested video keyframe from host`);
+            return true;
+        } catch (e) {
+            logger.warn(`[WebRTC ${this.session.streamKey}] Failed to request keyframe: ${e.message}`);
+            return false;
         }
     }
 

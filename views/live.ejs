@@ -9,30 +9,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <link rel="icon" type="image/png" href="/favicon.png">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script>
-        tailwind.config = {
-            theme: {
-                extend: {
-                    colors: {
-                        accent: '#82A3A1',
-                        'accent-dark': '#465362',
-                        secondary: '#9FC490',
-                        'control-bg': 'rgba(18, 22, 26, 0.95)',
-                        'glass-bg': 'rgba(70, 83, 98, 0.4)',
-                        'glass-border': 'rgba(130, 163, 161, 0.25)',
-                    },
-                    animation: {
-                        'spin-slow': 'spin 1s linear infinite',
-                        'pulse-slow': 'pulse 2s ease-in-out infinite',
-                    },
-                    backdropBlur: {
-                        'glass': '10px',
-                    },
-                }
-            }
-        }
-    </script>
+    <link rel="stylesheet" href="/css/output.css">
     <style>
         /* Center play button and improved controls transitions */
         :root {
@@ -100,16 +77,26 @@
 
         <!-- HTML5 Video Element -->
         <video id="sh-video" class="w-full h-full object-contain cursor-pointer" playsinline webkit-playsinline
-            autoplay></video>
+            muted></video>
 
 
         <!-- Loading Spinner -->
         <div id="sh-loading"
-            class="absolute inset-0 flex items-center justify-center bg-black/60 backdrop-blur-sm z-30 pointer-events-none transition-opacity duration-300">
+            class="absolute inset-0 flex items-center justify-center bg-black/60 backdrop-blur-sm z-30 pointer-events-none transition-opacity duration-300"
+            style="display: none;">
             <div class="flex flex-col items-center gap-3">
                 <div class="w-12 h-12 border-4 border-indigo-500/30 border-t-indigo-500 rounded-full animate-spin">
                 </div>
                 <span class="text-xs font-semibold text-slate-300 tracking-wider uppercase">Loading Stream...</span>
+            </div>
+        </div>
+
+        <!-- Center Play Button Overlay -->
+        <div id="play-overlay"
+            class="absolute inset-0 flex items-center justify-center cursor-pointer"
+            style="display: none; z-index: 35;">
+            <div class="w-20 h-20 rounded-full bg-white/15 backdrop-blur-md border border-white/20 flex items-center justify-center transition-all hover:scale-110 hover:bg-white/25 shadow-2xl">
+                <i class="fa-solid fa-play text-white text-3xl ml-1"></i>
             </div>
         </div>
 
@@ -153,13 +140,9 @@
             class="absolute bottom-0 left-0 right-0 p-4 sm:p-6 bg-gradient-to-t from-black/90 via-black/50 to-transparent z-20 flex flex-col gap-3 transition-all duration-300">
             <div class="flex items-center justify-between">
                 <div class="flex items-center gap-3">
-                    <button id="sh-play-btn"
-                        class="w-10 h-10 rounded-xl bg-white/10 hover:bg-white/20 text-white flex items-center justify-center text-base transition-colors">
-                        <i class="fa-solid fa-play" id="sh-play-icon"></i>
-                    </button>
                     <button id="sh-mute-btn"
                         class="w-10 h-10 rounded-xl bg-white/10 hover:bg-white/20 text-white flex items-center justify-center text-base transition-colors">
-                        <i class="fa-solid fa-volume-high" id="sh-mute-icon"></i>
+                        <i class="fa-solid fa-volume-xmark" id="sh-mute-icon"></i>
                     </button>
                     <span id="sh-current-time" class="text-xs font-mono text-slate-300 font-semibold">00:00</span>
                 </div>
@@ -184,8 +167,6 @@
             (function () {
                 const player = document.getElementById('sh-player-container');
                 const video = document.getElementById('sh-video');
-                const playBtn = document.getElementById('sh-play-btn');
-                const playIcon = document.getElementById('sh-play-icon');
                 const muteBtn = document.getElementById('sh-mute-btn');
                 const muteIcon = document.getElementById('sh-mute-icon');
                 const currentTimeEl = document.getElementById('sh-current-time');
@@ -194,6 +175,7 @@
                 const controls = document.getElementById('sh-controls');
                 const topHeader = document.getElementById('top-header');
                 const offlineScreen = document.getElementById('offline-screen');
+                const playOverlay = document.getElementById('play-overlay');
                 const connBadge = document.getElementById('conn-badge');
                 const connDot = document.getElementById('conn-dot');
                 const connLabel = document.getElementById('conn-label');
@@ -204,6 +186,8 @@
                 let pc = null;
                 let statusWs = null;
                 let controlsTimeout = null;
+                let remoteStream = null;
+                let playPending = false;
                 const STREAM_TARGET = {
                     height: 720,
                     fps: 30,
@@ -235,16 +219,30 @@
                 player.addEventListener('touchmove', showControls, { passive: true });
                 player.addEventListener('click', showControls);
 
+                playOverlay.addEventListener('click', () => {
+                    hidePlayOverlay();
+                    startWebRtcViewer();
+                });
+
                 function showOffline() {
                     offlineScreen.style.display = 'flex';
                     hideLoading();
                     if (pc) { pc.close(); pc = null; }
+                    remoteStream = null;
+                    video.srcObject = null;
                     video.pause();
-                    updatePlayIcon();
                 }
 
                 function hideOffline() {
                     offlineScreen.style.display = 'none';
+                }
+
+                function showPlayOverlay() {
+                    playOverlay.style.display = 'flex';
+                }
+
+                function hidePlayOverlay() {
+                    playOverlay.style.display = 'none';
                 }
 
                 function showLoading() {
@@ -262,26 +260,10 @@
                     return String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0');
                 }
 
-                function updatePlayIcon() {
-                    if (video.paused) {
-                        playIcon.className = 'fa-solid fa-play';
-                        playBtn.setAttribute('aria-label', 'Play');
-                    } else {
-                        playIcon.className = 'fa-solid fa-pause';
-                        playBtn.setAttribute('aria-label', 'Pause');
-                    }
-                }
-
-                playBtn.addEventListener('click', () => {
-                    if (video.paused) video.play();
-                    else video.pause();
-                    updatePlayIcon();
-                    showControls();
-                });
-
                 ['click', 'pointerdown', 'pointerup', 'touchend', 'touchstart'].forEach(evt => {
                     player.addEventListener(evt, (e) => {
                         if (e.target && e.target.closest && (e.target.closest('#sh-controls'))) return;
+                        if (e.target && e.target.closest && (e.target.closest('#play-overlay'))) return;
                         if (e.target && (e.target.tagName === 'BUTTON' || e.target.tagName === 'A' || e.target.closest('button') || e.target.closest('a'))) return;
                         if (evt === 'touchstart' || (evt === 'pointerdown' && e.pointerType === 'touch')) {
                             try { showControls(); } catch (err) { }
@@ -307,8 +289,8 @@
                     currentTimeEl.textContent = formatTime(video.currentTime || 0);
                 });
 
-                video.addEventListener('play', () => { updatePlayIcon(); hideLoading(); });
-                video.addEventListener('pause', () => { updatePlayIcon(); showControls(); });
+                video.addEventListener('play', () => { hideLoading(); });
+                video.addEventListener('pause', () => { showControls(); });
 
                 async function toggleFullscreen() {
                     if (document.fullscreenElement || document.webkitFullscreenElement) {
@@ -358,6 +340,7 @@
                     if (viewerStarted) return;
                     viewerStarted = true;
                     if (pc) { pc.close(); pc = null; }
+                    remoteStream = new MediaStream();
                     showLoading();
                     hideOffline();
 
@@ -366,16 +349,29 @@
                     });
 
                     pc.ontrack = (event) => {
-                        if (event.streams && event.streams[0]) {
-                            video.srcObject = event.streams[0];
-                        } else {
-                            const stream = new MediaStream([event.track]);
-                            video.srcObject = stream;
+                        const stream = event.streams && event.streams[0] ? event.streams[0] : remoteStream;
+                        for (const track of stream.getTracks()) {
+                            if (!remoteStream.getTracks().some(existing => existing.id === track.id)) {
+                                remoteStream.addTrack(track);
+                            }
                         }
-                        video.play().then(() => {
-                            hideLoading();
-                            showControls();
-                        }).catch(() => updatePlayIcon());
+                        if (!remoteStream.getTracks().some(track => track.id === event.track.id)) {
+                            remoteStream.addTrack(event.track);
+                        }
+                        if (video.srcObject !== remoteStream) {
+                            video.srcObject = remoteStream;
+                        }
+                        if (!playPending) {
+                            playPending = true;
+                            video.play().then(() => {
+                                hideLoading();
+                                showControls();
+                            }).catch(err => {
+                                console.warn('[WebRTC Viewer] autoplay blocked or delayed:', err);
+                                hideLoading();
+                                showControls();
+                            }).finally(() => { playPending = false; });
+                        }
                     };
 
                     pc.oniceconnectionstatechange = () => {
@@ -385,10 +381,25 @@
                             updateConnViewer('stable');
                         } else if (state === 'disconnected') {
                             updateConnViewer('slow');
+                            viewerStarted = false;
+                            setTimeout(() => {
+                                if (!viewerStarted) {
+                                    showPlayOverlay();
+                                }
+                            }, 5000);
                         } else if (state === 'failed') {
                             updateConnViewer('poor');
                             viewerStarted = false;
-                            setTimeout(() => startWebRtcViewer(), 3000);
+                            showPlayOverlay();
+                        }
+                    };
+
+                    pc.onicecandidate = (event) => {
+                        if (event.candidate && statusWs && statusWs.readyState === WebSocket.OPEN) {
+                            statusWs.send(JSON.stringify({
+                                type: 'VIEWER_ICE_CANDIDATE',
+                                candidate: event.candidate
+                            }));
                         }
                     };
 
@@ -438,11 +449,16 @@
                             if (data.type === 'STATUS') {
                                 if (data.live) {
                                     hideOffline();
-                                    startWebRtcViewer();
+                                    if (!viewerStarted) {
+                                        showPlayOverlay();
+                                    }
                                 } else {
                                     showOffline();
+                                    hidePlayOverlay();
                                     viewerStarted = false;
                                     if (pc) { pc.close(); pc = null; }
+                                    remoteStream = null;
+                                    video.srcObject = null;
                                 }
                             } else if (data.type === 'VIEWER_WEBRTC_ANSWER') {
                                 if (pc && data.sdp) {
@@ -470,8 +486,10 @@
                     fetch('/live/status/' + currentStreamKey)
                         .then(res => res.json())
                         .then(data => {
+                            hideLoading();
                             if (data.live) {
-                                startWebRtcViewer();
+                                hideOffline();
+                                showPlayOverlay();
                             } else {
                                 showOffline();
                             }

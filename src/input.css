@@ -1,0 +1,18 @@
+@import "tailwindcss";
+
+@theme {
+    --color-accent: #6366f1;
+    --color-accent-dark: #4f46e5;
+    --color-accent-live: #82A3A1;
+    --color-accent-live-dark: #465362;
+    --color-dark-bg: #090d16;
+    --color-card-bg: rgba(15, 23, 42, 0.75);
+    --color-card-bg-solid: rgba(15, 23, 42, 0.8);
+    --color-glass-border: rgba(255, 255, 255, 0.12);
+    --color-glass-border-live: rgba(130, 163, 161, 0.25);
+    --color-secondary: #9FC490;
+    --color-control-bg: rgba(18, 22, 26, 0.95);
+    --color-glass-bg: rgba(70, 83, 98, 0.4);
+    --animate-spin-slow: spin 1s linear infinite;
+    --animate-pulse-slow: pulse 2s ease-in-out infinite;
+}

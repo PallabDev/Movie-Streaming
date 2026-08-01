@@ -410,7 +410,15 @@ viewWss.on('connection', (ws) => {
             const parsed = JSON.parse(typeof data === 'string' ? data : data.toString());
 
             if (parsed.type === 'VIEWER_WEBRTC_OFFER') {
-                const viewerSession = new WebRtcViewerSession(key, ws, session.webrtcIngest?.videoCodec || 'h264');
+                const viewerSession = new WebRtcViewerSession(
+                    key,
+                    ws,
+                    session.webrtcIngest?.videoCodec || 'h264',
+                    (reason) => {
+                        logger.info(`[Viewer Relay ${key}] Keyframe requested: ${reason}`);
+                        session.webrtcIngest?.requestVideoKeyframe?.();
+                    }
+                );
                 session.viewerSessions.add(viewerSession);
                 try {
                     await viewerSession.handleOffer(parsed.sdp);

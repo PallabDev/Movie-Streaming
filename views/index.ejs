@@ -862,6 +862,18 @@
                 } catch (e) { console.warn('setParameters error', e); }
             }
 
+            const audioSender = senders.find(s => s.track && s.track.kind === 'audio');
+            if (audioSender) {
+                try {
+                    const params = audioSender.getParameters();
+                    if (!params.encodings) params.encodings = [{}];
+                    params.encodings[0].maxBitrate = 256000;
+                    params.encodings[0].priority = 'high';
+                    params.encodings[0].networkPriority = 'high';
+                    await audioSender.setParameters(params);
+                } catch (e) { console.warn('Audio setParameters error', e); }
+            }
+
             const offer = await peerConnection.createOffer({
                 offerToReceiveAudio: false,
                 offerToReceiveVideo: false
