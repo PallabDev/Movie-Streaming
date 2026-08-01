@@ -13,6 +13,7 @@ function createRelayPeerConnection(videoCodec = 'vp8') {
     const preferH264 = videoCodec === 'h264';
     return new RTCPeerConnection({
         iceServers: WEBRTC_ICE_SERVERS,
+        iceTransportPolicy: 'relay',
         codecs: {
             audio: [useOPUS()],
             video: preferH264 ? [useH264(), useVP8()] : [useVP8(), useH264()]

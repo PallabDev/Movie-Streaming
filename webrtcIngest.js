@@ -53,7 +53,8 @@ export class WebRtcIngestSession {
 
         this.pc = new RTCPeerConnection({
             iceServers: WEBRTC_ICE_SERVERS,
-            codecs: WEBRTC_CODECS
+            codecs: WEBRTC_CODECS,
+            iceTransportPolicy: 'relay'
         });
 
         this.pc.onIceCandidate.subscribe(candidate => {
