@@ -35,9 +35,11 @@ export class WebRtcViewerSession {
 
         const transceivers = this.pc.getTransceivers();
         for (const t of transceivers) {
+            logger.info(`[Viewer Relay ${this.streamKey}] Transceiver: kind=${t.kind} mid=${t.mid} direction=${t.direction}`);
             if (t.kind === 'video') {
                 t.direction = 'sendonly';
                 this.videoSender = t.sender;
+                logger.info(`[Viewer Relay ${this.streamKey}] Video sender codec: ${JSON.stringify(t.sender.codec?.name || 'none')}`);
             } else if (t.kind === 'audio') {
                 t.direction = 'sendonly';
                 this.audioSender = t.sender;
@@ -64,12 +66,27 @@ export class WebRtcViewerSession {
 
     sendVideoRtp(rtp) {
         if (!this.alive || !this.videoSender) return;
-        try { this.videoSender.sendRtp(rtp); } catch (e) { }
+        try {
+            const dtlsState = this.videoSender.dtlsTransport?.state;
+            const codecSet = !!this.videoSender.codec;
+            if (!codecSet || dtlsState !== 'connected') {
+                if (!this._loggedSilent) {
+                    this._loggedSilent = true;
+                    logger.warn(`[Viewer Relay ${this.streamKey}] sendRtp blocked: dtls=${dtlsState} codec=${codecSet}`);
+                }
+                return;
+            }
+            this.videoSender.sendRtp(rtp);
+        } catch (e) {
+            logger.error(`[Viewer Relay ${this.streamKey}] sendRtp error: ${e.message}`);
+        }
     }
 
     sendAudioRtp(rtp) {
         if (!this.alive || !this.audioSender) return;
-        try { this.audioSender.sendRtp(rtp); } catch (e) { }
+        try {
+            this.audioSender.sendRtp(rtp);
+        } catch (e) { }
     }
 
     close() {

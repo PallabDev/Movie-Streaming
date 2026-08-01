@@ -278,14 +278,8 @@ function tryHandleHostControlMessage(session, data, isBinary, ws) {
                         vs.sendAudioRtp(rtp);
                     }
                 };
-                if (!hasRunningFfmpeg(session) && !session.ffmpegRestartBlocked) {
-                    try {
-                        await startFfmpegLive(session);
-                        broadcastStatus(session, true);
-                    } catch (e) {
-                        logger.error(`Failed to start FFmpeg on WebRTC ready for [${session.streamKey}]: ${e.message}`);
-                    }
-                }
+                logger.info(`[WebRTC ${session.streamKey}] RTP relay ready — FFmpeg skipped, pure WebRTC SFU`);
+                broadcastStatus(session, true);
             });
             session.webrtcIngest.handleOffer(parsed.sdp);
             session.hostAlive = true;
