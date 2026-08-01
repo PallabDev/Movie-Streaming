@@ -14,9 +14,8 @@ RUN npm install --production
 # Copy application files
 COPY . .
 
-# Expose ports
+# Expose port
 EXPOSE 5992
-EXPOSE 49000-49100/udp
 
 ENV PORT=5992
 

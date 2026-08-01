@@ -64,6 +64,10 @@ export class WebRtcIngestSession {
             }
         });
 
+        this.pc.iceConnectionStateChange.subscribe(state => {
+            logger.info(`[WebRTC ${this.session.streamKey}] ICE connection state: ${state}`);
+        });
+
         this.pc.onTrack.subscribe(track => {
             logger.info(`[WebRTC ${this.session.streamKey}] Received remote track: kind=${track.kind}`);
             if (track.kind === 'video') {

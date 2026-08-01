@@ -3,19 +3,10 @@ services:
     build: .
     container_name: movie-streaming
     restart: always
+    network_mode: host
     env_file:
       - .env
     environment:
       - NODE_ENV=${NODE_ENV:-production}
       - PORT=${PORT:-5992}
       - APP_URL=${APP_URL:-https://watch.pallabdev.in}
-    ports:
-      - "${PORT:-5992}:${PORT:-5992}"
-      - "49000-49100:49000-49100/udp"
-    networks:
-      - caddy_net
-
-networks:
-  caddy_net:
-    name: caddy_net
-    external: true
