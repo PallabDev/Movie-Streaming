@@ -224,7 +224,7 @@
 
                 const data = await res.json();
                 if (data.success) {
-                    showSuccess(‘Registration successful! Please wait for Admin approval or sign in if granted access.’);
+                    showSuccess('Registration successful! Please wait for Admin approval or sign in if granted access.');
                     setTimeout(() => switchTab('login'), 2000);
                 } else {
                     showError(data.error || 'Registration failed');
