@@ -436,7 +436,57 @@
             wsSend({ type: 'WEBRTC_OFFER', sdp: peerConnection.localDescription.sdp, isScreenSharing: false });
         }
 
-        // ─── Host Microphone Controls (Clean Track Enable/Disable) ───
+        // ─── Web Audio API Mixer for Host Microphone + Screen Share System Audio ───
+        let audioMixerCtx = null;
+        let mixerDestination = null;
+        let micSourceNode = null;
+        let screenSourceNode = null;
+
+        function updateMixedAudioTrack() {
+            if (!audioMixerCtx) {
+                audioMixerCtx = new (window.AudioContext || window.webkitAudioContext)();
+                mixerDestination = audioMixerCtx.createMediaStreamDestination();
+            }
+            if (audioMixerCtx.state === 'suspended') {
+                audioMixerCtx.resume();
+            }
+
+            // Connect / Disconnect Mic Track
+            if (hostAudioTrack && hostMicEnabled) {
+                if (!micSourceNode) {
+                    micSourceNode = audioMixerCtx.createMediaStreamSource(new MediaStream([hostAudioTrack]));
+                    micSourceNode.connect(mixerDestination);
+                }
+            } else {
+                if (micSourceNode) {
+                    try { micSourceNode.disconnect(); } catch (e) {}
+                    micSourceNode = null;
+                }
+            }
+
+            // Connect / Disconnect Screen Share Audio Track
+            if (mediaStream && mediaStream.getAudioTracks().length > 0) {
+                const screenAudioTrack = mediaStream.getAudioTracks()[0];
+                if (screenAudioTrack && screenAudioTrack.readyState === 'live') {
+                    if (!screenSourceNode) {
+                        screenSourceNode = audioMixerCtx.createMediaStreamSource(new MediaStream([screenAudioTrack]));
+                        screenSourceNode.connect(mixerDestination);
+                    }
+                }
+            } else {
+                if (screenSourceNode) {
+                    try { screenSourceNode.disconnect(); } catch (e) {}
+                    screenSourceNode = null;
+                }
+            }
+
+            const mixedTrack = mixerDestination.stream.getAudioTracks()[0];
+            if (hostAudioSender && mixedTrack) {
+                hostAudioSender.replaceTrack(mixedTrack);
+            }
+        }
+
+        // ─── Host Microphone Controls ───
         micToggleBtn.onclick = () => toggleHostMic();
 
         async function acquireMicStream() {
@@ -446,9 +496,7 @@
 
                 hostMicStream = await navigator.mediaDevices.getUserMedia(constraints);
                 hostAudioTrack = hostMicStream.getAudioTracks()[0];
-                if (hostAudioSender) {
-                    await hostAudioSender.replaceTrack(hostAudioTrack);
-                }
+                updateMixedAudioTrack();
                 return true;
             } catch (e) {
                 toast('Could not access microphone');
@@ -466,6 +514,7 @@
             if (hostAudioTrack) {
                 hostAudioTrack.enabled = hostMicEnabled;
             }
+            updateMixedAudioTrack();
 
             if (hostMicEnabled) {
                 micToggleBtn.classList.remove('off');
@@ -507,6 +556,8 @@
                     await hostVideoSender.replaceTrack(videoTrack);
                 }
 
+                updateMixedAudioTrack();
+
                 videoTrack.onended = () => stopScreenShare();
 
                 isSharingScreen = true;
@@ -529,6 +580,8 @@
                 mediaStream.getTracks().forEach(t => t.stop());
                 mediaStream = null;
             }
+            updateMixedAudioTrack();
+
             isSharingScreen = false;
             presentBtnText.textContent = 'Present now';
             startBtn.classList.remove('sharing');
