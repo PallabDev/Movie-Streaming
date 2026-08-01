@@ -4,7 +4,13 @@ import fs from 'fs';
 import path from 'path';
 import logger from './logger.js';
 
-const WEBRTC_ICE_SERVERS = [{ urls: 'stun:stun.l.google.com:19302' }];
+const WEBRTC_ICE_SERVERS = [
+    { urls: 'stun:stun.l.google.com:19302' },
+    { urls: 'stun:stun1.l.google.com:19302' },
+    { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' },
+    { urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' },
+    { urls: 'turn:openrelay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' }
+];
 const WEBRTC_CODECS = {
     audio: [useOPUS()],
     video: [useVP8(), useH264()]
@@ -180,13 +186,9 @@ export class WebRtcIngestSession {
         try {
             if (this.audioSender.dtlsTransport?.state !== 'connected') return;
 
-            const origSsrc = rtp.header.ssrc;
-            const origPt = rtp.header.payloadType;
+            const cloned = { header: { ...rtp.header, ssrc: this.audioSsrc, payloadType: this.audioPt }, payload: rtp.payload };
 
-            rtp.header.ssrc = this.audioSsrc;
-            rtp.header.payloadType = this.audioPt;
-
-            this.audioSender.sendRtp(rtp).then(() => {
+            this.audioSender.sendRtp(cloned).then(() => {
                 if (!this._audioLogged) {
                     this._audioLogged = true;
                     logger.info(`[WebRTC Ingest ${this.session.streamKey}] Forwarded viewer audio packet to host successfully!`);
@@ -194,9 +196,6 @@ export class WebRtcIngestSession {
             }).catch(e => {
                 logger.error(`[WebRTC Ingest ${this.session.streamKey}] sendAudioRtp error: ${e.message}`);
             });
-
-            rtp.header.ssrc = origSsrc;
-            rtp.header.payloadType = origPt;
         } catch (e) {
             logger.error(`[WebRTC Ingest ${this.session.streamKey}] sendAudioRtp exception: ${e.message}`);
         }

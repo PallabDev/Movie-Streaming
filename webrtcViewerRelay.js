@@ -1,7 +1,13 @@
 import { RTCPeerConnection, useH264, useOPUS, useVP8 } from 'werift';
 import logger from './logger.js';
 
-const WEBRTC_ICE_SERVERS = [{ urls: 'stun:stun.l.google.com:19302' }];
+const WEBRTC_ICE_SERVERS = [
+    { urls: 'stun:stun.l.google.com:19302' },
+    { urls: 'stun:stun1.l.google.com:19302' },
+    { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' },
+    { urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' },
+    { urls: 'turn:openrelay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' }
+];
 
 function createRelayPeerConnection(videoCodec = 'vp8') {
     const preferH264 = videoCodec === 'h264';
@@ -138,12 +144,9 @@ export class WebRtcViewerSession {
                 return;
             }
 
-            const origSsrc = rtp.header.ssrc;
-            const origPt = rtp.header.payloadType;
-            rtp.header.ssrc = this.videoSsrc;
-            rtp.header.payloadType = this.videoPt;
+            const cloned = { header: { ...rtp.header, ssrc: this.videoSsrc, payloadType: this.videoPt }, payload: rtp.payload };
 
-            this.videoSender.sendRtp(rtp).then(sent => {
+            this.videoSender.sendRtp(cloned).then(sent => {
                 if (this.stats.videoPackets < 5) {
                     logger.info(`[Viewer Relay ${this.streamKey}] video packet sent OK: bytes=${sent}`);
                 }
@@ -152,8 +155,6 @@ export class WebRtcViewerSession {
                 logger.error(`[Viewer Relay ${this.streamKey}] sendRtp error: ${e.message}`);
             });
 
-            rtp.header.ssrc = origSsrc;
-            rtp.header.payloadType = origPt;
             this.stats.videoPackets++;
             if (this.stats.videoPackets <= 5) {
                 logger.info(`[Viewer Relay ${this.streamKey}] video packet sent: total=${this.stats.videoPackets} pt=${this.videoPt} ssrc=${this.videoSsrc} payloadLen=${rtp.payload?.length}`);
@@ -174,17 +175,18 @@ export class WebRtcViewerSession {
     sendAudioRtp(rtp) {
         if (!this.alive || !this.audioSender) return;
         try {
-            const origSsrc = rtp.header.ssrc;
-            const origPt = rtp.header.payloadType;
-            rtp.header.ssrc = this.audioSsrc;
-            rtp.header.payloadType = this.audioPt;
+            const dtlsState = this.audioSender.dtlsTransport?.state;
+            if (dtlsState !== 'connected') {
+                this.stats.droppedPackets++;
+                return;
+            }
 
-            this.audioSender.sendRtp(rtp).catch(() => {
+            const cloned = { header: { ...rtp.header, ssrc: this.audioSsrc, payloadType: this.audioPt }, payload: rtp.payload };
+
+            this.audioSender.sendRtp(cloned).catch(() => {
                 this.stats.droppedPackets++;
             });
 
-            rtp.header.ssrc = origSsrc;
-            rtp.header.payloadType = origPt;
             this.stats.audioPackets++;
         } catch (e) {
             this.stats.droppedPackets++;
