@@ -42,7 +42,7 @@
         /* Main Call Stage Area */
         .meet-stage { flex:1; width:100%; height:calc(100vh - 76px); display:flex; flex-direction:row; gap:16px; position:relative; overflow:hidden; padding:64px 16px 16px 16px; align-items:center; justify-content:center; }
 
-        /* Adaptive Grid View (Normal Voice Talking Mode) */
+        /* Adaptive Grid View (Normal Voice Mode) */
         .meet-grid { flex:1; min-width:0; height:100%; display:grid; gap:16px; align-content:center; justify-content:center; max-width:1400px; margin:0 auto; transition:all 0.3s ease; }
         
         .meet-card { background:var(--meet-card-dark); border-radius:16px; position:relative; overflow:hidden; display:flex; flex-direction:column; align-items:center; justify-content:center; transition:all 0.25s ease; border:2px solid transparent; box-shadow:0 4px 20px rgba(0,0,0,0.4); width:100%; height:100%; min-height:0; }
@@ -260,12 +260,14 @@
         const currentStreamKey = '<%= streamKey %>';
         const hostName = '<%= user ? user.name : "Host" %>';
         
-        // ─── State Variables ───
+        // ─── Permanent WebRTC & Media State ───
         let streamWs = null;
         let peerConnection = null;
-        let mediaStream = null;
-        let hostMicStream = null;
         let hostAudioSender = null;
+        let hostVideoSender = null;
+        let hostMicStream = null;
+        let hostAudioTrack = null;
+        let mediaStream = null;
         let hostMicEnabled = false;
         let isSharingScreen = false;
         let selectedMicId = '';
@@ -338,16 +340,17 @@
 
         micDeviceSelect.onchange = () => {
             selectedMicId = micDeviceSelect.value;
-            if (hostMicEnabled) toggleHostMic(true);
+            if (hostMicEnabled) acquireMicStream();
         };
 
-        // ─── WebSocket Ingest Connection ───
+        // ─── WebSocket Connection ───
         function connectStreamWebSocket() {
             const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
             streamWs = new WebSocket(`${protocol}//${location.host}/stream-ws?key=${encodeURIComponent(currentStreamKey)}`);
 
             streamWs.onopen = () => {
                 console.log('[Host WS] Connected to room server');
+                initWebRtcSession();
             };
 
             streamWs.onmessage = async (event) => {
@@ -391,19 +394,25 @@
             }
         }
 
-        // ─── WebRTC Session Setup ───
-        async function startWebRtcSession() {
-            if (peerConnection) {
-                try { peerConnection.close(); } catch (e) {}
-                peerConnection = null;
+        function unlockAudio() {
+            if (viewerAudio) {
+                viewerAudio.play().catch(() => {});
             }
+        }
+        document.addEventListener('click', unlockAudio, { once: true });
+        document.addEventListener('keydown', unlockAudio, { once: true });
+
+        // ─── Permanent WebRTC Session Initialization (ONCE) ───
+        async function initWebRtcSession() {
+            if (peerConnection) return;
 
             peerConnection = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
 
             peerConnection.ontrack = (event) => {
+                console.log('[Host WebRTC] Received remote track:', event.track.kind);
                 const stream = event.streams && event.streams[0] ? event.streams[0] : new MediaStream([event.track]);
                 viewerAudio.srcObject = stream;
-                viewerAudio.play().catch(() => {});
+                viewerAudio.play().catch(e => console.warn('[Host Audio Play error]', e));
             };
 
             peerConnection.onicecandidate = (event) => {
@@ -412,70 +421,63 @@
                 }
             };
 
-            let hasTrack = false;
+            // Add persistent transceivers for Video and Audio
+            const videoTransceiver = peerConnection.addTransceiver('video', { direction: 'sendrecv' });
+            hostVideoSender = videoTransceiver.sender;
 
-            if (mediaStream) {
-                mediaStream.getTracks().forEach(track => {
-                    peerConnection.addTrack(track, mediaStream);
-                    hasTrack = true;
-                });
-            }
-
-            if (hostMicStream) {
-                const audioTracks = hostMicStream.getAudioTracks();
-                if (audioTracks.length > 0 && audioTracks[0].readyState === 'live') {
-                    hostAudioSender = peerConnection.addTrack(audioTracks[0], hostMicStream);
-                    hasTrack = true;
-                }
-            }
-
-            if (!hasTrack) {
-                return;
-            }
+            const audioTransceiver = peerConnection.addTransceiver('audio', { direction: 'sendrecv' });
+            hostAudioSender = audioTransceiver.sender;
 
             const offer = await peerConnection.createOffer({ offerToReceiveAudio: true, offerToReceiveVideo: false });
-            
             let sdp = offer.sdp;
             sdp = sdp.replace(/(a=fmtp:111 [^\r\n]+)/, "$1;stereo=1;sprop-stereo=1;maxaveragebitrate=510000;cbr=1;useinbandfec=1");
-            
+
             await peerConnection.setLocalDescription({ type: 'offer', sdp });
-            wsSend({ type: 'WEBRTC_OFFER', sdp: peerConnection.localDescription.sdp });
+            wsSend({ type: 'WEBRTC_OFFER', sdp: peerConnection.localDescription.sdp, isScreenSharing: false });
         }
 
-        // ─── Host Microphone Controls ───
+        // ─── Host Microphone Controls (Clean Track Enable/Disable) ───
         micToggleBtn.onclick = () => toggleHostMic();
 
-        async function toggleHostMic(forceOn = false) {
-            if (hostMicEnabled && !forceOn) {
-                if (hostMicStream) {
-                    hostMicStream.getTracks().forEach(t => t.stop());
-                    hostMicStream = null;
+        async function acquireMicStream() {
+            try {
+                const constraints = { audio: { echoCancellation: true, noiseSuppression: true } };
+                if (selectedMicId) constraints.audio.deviceId = { exact: selectedMicId };
+
+                hostMicStream = await navigator.mediaDevices.getUserMedia(constraints);
+                hostAudioTrack = hostMicStream.getAudioTracks()[0];
+                if (hostAudioSender) {
+                    await hostAudioSender.replaceTrack(hostAudioTrack);
                 }
-                hostMicEnabled = false;
+                return true;
+            } catch (e) {
+                toast('Could not access microphone');
+                return false;
+            }
+        }
+
+        async function toggleHostMic() {
+            if (!hostAudioTrack) {
+                const success = await acquireMicStream();
+                if (!success) return;
+            }
+
+            hostMicEnabled = !hostMicEnabled;
+            if (hostAudioTrack) {
+                hostAudioTrack.enabled = hostMicEnabled;
+            }
+
+            if (hostMicEnabled) {
+                micToggleBtn.classList.remove('off');
+                micToggleBtn.querySelector('i').className = 'fa-solid fa-microphone';
+                toast('Microphone unmuted');
+            } else {
                 micToggleBtn.classList.add('off');
                 micToggleBtn.querySelector('i').className = 'fa-solid fa-microphone-slash';
-                wsSend({ type: 'HOST_MIC_TOGGLE', enabled: false });
-                if (isSharingScreen) {
-                    await startWebRtcSession();
-                }
                 toast('Microphone muted');
-            } else {
-                try {
-                    const constraints = { audio: { echoCancellation: true, noiseSuppression: true } };
-                    if (selectedMicId) constraints.audio.deviceId = { exact: selectedMicId };
-
-                    hostMicStream = await navigator.mediaDevices.getUserMedia(constraints);
-                    hostMicEnabled = true;
-                    micToggleBtn.classList.remove('off');
-                    micToggleBtn.querySelector('i').className = 'fa-solid fa-microphone';
-                    wsSend({ type: 'HOST_MIC_TOGGLE', enabled: true });
-                    
-                    await startWebRtcSession();
-                    toast('Microphone unmuted');
-                } catch (e) {
-                    toast('Could not access microphone');
-                }
             }
+
+            wsSend({ type: 'HOST_MIC_TOGGLE', enabled: hostMicEnabled });
             renderMeetGrid();
         }
 
@@ -492,12 +494,7 @@
             try {
                 mediaStream = await navigator.mediaDevices.getDisplayMedia({
                     video: { width: 1920, height: 1080, frameRate: 30 },
-                    audio: {
-                        autoGainControl: false,
-                        echoCancellation: false,
-                        noiseSuppression: false,
-                        channelCount: 2
-                    }
+                    audio: { autoGainControl: false, echoCancellation: false, noiseSuppression: false, channelCount: 2 }
                 });
                 
                 localPreview.srcObject = mediaStream;
@@ -505,21 +502,29 @@
                 localPreview.volume = 0;
                 localPreview.play();
 
-                mediaStream.getVideoTracks()[0].onended = () => stopScreenShare();
+                const videoTrack = mediaStream.getVideoTracks()[0];
+                if (hostVideoSender) {
+                    await hostVideoSender.replaceTrack(videoTrack);
+                }
+
+                videoTrack.onended = () => stopScreenShare();
 
                 isSharingScreen = true;
                 presentBtnText.textContent = 'Stop sharing';
                 startBtn.classList.add('sharing');
                 
+                wsSend({ type: 'SCREEN_SHARE_TOGGLE', sharing: true });
                 updateStageLayout();
-                await startWebRtcSession();
                 toast('Screen share started');
             } catch (e) {
                 toast('Screen share cancelled');
             }
         }
 
-        function stopScreenShare() {
+        async function stopScreenShare() {
+            if (hostVideoSender) {
+                await hostVideoSender.replaceTrack(null);
+            }
             if (mediaStream) {
                 mediaStream.getTracks().forEach(t => t.stop());
                 mediaStream = null;
@@ -527,8 +532,9 @@
             isSharingScreen = false;
             presentBtnText.textContent = 'Present now';
             startBtn.classList.remove('sharing');
+            
+            wsSend({ type: 'SCREEN_SHARE_TOGGLE', sharing: false });
             updateStageLayout();
-            if (hostMicEnabled) startWebRtcSession();
             toast('Screen share stopped');
         }
 
@@ -569,7 +575,7 @@
 
         dockChatBtn.onclick = () => toggleSidebar('chat');
         dockPeopleBtn.onclick = () => toggleSidebar('people');
-        tabChatBtn.onclick = () => toggleSidebar('chat');
+        tabChatBtn.onclick = () => toggleSidebar('people');
         tabPeopleBtn.onclick = () => toggleSidebar('people');
         sidebarClose.onclick = () => {
             meetSidebar.classList.remove('active');

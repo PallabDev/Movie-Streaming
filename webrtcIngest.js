@@ -10,6 +10,14 @@ const WEBRTC_CODECS = {
     video: [useVP8(), useH264()]
 };
 
+function extractNegotiatedPt(sdp, mediaType) {
+    const mediaLineRegex = new RegExp(`m=${mediaType}.*SAVPF\\s+([\\d\\s]+)`);
+    const match = sdp.match(mediaLineRegex);
+    if (!match) return null;
+    const pts = match[1].trim().split(/\s+/).map(Number);
+    return pts[0];
+}
+
 export class WebRtcIngestSession {
     constructor(session, ws, onWebRtcReady) {
         this.session = session;
@@ -115,19 +123,34 @@ export class WebRtcIngestSession {
 
         const transceivers = this.pc.getTransceivers();
         for (const t of transceivers) {
-            if (t.kind === 'audio') {
+            if (t.kind === 'video') {
+                this.videoSender = t.sender;
+                this.videoSsrc = t.sender.ssrc;
+            } else if (t.kind === 'audio') {
                 t.direction = 'sendrecv';
+                this.audioSender = t.sender;
+                this.audioSsrc = t.sender.ssrc;
             }
         }
 
         const answer = await this.pc.createAnswer();
         await this.pc.setLocalDescription(answer);
 
+        this.videoPt = extractNegotiatedPt(answer.sdp, 'video') || 96;
+        this.audioPt = extractNegotiatedPt(answer.sdp, 'audio') || 111;
+
+        if (this.videoSender) {
+            this.videoSender.codec = { payloadType: this.videoPt };
+        }
+        if (this.audioSender) {
+            this.audioSender.codec = { payloadType: this.audioPt };
+        }
+
         if (this.ws && this.ws.readyState === 1) {
             this.ws.send(JSON.stringify({ type: 'WEBRTC_ANSWER', sdp: answer.sdp }));
         }
 
-        logger.info(`[WebRTC ${this.session.streamKey}] SDP Answer sent. VideoPT=${this.videoPt} (${this.videoCodec}), AudioPT=${this.audioPt}`);
+        logger.info(`[WebRTC ${this.session.streamKey}] SDP Answer sent. VideoPT=${this.videoPt} (${this.videoCodec}), AudioPT=${this.audioPt} AudioSSRC=${this.audioSsrc}`);
     }
 
     async handleIceCandidate(candidate) {
@@ -153,20 +176,29 @@ export class WebRtcIngestSession {
     }
 
     sendAudioRtp(rtp) {
-        if (!this.pc) return;
-        const transceivers = this.pc.getTransceivers();
-        const audioTransceiver = transceivers.find(t => t.kind === 'audio');
-        if (audioTransceiver && audioTransceiver.sender) {
-            try {
-                audioTransceiver.direction = 'sendrecv';
-                audioTransceiver.sender.sendRtp(rtp.payload, {
-                    payloadType: this.audioPt || 111,
-                    ssrc: audioTransceiver.sender.ssrc,
-                    timestamp: rtp.header.timestamp,
-                    sequenceNumber: rtp.header.sequenceNumber,
-                    marker: rtp.header.marker
-                });
-            } catch (e) { }
+        if (!this.audioSender || !this.pc) return;
+        try {
+            if (this.audioSender.dtlsTransport?.state !== 'connected') return;
+
+            const origSsrc = rtp.header.ssrc;
+            const origPt = rtp.header.payloadType;
+
+            rtp.header.ssrc = this.audioSsrc;
+            rtp.header.payloadType = this.audioPt;
+
+            this.audioSender.sendRtp(rtp).then(() => {
+                if (!this._audioLogged) {
+                    this._audioLogged = true;
+                    logger.info(`[WebRTC Ingest ${this.session.streamKey}] Forwarded viewer audio packet to host successfully!`);
+                }
+            }).catch(e => {
+                logger.error(`[WebRTC Ingest ${this.session.streamKey}] sendAudioRtp error: ${e.message}`);
+            });
+
+            rtp.header.ssrc = origSsrc;
+            rtp.header.payloadType = origPt;
+        } catch (e) {
+            logger.error(`[WebRTC Ingest ${this.session.streamKey}] sendAudioRtp exception: ${e.message}`);
         }
     }
 

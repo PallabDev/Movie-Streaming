@@ -45,8 +45,8 @@
         .join-action-btn:disabled { opacity:0.5; cursor:not-allowed; transform:none; }
         .join-error { color:var(--meet-red); font-size:0.85rem; min-height:20px; }
 
-        /* ─── Waiting & Kicked Screens ─── */
-        #waiting-screen, #kicked-screen { background:var(--meet-bg); text-align:center; }
+        /* ─── Waiting, Ended & Kicked Screens ─── */
+        #waiting-screen, #kicked-screen, #ended-screen { background:var(--meet-bg); text-align:center; }
         .waiting-box { display:flex; flex-direction:column; align-items:center; gap:16px; max-width:420px; }
         .waiting-spinner { width:48px; height:48px; border:4px solid rgba(255,255,255,0.1); border-top-color:var(--meet-primary); border-radius:50%; animation:spin 0.8s linear infinite; }
         @keyframes spin { to { transform:rotate(360deg); } }
@@ -175,12 +175,23 @@
         </div>
     </div>
 
+    <!-- ═══ MEETING ENDED SCREEN ═══ -->
+    <div id="ended-screen" class="screen">
+        <div class="waiting-box">
+            <i class="fa-solid fa-circle-pause" style="font-size:3.2rem; color:var(--meet-subtext);"></i>
+            <h2 style="font-size:1.4rem; font-weight:400; margin-top:8px;">The meeting has ended</h2>
+            <p style="color:var(--meet-subtext); font-size:0.9rem;">The host left or ended the stream call.</p>
+            <button class="join-action-btn" onclick="location.href='/'" style="margin-top:12px;">Return to Home</button>
+        </div>
+    </div>
+
     <!-- ═══ KICKED SCREEN ═══ -->
     <div id="kicked-screen" class="screen">
         <div class="waiting-box">
             <i class="fa-solid fa-circle-exclamation" style="font-size:3rem; color:var(--meet-red);"></i>
             <h2 style="font-size:1.4rem; font-weight:400;">You left the meeting</h2>
             <p style="color:var(--meet-subtext); font-size:0.9rem;" id="kicked-reason">Removed by host</p>
+            <button class="join-action-btn" onclick="location.href='/'" style="margin-top:12px;">Return to Home</button>
         </div>
     </div>
 
@@ -266,6 +277,7 @@
         let myParticipantId = null;
         let statusWs = null;
         let pc = null;
+        let viewerAudioSender = null;
         let remoteStream = null;
         let isLive = false;
         let isScreenSharing = false;
@@ -281,7 +293,7 @@
 
         // ─── DOM References ───
         const $ = id => document.getElementById(id);
-        const screens = { join: $('join-screen'), waiting: $('waiting-screen'), kicked: $('kicked-screen'), main: $('main-screen') };
+        const screens = { join: $('join-screen'), waiting: $('waiting-screen'), ended: $('ended-screen'), kicked: $('kicked-screen'), main: $('main-screen') };
         const joinName = $('join-name'), joinBtn = $('join-btn'), joinError = $('join-error'), previewAvatarIcon = $('preview-avatar-icon');
         const hostVideo = $('host-video'), hostAudio = $('host-audio'), meetGrid = $('meet-grid'), meetVideoContainer = $('meet-video-container');
         const dockMicBtn = $('dock-mic-btn'), dockSettingsBtn = $('dock-settings-btn'), dockFullscreenBtn = $('dock-fullscreen-btn');
@@ -293,6 +305,13 @@
         const chatList = $('chat-list'), chatInput = $('chat-input'), chatSend = $('chat-send');
         const peopleList = $('people-list'), peopleCount = $('people-count');
         const modeText = $('mode-text'), timeClock = $('time-clock'), toasts = $('toasts');
+
+        // Pre-fill user name from LocalStorage
+        const savedName = localStorage.getItem('meet_user_name');
+        if (savedName) {
+            joinName.value = savedName;
+            previewAvatarIcon.textContent = savedName.charAt(0).toUpperCase();
+        }
 
         function updateClock() {
             const now = new Date();
@@ -308,7 +327,7 @@
 
         function showScreen(name) {
             Object.values(screens).forEach(s => s.classList.remove('active'));
-            screens[name].classList.add('active');
+            if (screens[name]) screens[name].classList.add('active');
             if (name === 'main') {
                 setTimeout(() => startWebRtcViewer(), 200);
             }
@@ -354,6 +373,7 @@
             const name = joinName.value.trim();
             if (!name) { joinError.textContent = 'Please enter your name'; return; }
             myName = name;
+            localStorage.setItem('meet_user_name', name);
             joinError.textContent = '';
             joinBtn.disabled = true;
             joinBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Joining...';
@@ -427,7 +447,12 @@
                 case 'STATUS':
                     isLive = data.live;
                     isScreenSharing = !!data.isScreenSharing;
-                    updateStageLayout();
+                    if (!isLive && screens.main.classList.contains('active')) {
+                        showScreen('ended');
+                        if (pc) { pc.close(); pc = null; }
+                    } else {
+                        updateStageLayout();
+                    }
                     break;
 
                 case 'PARTICIPANT_LIST':
@@ -503,7 +528,10 @@
             };
 
             pc.addTransceiver('video', { direction: 'recvonly' });
-            pc.addTransceiver('audio', { direction: 'sendrecv' });
+            
+            // Sendrecv audio transceiver so viewer can stream mic audio seamlessly to host!
+            const audioTransceiver = pc.addTransceiver('audio', { direction: 'sendrecv' });
+            viewerAudioSender = audioTransceiver.sender;
 
             pc.createOffer().then(offer => {
                 let sdp = offer.sdp;
@@ -516,7 +544,7 @@
             }).catch(() => {});
         }
 
-        // ─── Microphone Controls ───
+        // ─── Microphone Controls (Track Replace for 100% Reliable Host Audio) ───
         dockMicBtn.onclick = () => {
             if (!canTalk) return;
             micEnabled ? disableMic() : enableMic();
@@ -528,19 +556,18 @@
                 if (selectedMicId) constraints.audio.deviceId = { exact: selectedMicId };
 
                 micStream = await navigator.mediaDevices.getUserMedia(constraints);
-                if (pc && micStream.getAudioTracks().length > 0) {
-                    const audioTrack = micStream.getAudioTracks()[0];
-                    const existingSender = pc.getSenders().find(s => s.track && s.track.kind === 'audio');
-                    if (existingSender) {
-                        await existingSender.replaceTrack(audioTrack);
-                    } else {
-                        pc.addTrack(audioTrack, micStream);
-                    }
+                const micTrack = micStream.getAudioTracks()[0];
+                micTrack.enabled = true;
+
+                if (viewerAudioSender) {
+                    await viewerAudioSender.replaceTrack(micTrack);
                 }
+
                 micEnabled = true;
                 dockMicBtn.classList.remove('off');
                 dockMicBtn.classList.add('active');
                 dockMicBtn.querySelector('i').className = 'fa-solid fa-microphone';
+
                 if (statusWs && statusWs.readyState === WebSocket.OPEN) {
                     statusWs.send(JSON.stringify({ type: 'MIC_TOGGLE', enabled: true }));
                 }
@@ -550,15 +577,18 @@
             }
         }
 
-        function disableMic() {
+        async function disableMic() {
             if (micStream) {
-                micStream.getTracks().forEach(t => t.stop());
-                micStream = null;
+                micStream.getAudioTracks().forEach(t => t.enabled = false);
+            }
+            if (viewerAudioSender) {
+                await viewerAudioSender.replaceTrack(null);
             }
             micEnabled = false;
             dockMicBtn.classList.add('off');
             dockMicBtn.classList.remove('active');
             dockMicBtn.querySelector('i').className = 'fa-solid fa-microphone-slash';
+
             if (statusWs && statusWs.readyState === WebSocket.OPEN) {
                 statusWs.send(JSON.stringify({ type: 'MIC_TOGGLE', enabled: false }));
             }

@@ -394,8 +394,9 @@ function tryHandleHostControlMessage(session, data, isBinary, ws) {
         const parsed = JSON.parse(raw);
 
         if (parsed.type === 'WEBRTC_OFFER') {
-            const hasVideo = /m=video\s+\d+/i.test(parsed.sdp) && !/a=inactive/i.test(parsed.sdp);
-            session.isScreenSharing = hasVideo;
+            if (typeof parsed.isScreenSharing === 'boolean') {
+                session.isScreenSharing = parsed.isScreenSharing;
+            }
             session.webrtcIngest?.stop?.();
             session.webrtcIngest = null;
             session.webrtcIngest = new WebRtcIngestSession(session, ws, async () => {
@@ -514,6 +515,12 @@ function tryHandleHostControlMessage(session, data, isBinary, ws) {
         if (parsed.type === 'HOST_MIC_TOGGLE') {
             session.hostMicEnabled = !!parsed.enabled;
             broadcastParticipantList(session);
+            return true;
+        }
+
+        if (parsed.type === 'SCREEN_SHARE_TOGGLE') {
+            session.isScreenSharing = !!parsed.sharing;
+            broadcastStatus(session, session.isLive);
             return true;
         }
 
