@@ -24,8 +24,7 @@ export class WebRtcViewerSession {
             }
         });
 
-        this.pc.onIceConnectionStateChange.subscribe(() => {
-            const state = this.pc.iceConnectionState;
+        this.pc.iceConnectionStateChange.subscribe(state => {
             logger.info(`[Viewer Relay ${this.streamKey}] ICE state: ${state}`);
             if (state === 'failed' || state === 'disconnected' || state === 'closed') {
                 this.alive = false;
