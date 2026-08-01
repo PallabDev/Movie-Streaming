@@ -228,6 +228,11 @@ function broadcastStatus(session, liveState) {
             client.send(msg);
         }
     }
+    for (const client of viewWss.clients) {
+        if (client.streamKey === session.streamKey && client.readyState === 1) {
+            client.send(msg);
+        }
+    }
 }
 
 function broadcastAdminTelemetry() {
@@ -407,7 +412,6 @@ viewWss.on('connection', (ws) => {
                 const viewerSession = new WebRtcViewerSession(key, ws);
                 session.viewerSessions.add(viewerSession);
                 try {
-                    await viewerSession.initialize();
                     await viewerSession.handleOffer(parsed.sdp);
                 } catch (e) {
                     logger.error(`[Viewer Relay ${key}] Failed to handle offer: ${e.message}`);
@@ -418,9 +422,10 @@ viewWss.on('connection', (ws) => {
             }
 
             if (parsed.type === 'VIEWER_ICE_CANDIDATE') {
-                const lastViewer = Array.from(session.viewerSessions).pop();
-                if (lastViewer && parsed.candidate) {
-                    lastViewer.handleIceCandidate(parsed.candidate);
+                for (const vs of session.viewerSessions) {
+                    if (vs.ws === ws && parsed.candidate) {
+                        vs.handleIceCandidate(parsed.candidate);
+                    }
                 }
                 return;
             }

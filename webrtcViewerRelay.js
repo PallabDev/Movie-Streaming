@@ -11,7 +11,7 @@ export class WebRtcViewerSession {
         this.alive = true;
     }
 
-    async initialize() {
+    async handleOffer(sdpOffer) {
         this.pc = new RTCPeerConnection({
             iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
         });
@@ -26,22 +26,25 @@ export class WebRtcViewerSession {
 
         this.pc.onIceConnectionStateChange.subscribe(() => {
             const state = this.pc.iceConnectionState;
+            logger.info(`[Viewer Relay ${this.streamKey}] ICE state: ${state}`);
             if (state === 'failed' || state === 'disconnected' || state === 'closed') {
                 this.alive = false;
             }
         });
 
-        const videoTransceiver = this.pc.addTransceiver('video', { direction: 'sendonly' });
-        this.videoSender = videoTransceiver.sender;
-
-        const audioTransceiver = this.pc.addTransceiver('audio', { direction: 'sendonly' });
-        this.audioSender = audioTransceiver.sender;
-    }
-
-    async handleOffer(sdpOffer) {
-        if (!this.pc) await this.initialize();
-
         await this.pc.setRemoteDescription({ type: 'offer', sdp: sdpOffer });
+
+        const transceivers = this.pc.getTransceivers();
+        for (const t of transceivers) {
+            if (t.kind === 'video') {
+                t.direction = 'sendonly';
+                this.videoSender = t.sender;
+            } else if (t.kind === 'audio') {
+                t.direction = 'sendonly';
+                this.audioSender = t.sender;
+            }
+        }
+
         const answer = await this.pc.createAnswer();
         await this.pc.setLocalDescription(answer);
 
@@ -49,7 +52,7 @@ export class WebRtcViewerSession {
             this.ws.send(JSON.stringify({ type: 'VIEWER_WEBRTC_ANSWER', sdp: answer.sdp }));
         }
 
-        logger.info(`[Viewer Relay ${this.streamKey}] SDP answer sent`);
+        logger.info(`[Viewer Relay ${this.streamKey}] SDP answer sent. VideoSender=${!!this.videoSender} AudioSender=${!!this.audioSender}`);
     }
 
     async handleIceCandidate(candidate) {

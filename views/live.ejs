@@ -333,7 +333,11 @@
                 }
 
                 // ─── WebRTC Viewer Relay ──────────────────────────────────────────────
+                let viewerStarted = false;
+
                 async function startWebRtcViewer() {
+                    if (viewerStarted) return;
+                    viewerStarted = true;
                     if (pc) { pc.close(); pc = null; }
                     showLoading();
                     hideOffline();
@@ -345,28 +349,27 @@
                     pc.ontrack = (event) => {
                         if (event.streams && event.streams[0]) {
                             video.srcObject = event.streams[0];
-                            video.play().then(() => {
-                                hideLoading();
-                                showControls();
-                            }).catch(() => updatePlayIcon());
                         } else {
                             const stream = new MediaStream([event.track]);
                             video.srcObject = stream;
-                            video.play().then(() => {
-                                hideLoading();
-                                showControls();
-                            }).catch(() => updatePlayIcon());
                         }
+                        video.play().then(() => {
+                            hideLoading();
+                            showControls();
+                        }).catch(() => updatePlayIcon());
                     };
 
                     pc.oniceconnectionstatechange = () => {
                         const state = pc.iceConnectionState;
+                        console.log('[WebRTC Viewer] ICE state:', state);
                         if (state === 'connected' || state === 'completed') {
                             updateConnViewer('stable');
                         } else if (state === 'disconnected') {
                             updateConnViewer('slow');
                         } else if (state === 'failed') {
                             updateConnViewer('poor');
+                            viewerStarted = false;
+                            setTimeout(() => startWebRtcViewer(), 3000);
                         }
                     };
 
@@ -377,6 +380,7 @@
                     await pc.setLocalDescription(offer);
 
                     if (statusWs && statusWs.readyState === WebSocket.OPEN) {
+                        console.log('[WebRTC Viewer] Sending offer');
                         statusWs.send(JSON.stringify({
                             type: 'VIEWER_WEBRTC_OFFER',
                             sdp: pc.localDescription.sdp
@@ -405,7 +409,7 @@
                     statusWs = new WebSocket(wsUrl);
 
                     statusWs.onopen = () => {
-                        checkStreamStatus();
+                        console.log('[Viewer WS] Connected');
                     };
 
                     statusWs.onmessage = async (event) => {
@@ -414,11 +418,11 @@
                             if (data.type === 'STATUS') {
                                 if (data.live) {
                                     hideOffline();
-                                    if (!pc || pc.connectionState === 'closed' || pc.connectionState === 'failed') {
-                                        startWebRtcViewer();
-                                    }
+                                    startWebRtcViewer();
                                 } else {
                                     showOffline();
+                                    viewerStarted = false;
+                                    if (pc) { pc.close(); pc = null; }
                                 }
                             } else if (data.type === 'VIEWER_WEBRTC_ANSWER') {
                                 if (pc && data.sdp) {
@@ -435,7 +439,7 @@
                                     updateConnViewer('slow');
                                 }
                             }
-                        } catch (err) { }
+                        } catch (err) { console.error('[Viewer WS]', err); }
                     };
 
                     statusWs.onclose = () => setTimeout(connectStatusWebSocket, 3000);
