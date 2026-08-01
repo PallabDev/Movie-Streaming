@@ -9,36 +9,46 @@
     <link rel="stylesheet" href="/css/output.css">
     <style>
         body {
-            background-color: #090d16;
+            background-color: #0B0909;
             background-image: 
-                radial-gradient(at 0% 0%, rgba(99, 102, 241, 0.18) 0px, transparent 50%),
-                radial-gradient(at 100% 100%, rgba(139, 92, 246, 0.15) 0px, transparent 50%);
+                radial-gradient(at 0% 0%, rgba(255, 158, 32, 0.14) 0px, transparent 50%),
+                radial-gradient(at 100% 100%, rgba(255, 158, 32, 0.1) 0px, transparent 50%);
             font-family: 'Inter', system-ui, -apple-system, sans-serif;
         }
 
         .glass-card {
-            background: rgba(15, 23, 42, 0.8);
+            background: rgba(29, 33, 40, 0.8);
             backdrop-filter: blur(20px);
             -webkit-backdrop-filter: blur(20px);
-            border: 1px solid rgba(255, 255, 255, 0.12);
+            border: 1px solid rgba(255, 255, 255, 0.1);
         }
 
         .gradient-text {
-            background: linear-gradient(135deg, #818cf8 0%, #c084fc 100%);
+            background: linear-gradient(135deg, #FF9E20 0%, #FFD580 100%);
             background-clip: text;
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
         }
 
         .glow-btn {
-            background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%);
-            box-shadow: 0 4px 20px rgba(99, 102, 241, 0.4);
-            transition: all 0.2s ease;
+            background: linear-gradient(135deg, #FF9E20 0%, #E88D1A 100%);
+            box-shadow: 0 4px 20px rgba(255, 158, 32, 0.4);
+            transition: transform 0.2s ease, box-shadow 0.2s ease;
         }
 
         .glow-btn:hover {
             transform: translateY(-2px);
-            box-shadow: 0 8px 25px rgba(99, 102, 241, 0.6);
+            box-shadow: 0 8px 25px rgba(255, 158, 32, 0.6);
+        }
+
+        .glow-btn:focus-visible {
+            outline: none;
+            box-shadow: 0 0 0 3px rgba(255, 158, 32, 0.5);
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+            .glow-btn { transition: none; }
+            .glow-btn:hover { transform: none; }
         }
     </style>
 </head>
@@ -48,8 +58,8 @@
         
         <!-- Header Logo -->
         <div class="text-center mb-8">
-            <div class="w-12 h-12 rounded-2xl bg-indigo-600/20 border border-indigo-500/30 flex items-center justify-center text-indigo-400 text-2xl mx-auto mb-3 shadow-inner">
-                <i class="fa-solid fa-play"></i>
+            <div class="w-12 h-12 rounded-2xl bg-amber-600/20 border border-amber-500/30 flex items-center justify-center text-amber-400 text-2xl mx-auto mb-3 shadow-inner">
+                <i class="fa-solid fa-play" aria-hidden="true"></i>
             </div>
             <h1 class="text-2xl font-extrabold text-white tracking-tight">CoWatch <span class="gradient-text">Studio</span></h1>
             <p class="text-xs text-slate-400 mt-1">Cloud Real-Time Multi-Stream Platform</p>
@@ -57,7 +67,7 @@
 
         <!-- Auth Tabs -->
         <div class="flex bg-slate-900/90 rounded-xl p-1 mb-6 border border-white/10">
-            <button id="loginTabBtn" onclick="switchTab('login')" class="flex-1 py-2 text-xs font-semibold rounded-lg transition-all bg-indigo-600 text-white shadow">
+            <button id="loginTabBtn" onclick="switchTab('login')" class="flex-1 py-2 text-xs font-semibold rounded-lg transition-all bg-amber-600 text-white shadow">
                 Login
             </button>
             <button id="registerTabBtn" onclick="switchTab('register')" class="flex-1 py-2 text-xs font-semibold rounded-lg transition-all text-slate-400 hover:text-white">
@@ -66,33 +76,33 @@
         </div>
 
         <!-- Error Alert -->
-        <div id="errorAlert" class="hidden mb-4 p-3 rounded-xl bg-red-500/10 border border-red-500/20 text-red-400 text-xs font-medium text-center">
+        <div id="errorAlert" class="hidden mb-4 p-3 rounded-xl bg-red-500/10 border border-red-500/20 text-red-400 text-xs font-medium text-center" role="alert" aria-live="polite">
         </div>
 
         <!-- Success Alert -->
-        <div id="successAlert" class="hidden mb-4 p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs font-medium text-center">
+        <div id="successAlert" class="hidden mb-4 p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs font-medium text-center" role="status" aria-live="polite">
         </div>
 
         <!-- Login Form -->
         <form id="loginForm" onsubmit="handleLogin(event)">
             <div class="mb-4">
-                <label class="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">Email Address</label>
+                <label for="loginEmail" class="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">Email Address</label>
                 <div class="relative">
-                    <i class="fa-solid fa-envelope absolute left-4 top-3.5 text-slate-500 text-xs"></i>
-                    <input type="email" id="loginEmail" required placeholder="name@domain.com" class="w-full pl-10 pr-4 py-3 rounded-xl bg-slate-950/90 border border-white/15 text-white placeholder-slate-500 text-sm focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-all">
+                    <i class="fa-solid fa-envelope absolute left-4 top-3.5 text-slate-500 text-xs" aria-hidden="true"></i>
+                    <input type="email" id="loginEmail" name="email" required placeholder="name@domain.com" autocomplete="email" spellcheck="false" class="w-full pl-10 pr-4 py-3 rounded-xl bg-slate-950/90 border border-white/15 text-white placeholder-slate-500 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 focus:border-amber-500 transition-colors">
                 </div>
             </div>
 
             <div class="mb-6">
-                <label class="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">Password</label>
+                <label for="loginPassword" class="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">Password</label>
                 <div class="relative">
-                    <i class="fa-solid fa-lock absolute left-4 top-3.5 text-slate-500 text-xs"></i>
-                    <input type="password" id="loginPassword" required placeholder="••••••••" class="w-full pl-10 pr-4 py-3 rounded-xl bg-slate-950/90 border border-white/15 text-white placeholder-slate-500 text-sm focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-all">
+                    <i class="fa-solid fa-lock absolute left-4 top-3.5 text-slate-500 text-xs" aria-hidden="true"></i>
+                    <input type="password" id="loginPassword" name="password" required placeholder="••••••••" autocomplete="current-password" class="w-full pl-10 pr-4 py-3 rounded-xl bg-slate-950/90 border border-white/15 text-white placeholder-slate-500 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 focus:border-amber-500 transition-colors">
                 </div>
             </div>
 
             <button type="submit" class="w-full glow-btn py-3 rounded-xl text-sm font-semibold text-white flex items-center justify-center gap-2">
-                <i class="fa-solid fa-right-to-bracket"></i>
+                <i class="fa-solid fa-right-to-bracket" aria-hidden="true"></i>
                 <span>Sign In to Studio</span>
             </button>
         </form>
@@ -100,31 +110,31 @@
         <!-- Register Form -->
         <form id="registerForm" onsubmit="handleRegister(event)" class="hidden">
             <div class="mb-4">
-                <label class="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">Full Name</label>
+                <label for="regName" class="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">Full Name</label>
                 <div class="relative">
-                    <i class="fa-solid fa-user absolute left-4 top-3.5 text-slate-500 text-xs"></i>
-                    <input type="text" id="regName" required placeholder="John Doe" class="w-full pl-10 pr-4 py-3 rounded-xl bg-slate-950/90 border border-white/15 text-white placeholder-slate-500 text-sm focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-all">
+                    <i class="fa-solid fa-user absolute left-4 top-3.5 text-slate-500 text-xs" aria-hidden="true"></i>
+                    <input type="text" id="regName" name="name" required placeholder="John Doe" autocomplete="name" class="w-full pl-10 pr-4 py-3 rounded-xl bg-slate-950/90 border border-white/15 text-white placeholder-slate-500 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 focus:border-amber-500 transition-colors">
                 </div>
             </div>
 
             <div class="mb-4">
-                <label class="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">Email Address</label>
+                <label for="regEmail" class="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">Email Address</label>
                 <div class="relative">
-                    <i class="fa-solid fa-envelope absolute left-4 top-3.5 text-slate-500 text-xs"></i>
-                    <input type="email" id="regEmail" required placeholder="name@domain.com" class="w-full pl-10 pr-4 py-3 rounded-xl bg-slate-950/90 border border-white/15 text-white placeholder-slate-500 text-sm focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-all">
+                    <i class="fa-solid fa-envelope absolute left-4 top-3.5 text-slate-500 text-xs" aria-hidden="true"></i>
+                    <input type="email" id="regEmail" name="email" required placeholder="name@domain.com" autocomplete="email" spellcheck="false" class="w-full pl-10 pr-4 py-3 rounded-xl bg-slate-950/90 border border-white/15 text-white placeholder-slate-500 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 focus:border-amber-500 transition-colors">
                 </div>
             </div>
 
             <div class="mb-6">
-                <label class="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">Password</label>
+                <label for="regPassword" class="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">Password</label>
                 <div class="relative">
-                    <i class="fa-solid fa-lock absolute left-4 top-3.5 text-slate-500 text-xs"></i>
-                    <input type="password" id="regPassword" required placeholder="••••••••" class="w-full pl-10 pr-4 py-3 rounded-xl bg-slate-950/90 border border-white/15 text-white placeholder-slate-500 text-sm focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 transition-all">
+                    <i class="fa-solid fa-lock absolute left-4 top-3.5 text-slate-500 text-xs" aria-hidden="true"></i>
+                    <input type="password" id="regPassword" name="password" required placeholder="••••••••" autocomplete="new-password" class="w-full pl-10 pr-4 py-3 rounded-xl bg-slate-950/90 border border-white/15 text-white placeholder-slate-500 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 focus:border-amber-500 transition-colors">
                 </div>
             </div>
 
             <button type="submit" class="w-full glow-btn py-3 rounded-xl text-sm font-semibold text-white flex items-center justify-center gap-2">
-                <i class="fa-solid fa-user-plus"></i>
+                <i class="fa-solid fa-user-plus" aria-hidden="true"></i>
                 <span>Create Account</span>
             </button>
         </form>
@@ -141,16 +151,16 @@
             if (tab === 'login') {
                 loginForm.classList.remove('hidden');
                 registerForm.classList.add('hidden');
-                loginBtn.classList.add('bg-indigo-600', 'text-white', 'shadow');
+                loginBtn.classList.add('bg-amber-600', 'text-white', 'shadow');
                 loginBtn.classList.remove('text-slate-400');
-                registerBtn.classList.remove('bg-indigo-600', 'text-white', 'shadow');
+                registerBtn.classList.remove('bg-amber-600', 'text-white', 'shadow');
                 registerBtn.classList.add('text-slate-400');
             } else {
                 loginForm.classList.add('hidden');
                 registerForm.classList.remove('hidden');
-                registerBtn.classList.add('bg-indigo-600', 'text-white', 'shadow');
+                registerBtn.classList.add('bg-amber-600', 'text-white', 'shadow');
                 registerBtn.classList.remove('text-slate-400');
-                loginBtn.classList.remove('bg-indigo-600', 'text-white', 'shadow');
+                loginBtn.classList.remove('bg-amber-600', 'text-white', 'shadow');
                 loginBtn.classList.add('text-slate-400');
             }
         }
@@ -214,7 +224,7 @@
 
                 const data = await res.json();
                 if (data.success) {
-                    showSuccess('Registration successful! Please wait for Admin approval or sign in if granted access.');
+                    showSuccess(‘Registration successful! Please wait for Admin approval or sign in if granted access.’);
                     setTimeout(() => switchTab('login'), 2000);
                 } else {
                     showError(data.error || 'Registration failed');
