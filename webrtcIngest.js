@@ -112,6 +112,14 @@ export class WebRtcIngestSession {
         }
 
         await this.pc.setRemoteDescription({ type: 'offer', sdp: sdpOffer });
+
+        const transceivers = this.pc.getTransceivers();
+        for (const t of transceivers) {
+            if (t.kind === 'audio') {
+                t.direction = 'sendrecv';
+            }
+        }
+
         const answer = await this.pc.createAnswer();
         await this.pc.setLocalDescription(answer);
 
@@ -141,6 +149,24 @@ export class WebRtcIngestSession {
         } catch (e) {
             logger.warn(`[WebRTC ${this.session.streamKey}] Failed to request keyframe: ${e.message}`);
             return false;
+        }
+    }
+
+    sendAudioRtp(rtp) {
+        if (!this.pc) return;
+        const transceivers = this.pc.getTransceivers();
+        const audioTransceiver = transceivers.find(t => t.kind === 'audio');
+        if (audioTransceiver && audioTransceiver.sender) {
+            try {
+                audioTransceiver.direction = 'sendrecv';
+                audioTransceiver.sender.sendRtp(rtp.payload, {
+                    payloadType: this.audioPt || 111,
+                    ssrc: audioTransceiver.sender.ssrc,
+                    timestamp: rtp.header.timestamp,
+                    sequenceNumber: rtp.header.sequenceNumber,
+                    marker: rtp.header.marker
+                });
+            } catch (e) { }
         }
     }
 

@@ -1,1069 +1,773 @@
 <!DOCTYPE html>
 <html lang="en">
-
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Screen Share Studio</title>
+    <title><%= typeof streamTitle !== 'undefined' ? streamTitle : 'Host Studio' %> | Google Meet</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Google+Sans:wght@400;500;700&family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
     <style>
         :root {
-            --bg-dark: #090d16;
-            --card-bg: rgba(17, 24, 39, 0.75);
-            --primary: #6366f1;
-            --primary-hover: #4f46e5;
-            --danger: #ef4444;
-            --danger-hover: #dc2626;
-            --success: #10b981;
-            --text-main: #f3f4f6;
-            --text-sub: #9ca3af;
-            --border-glass: rgba(255, 255, 255, 0.08);
-            --shadow-glow: rgba(99, 102, 241, 0.15);
+            --meet-bg: #202124;
+            --meet-stage-bg: #141517;
+            --meet-card-bg: #3c4043;
+            --meet-card-dark: #28292c;
+            --meet-hover: #474b50;
+            --meet-primary: #1a73e8;
+            --meet-red: #ea4335;
+            --meet-green: #188038;
+            --meet-text: #e8eaed;
+            --meet-subtext: #9aa0a6;
+            --meet-border: rgba(255, 255, 255, 0.1);
         }
+        * { margin:0; padding:0; box-sizing:border-box; }
+        html, body { width:100%; height:100%; overflow:hidden; font-family:'Google Sans', 'Roboto', sans-serif; background:var(--meet-bg); color:var(--meet-text); }
 
-        * {
-            box-sizing: border-box;
-            margin: 0;
-            padding: 0;
-        }
+        /* Main App Container */
+        .meet-app { width:100%; height:100vh; display:flex; flex-direction:column; position:relative; overflow:hidden; }
 
-        body {
-            font-family: 'Inter', sans-serif;
-            background-color: var(--bg-dark);
-            color: var(--text-main);
-            min-height: 100vh;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            padding: 3rem 2rem 6rem 2rem;
-            position: relative;
-            overflow-x: hidden;
-        }
+        /* Top Header Bar */
+        .meet-top-bar { position:absolute; top:0; left:0; right:0; height:56px; display:flex; align-items:center; justify-content:space-between; padding:0 24px; z-index:30; background:linear-gradient(to bottom, rgba(20,21,23,0.95), transparent); pointer-events:none; }
+        .meet-top-bar > * { pointer-events:auto; }
+        .meet-room-info { display:flex; align-items:center; gap:12px; }
+        .meet-title { font-size:1rem; font-weight:500; color:#fff; }
+        .meet-badge { padding:4px 10px; border-radius:12px; font-size:0.75rem; font-weight:500; background:rgba(255,255,255,0.08); color:var(--meet-subtext); display:inline-flex; align-items:center; gap:6px; }
+        .meet-badge.live { background:rgba(24,128,56,0.2); color:#81c995; }
+        .meet-badge-dot { width:6px; height:6px; border-radius:50%; background:#34a853; }
+        .link-btn { background:var(--meet-primary); color:#fff; cursor:pointer; transition:background 0.2s; border:none; }
+        .link-btn:hover { background:#1557b0; }
 
-        /* Ambient background glow */
-        .ambient-glow {
-            position: absolute;
-            top: 20%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            width: 600px;
-            height: 600px;
-            background: radial-gradient(circle, var(--shadow-glow) 0%, rgba(9, 13, 22, 0) 70%);
-            pointer-events: none;
-            z-index: 0;
-        }
+        /* Main Call Stage Area */
+        .meet-stage { flex:1; width:100%; height:calc(100vh - 76px); display:flex; flex-direction:row; gap:16px; position:relative; overflow:hidden; padding:64px 16px 16px 16px; align-items:center; justify-content:center; }
 
-        /* Main Container */
-        .app-container {
-            position: relative;
-            z-index: 1;
-            width: 100%;
-            max-width: 880px;
-            /* reduced to make room for top status box */
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            margin-bottom: 2rem;
-        }
+        /* Adaptive Grid View (Normal Voice Talking Mode) */
+        .meet-grid { flex:1; min-width:0; height:100%; display:grid; gap:16px; align-content:center; justify-content:center; max-width:1400px; margin:0 auto; transition:all 0.3s ease; }
+        
+        .meet-card { background:var(--meet-card-dark); border-radius:16px; position:relative; overflow:hidden; display:flex; flex-direction:column; align-items:center; justify-content:center; transition:all 0.25s ease; border:2px solid transparent; box-shadow:0 4px 20px rgba(0,0,0,0.4); width:100%; height:100%; min-height:0; }
+        .meet-card.speaking { border-color:#1a73e8; box-shadow:0 0 20px rgba(26,115,232,0.4); }
+        .meet-avatar { width:96px; height:96px; border-radius:50%; background:#5f6368; color:#fff; display:flex; align-items:center; justify-content:center; font-size:2.4rem; font-weight:500; box-shadow:0 4px 16px rgba(0,0,0,0.3); }
+        
+        .meet-name-tag { position:absolute; bottom:12px; left:12px; background:rgba(32,33,36,0.85); backdrop-filter:blur(8px); padding:4px 12px; border-radius:6px; font-size:0.82rem; font-weight:500; color:#fff; display:flex; align-items:center; gap:8px; }
+        .meet-card-mic { position:absolute; top:12px; right:12px; width:28px; height:28px; border-radius:50%; background:rgba(32,33,36,0.85); backdrop-filter:blur(8px); display:flex; align-items:center; justify-content:center; font-size:0.75rem; color:#fff; }
+        .meet-card-mic.off { background:var(--meet-red); color:#fff; }
 
-        /* 16:9 Video Player Container */
-        .player-wrapper {
-            position: relative;
-            width: 100%;
-            aspect-ratio: 16 / 9;
-            background: #030712;
-            border-radius: 20px;
-            overflow: hidden;
-            border: 1px solid var(--border-glass);
-            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.7);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-        }
+        /* Video Container (Screen Share Mode) - FULL STAGE */
+        .meet-video-container { flex:1; min-width:0; height:100%; display:none; position:relative; background:#000; border-radius:16px; overflow:hidden; border:1px solid var(--meet-border); align-items:center; justify-content:center; transition:all 0.3s ease; }
+        .meet-video-container.active { display:flex; }
+        #localPreview { width:100%; height:100%; object-fit:contain; }
 
-        video {
-            width: 100%;
-            height: 100%;
-            object-fit: contain;
-            display: none;
-        }
+        /* Fullscreen Mode Overrides */
+        :fullscreen .meet-top-bar, :-webkit-full-screen .meet-top-bar { display: none !important; }
+        :fullscreen .meet-stage, :-webkit-full-screen .meet-stage { padding: 0 !important; height: 100vh !important; width: 100vw !important; }
+        :fullscreen .meet-video-container, :-webkit-full-screen .meet-video-container { border-radius: 0 !important; border: none !important; width: 100vw !important; height: 100vh !important; }
+        :fullscreen #localPreview, :-webkit-full-screen #localPreview { width: 100vw !important; height: 100vh !important; object-fit: contain !important; }
 
-        video.active {
-            display: block;
-        }
+        /* Bottom Control Dock */
+        .meet-dock-wrapper { position:absolute; bottom:16px; left:50%; transform:translateX(-50%); z-index:40; }
+        .meet-dock { background:#202124; border:1px solid rgba(255,255,255,0.08); padding:8px 16px; border-radius:36px; display:flex; align-items:center; gap:12px; box-shadow:0 8px 28px rgba(0,0,0,0.6); }
+        
+        .dock-btn { width:44px; height:44px; border-radius:50%; border:none; background:#3c4043; color:#e8eaed; font-size:1.15rem; cursor:pointer; display:flex; align-items:center; justify-content:center; transition:all 0.2s cubic-bezier(0.4,0,0.2,1); position:relative; }
+        .dock-btn:hover { background:#474b50; transform:scale(1.05); }
+        .dock-btn.active { background:var(--meet-primary); color:#fff; }
+        .dock-btn.off { background:var(--meet-red); color:#fff; }
+        
+        .present-btn { padding:0 20px; border-radius:22px; border:none; background:var(--meet-primary); color:#fff; font-weight:500; font-size:0.9rem; cursor:pointer; display:inline-flex; align-items:center; gap:8px; height:44px; transition:all 0.2s; box-shadow:0 4px 12px rgba(26,115,232,0.3); }
+        .present-btn:hover { background:#1557b0; transform:scale(1.03); }
+        .present-btn.sharing { background:var(--meet-red); }
 
-        /* Placeholder State */
-        .placeholder {
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            gap: 1rem;
-            color: var(--text-sub);
-            text-align: center;
-            padding: 2rem;
-        }
+        .dock-divider { width:1px; height:24px; background:rgba(255,255,255,0.18); margin:0 2px; }
+        .dock-end-btn { width:64px; height:44px; border-radius:22px; border:none; background:var(--meet-red); color:#fff; font-size:1.15rem; cursor:pointer; display:flex; align-items:center; justify-content:center; transition:all 0.2s; }
+        .dock-end-btn:hover { background:#dc2626; transform:scale(1.05); }
+        .dock-badge { position:absolute; top:-2px; right:-2px; background:var(--meet-primary); color:#fff; font-size:0.7rem; font-weight:700; width:20px; height:20px; border-radius:50%; display:flex; align-items:center; justify-content:center; border:2px solid #202124; }
 
-        .placeholder-icon {
-            width: 64px;
-            height: 64px;
-            border-radius: 50%;
-            background: rgba(255, 255, 255, 0.05);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            border: 1px solid rgba(255, 255, 255, 0.1);
-        }
+        /* Settings Menu Popup */
+        .settings-menu { position:absolute; bottom:70px; left:50%; transform:translateX(-50%); background:#28292c; border:1px solid var(--meet-border); border-radius:12px; padding:12px; width:280px; box-shadow:0 12px 32px rgba(0,0,0,0.6); display:none; flex-direction:column; gap:8px; z-index:50; }
+        .settings-menu.active { display:flex; }
+        .settings-header { font-size:0.85rem; font-weight:500; color:var(--meet-subtext); margin-bottom:4px; }
+        .device-select { width:100%; padding:8px 12px; border-radius:6px; border:1px solid #5f6368; background:#202124; color:#fff; font-size:0.85rem; outline:none; }
 
-        .placeholder-icon svg {
-            width: 32px;
-            height: 32px;
-            fill: none;
-            stroke: var(--text-sub);
-            stroke-width: 1.8;
-        }
+        /* Sidebar Drawer */
+        .meet-sidebar { position:relative; width:360px; height:100%; flex-shrink:0; background:#202124; border-radius:16px; border:1px solid var(--meet-border); z-index:35; display:none; flex-direction:column; overflow:hidden; box-shadow:0 12px 36px rgba(0,0,0,0.6); }
+        .meet-sidebar.active { display:flex; }
 
-        .placeholder h2 {
-            font-size: 1.25rem;
-            font-weight: 600;
-            color: var(--text-main);
-        }
+        .sidebar-header { padding:16px 20px; border-bottom:1px solid var(--meet-border); display:flex; align-items:center; justify-content:space-between; }
+        .sidebar-header h3 { font-size:1.1rem; font-weight:500; }
+        .sidebar-close-btn { background:none; border:none; color:var(--meet-subtext); font-size:1.1rem; cursor:pointer; padding:4px; }
 
-        .placeholder p {
-            font-size: 0.9rem;
-            color: var(--text-sub);
-        }
+        .sidebar-tabs { display:flex; border-bottom:1px solid var(--meet-border); }
+        .tab-btn { flex:1; padding:12px; border:none; background:transparent; color:var(--meet-subtext); font-size:0.88rem; font-weight:500; cursor:pointer; border-bottom:2px solid transparent; }
+        .tab-btn.active { color:var(--meet-primary); border-bottom-color:var(--meet-primary); }
 
-        /* Custom Player Controls Overlay */
-        .controls-overlay {
-            position: absolute;
-            bottom: 0;
-            left: 0;
-            right: 0;
-            background: linear-gradient(to top, rgba(0, 0, 0, 0.85) 0%, rgba(0, 0, 0, 0) 100%);
-            padding: 1.5rem 1.5rem 1rem 1.5rem;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            opacity: 0;
-            transition: opacity 0.3s ease;
-            pointer-events: none;
-        }
+        .sidebar-body { flex:1; display:none; flex-direction:column; overflow:hidden; }
+        .sidebar-body.active { display:flex; }
 
-        .player-wrapper:hover .controls-overlay,
-        .controls-overlay.visible {
-            opacity: 1;
-            pointer-events: auto;
-        }
+        /* Modern Google Meet Chat Message UI */
+        .chat-list { flex:1; overflow-y:auto; padding:16px; display:flex; flex-direction:column; gap:16px; }
+        .chat-item { display:flex; flex-direction:column; gap:4px; max-width:88%; width:fit-content; }
+        .chat-item.own { align-self:flex-end; }
+        .chat-header { display:flex; align-items:center; gap:8px; font-size:0.78rem; color:var(--meet-subtext); }
+        .chat-header .author { font-weight:500; color:#fff; }
+        .chat-bubble { font-size:0.9rem; color:#fff; background:#28292c; padding:10px 14px; border-radius:12px; line-height:1.45; word-break:break-word; border:1px solid var(--meet-border); }
+        .chat-item.own .chat-bubble { background:var(--meet-primary); border-color:var(--meet-primary); }
+        
+        .chat-form { padding:12px 16px; border-top:1px solid var(--meet-border); display:flex; gap:8px; }
+        .chat-input { flex:1; padding:10px 16px; border-radius:20px; border:1px solid #5f6368; background:#28292c; color:#fff; font-size:0.9rem; outline:none; }
+        .chat-send-btn { width:38px; height:38px; border-radius:50%; border:none; background:var(--meet-primary); color:#fff; cursor:pointer; display:flex; align-items:center; justify-content:center; }
 
-        .controls-left,
-        .controls-right {
-            display: flex;
-            align-items: center;
-            gap: 1rem;
-        }
+        .people-container { flex:1; overflow-y:auto; padding:16px; display:flex; flex-direction:column; gap:16px; }
+        .section-title { font-size:0.78rem; font-weight:700; color:var(--meet-subtext); text-transform:uppercase; letter-spacing:0.04em; padding:4px 0; }
+        
+        .person-row, .pending-card { display:flex; flex-direction:row; align-items:center; justify-content:space-between; gap:12px; padding:10px 14px; border-radius:12px; background:#28292c; width:100%; border:1px solid var(--meet-border); }
+        .pending-card { background:rgba(26,115,232,0.12); border-color:rgba(26,115,232,0.3); }
 
-        .control-btn {
-            background: rgba(255, 255, 255, 0.15);
-            border: none;
-            color: var(--text-main);
-            width: 40px;
-            height: 40px;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            cursor: pointer;
-            backdrop-filter: blur(8px);
-            transition: all 0.2s ease;
-        }
+        .person-info-group { display:flex; align-items:center; gap:12px; flex:1; min-width:0; }
+        .person-avatar { width:38px; height:38px; border-radius:50%; background:#5f6368; color:#fff; display:flex; align-items:center; justify-content:center; font-size:0.95rem; font-weight:500; flex-shrink:0; }
+        .person-name { font-size:0.9rem; font-weight:500; color:#fff; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 
-        .control-btn:hover {
-            background: rgba(255, 255, 255, 0.3);
-            transform: scale(1.05);
-        }
+        .person-actions-group { display:flex; align-items:center; gap:8px; flex-shrink:0; }
+        .action-icon-btn { width:34px; height:34px; border-radius:50%; border:none; color:#fff; cursor:pointer; display:flex; align-items:center; justify-content:center; font-size:0.85rem; transition:all 0.2s; }
+        .btn-approve { background:#188038; }
+        .btn-approve:hover { background:#13652c; transform:scale(1.08); }
+        .btn-deny { background:#ea4335; }
+        .btn-deny:hover { background:#dc2626; transform:scale(1.08); }
+        .btn-talk { background:#3c4043; color:#e8eaed; }
+        .btn-talk.active { background:#188038; color:#fff; }
+        .btn-kick { background:#3c4043; color:#ea4335; }
+        .btn-kick:hover { background:#ea4335; color:#fff; }
 
-        .control-btn svg {
-            width: 20px;
-            height: 20px;
-            fill: none;
-            stroke: currentColor;
-            stroke-width: 2;
-        }
+        .approve-all-btn { width:100%; padding:10px; border-radius:8px; border:none; background:#188038; color:#fff; font-weight:500; font-size:0.88rem; cursor:pointer; margin-bottom:8px; }
+        .approve-all-btn:hover { background:#13652c; }
 
-        /* Badges */
-        .badge-container {
-            position: absolute;
-            top: 1rem;
-            left: 1rem;
-            display: flex;
-            gap: 0.5rem;
-            z-index: 5;
-        }
+        .default-talk-card { display:flex; align-items:center; justify-content:space-between; padding:12px 14px; border-radius:12px; background:rgba(255,255,255,0.04); border:1px solid var(--meet-border); margin-bottom:8px; }
+        .default-talk-label { font-size:0.85rem; color:#fff; font-weight:500; }
+        
+        .switch-toggle { position:relative; display:inline-block; width:44px; height:24px; }
+        .switch-toggle input { opacity:0; width:0; height:0; }
+        .slider-round { position:absolute; cursor:pointer; inset:0; background-color:#5f6368; transition:.2s; border-radius:24px; }
+        .slider-round:before { position:absolute; content:""; height:18px; width:18px; left:3px; bottom:3px; background-color:white; transition:.2s; border-radius:50%; }
+        input:checked + .slider-round { background-color:var(--meet-primary); }
+        input:checked + .slider-round:before { transform:translateX(20px); }
 
-        .badge-live {
-            background: rgba(239, 68, 68, 0.9);
-            color: white;
-            padding: 0.3rem 0.75rem;
-            border-radius: 20px;
-            font-size: 0.75rem;
-            font-weight: 700;
-            letter-spacing: 0.05em;
-            display: flex;
-            align-items: center;
-            gap: 0.4rem;
-            text-transform: uppercase;
-            box-shadow: 0 4px 12px rgba(239, 68, 68, 0.3);
-        }
-
-        .badge-live::before {
-            content: '';
-            width: 6px;
-            height: 6px;
-            background: white;
-            border-radius: 50%;
-            animation: pulse 1.5s infinite;
-        }
-
-        .badge-quality {
-            background: rgba(0, 0, 0, 0.6);
-            backdrop-filter: blur(8px);
-            border: 1px solid rgba(255, 255, 255, 0.15);
-            color: #60a5fa;
-            padding: 0.3rem 0.75rem;
-            border-radius: 20px;
-            font-size: 0.75rem;
-            font-weight: 600;
-        }
-
-        .badge-chunks {
-            background: rgba(16, 185, 129, 0.2);
-            backdrop-filter: blur(8px);
-            border: 1px solid rgba(16, 185, 129, 0.4);
-            color: #34d399;
-            padding: 0.3rem 0.75rem;
-            border-radius: 20px;
-            font-size: 0.75rem;
-            font-weight: 600;
-        }
-
-        @keyframes pulse {
-            0% {
-                opacity: 1;
-                transform: scale(1);
-            }
-
-            50% {
-                opacity: 0.4;
-                transform: scale(0.8);
-            }
-
-            100% {
-                opacity: 1;
-                transform: scale(1);
-            }
-        }
-
-        /* Floating Action Buttons Container fixed at Bottom Center */
-        .action-button-container {
-            position: fixed;
-            left: 50%;
-            bottom: 2rem;
-            transform: translateX(-50%);
-            z-index: 100;
-            display: flex;
-            align-items: center;
-            gap: 1rem;
-        }
-
-        .btn-action {
-            padding: 0.9rem 2rem;
-            border-radius: 50px;
-            border: none;
-            font-family: inherit;
-            font-size: 1rem;
-            font-weight: 600;
-            cursor: pointer;
-            display: flex;
-            align-items: center;
-            gap: 0.75rem;
-            box-shadow: 0 12px 35px rgba(0, 0, 0, 0.6);
-            transition: all 0.3s ease;
-            text-decoration: none;
-        }
-
-        .btn-share.start {
-            background: linear-gradient(135deg, var(--primary) 0%, #a855f7 100%);
-            color: white;
-            box-shadow: 0 10px 30px var(--shadow-glow);
-        }
-
-        .btn-share.start:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 15px 35px rgba(99, 102, 241, 0.4);
-        }
-
-        .btn-share.stop {
-            background: linear-gradient(135deg, var(--danger) 0%, #b91c1c 100%);
-            color: white;
-            box-shadow: 0 10px 30px rgba(239, 68, 68, 0.4);
-        }
-
-        .btn-share.stop:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 15px 35px rgba(239, 68, 68, 0.6);
-        }
-
-        .btn-download {
-            background: linear-gradient(135deg, #10b981 0%, #059669 100%);
-            color: white;
-            box-shadow: 0 10px 30px rgba(16, 185, 129, 0.3);
-        }
-
-        .btn-download:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 15px 35px rgba(16, 185, 129, 0.5);
-        }
-
-        .btn-action svg {
-            width: 22px;
-            height: 22px;
-            fill: none;
-            stroke: currentColor;
-            stroke-width: 2;
-        }
-    </style>
-    <style>
-        /* Extra player UI improvements */
-        .controls-overlay {
-            transition: opacity 0.25s ease, transform 0.2s ease;
-            will-change: opacity;
-        }
-
-        .controls-overlay.visible {
-            opacity: 1 !important;
-            transform: translateY(0);
-        }
-
-        .controls-overlay.hidden {
-            opacity: 0;
-            transform: translateY(6px);
-        }
+        .toast-box { position:fixed; bottom:80px; left:24px; z-index:200; display:flex; flex-direction:column; gap:8px; }
+        .meet-toast { padding:12px 20px; border-radius:8px; background:#323232; color:#fff; font-size:0.88rem; box-shadow:0 4px 14px rgba(0,0,0,0.5); }
     </style>
 </head>
-
 <body>
-    <div class="ambient-glow"></div>
 
-    <!-- Stream Initialization Loader Modal -->
-    <div id="streamLoaderModal"
-        style="display: none; position: fixed; inset: 0; background: rgba(0, 0, 0, 0.85); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); z-index: 9999; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 20px;">
-        <div
-            style="width: 54px; height: 54px; border: 4px solid rgba(99, 102, 241, 0.2); border-top-color: #6366f1; border-radius: 50%; animation: spin 0.9s linear infinite; margin-bottom: 20px;">
+    <audio id="viewer-audio" autoplay></audio>
+
+    <div class="meet-app">
+        <!-- Top Header Bar -->
+        <div class="meet-top-bar">
+            <div class="meet-room-info">
+                <span class="meet-title"><%= typeof streamTitle !== 'undefined' ? streamTitle : 'Live Meeting Studio' %></span>
+                <span id="meeting-mode-badge" class="meet-badge live"><span class="meet-badge-dot"></span><span id="mode-text">Voice Call Live</span></span>
+                <span class="meet-badge"><i class="fa-solid fa-users"></i> <span id="participantCountText">1</span></span>
+            </div>
+            <div class="meet-room-info">
+                <button id="copyLinkBtn" class="meet-badge link-btn"><i class="fa-solid fa-link"></i> Share Link</button>
+                <span id="time-clock" style="font-size:0.88rem; color:var(--meet-subtext);"></span>
+            </div>
         </div>
-        <h3 id="loaderTitle"
-            style="font-size: 1.25rem; font-weight: 700; color: #ffffff; margin: 0 0 8px 0; font-family: system-ui, sans-serif;">
-            Initializing Live Stream Engine...</h3>
-        <p id="loaderSubtitle"
-            style="font-size: 0.875rem; color: #94a3b8; max-width: 420px; margin: 0; font-family: system-ui, sans-serif; line-height: 1.5;">
-            Purging old video segments from cloud storage and initializing real-time encoder...</p>
-    </div>
 
-    <div class="app-container">
-        <!-- Top Status Box (top-center outside player) -->
-        <div id="topStatusBox"
-            style="width:100%; display:flex; justify-content:center; margin-bottom:12px; display:none; pointer-events:auto;">
-            <div style="display:flex; gap:8px; align-items:center; justify-content:center;">
-                <div
-                    style="padding:8px 14px; background:rgba(15,23,42,0.95); border-radius:12px; border:1px solid rgba(255,255,255,0.04); display:flex; align-items:center; gap:10px; box-shadow:0 8px 24px rgba(0,0,0,0.55);">
-                    <span style="display:inline-flex; align-items:center; gap:8px;">
-                        <span
-                            style="width:10px;height:10px;background:#ef4444;border-radius:999px;display:inline-block;box-shadow:0 0 6px rgba(239,68,68,0.5);"></span>
-                        <strong style="color:#fff; font-size:13px;">LIVE</strong>
-                    </span>
-                    <span id="topQualityBadge"
-                        style="background:#0f172a;color:#9fc7ff;padding:6px 10px;border-radius:10px;font-size:13px;border:1px solid rgba(255,255,255,0.04);">720p
-                        WebRTC</span>
-                    <span id="topConnBadge"
-                        style="background:#072f18;color:#9fe6c4;padding:6px 10px;border-radius:10px;font-size:13px;border:1px solid rgba(255,255,255,0.04);display:flex;align-items:center;gap:6px;">
-                        <span id="connDot" style="width:8px;height:8px;border-radius:50%;background:#10b981;display:inline-block;"></span>
-                        <span id="connText">Stable Connection</span>
-                    </span>
+        <!-- Main Stage Area -->
+        <div class="meet-stage">
+            <!-- Adaptive Grid View (Normal Voice Mode) -->
+            <div id="meet-grid" class="meet-grid"></div>
+
+            <!-- Video Player (Screen Share Mode) - FULL STAGE -->
+            <div id="meet-video-container" class="meet-video-container">
+                <video id="localPreview" autoplay playsinline muted></video>
+            </div>
+
+            <!-- Google Meet Host Sidebar -->
+            <div id="meet-sidebar" class="meet-sidebar">
+                <div class="sidebar-header">
+                    <h3 id="sidebar-title">Meeting Controls</h3>
+                    <button id="sidebar-close" class="sidebar-close-btn"><i class="fa-solid fa-xmark"></i></button>
+                </div>
+                <div class="sidebar-tabs">
+                    <button id="tab-people-btn" class="tab-btn active">People (<span id="people-count">1</span>)</button>
+                    <button id="tab-chat-btn" class="tab-btn">Chat</button>
+                </div>
+
+                <!-- People Body -->
+                <div id="body-people" class="sidebar-body active">
+                    <div class="people-container">
+                        <div class="default-talk-card">
+                            <span class="default-talk-label">Allow members to unmute</span>
+                            <label class="switch-toggle">
+                                <input type="checkbox" id="defaultTalkCheck" checked>
+                                <span class="slider-round"></span>
+                            </label>
+                        </div>
+
+                        <div id="pending-section" style="display:none;">
+                            <div class="section-title">Pending Join Requests (<span id="pendingCountNum">0</span>)</div>
+                            <button id="approveAllBtn" class="approve-all-btn">Approve All</button>
+                            <div id="pending-list" style="display:flex; flex-direction:column; gap:8px;"></div>
+                        </div>
+
+                        <div>
+                            <div class="section-title">In Call (<span id="approvedCountNum">1</span>)</div>
+                            <div id="approved-list" style="display:flex; flex-direction:column; gap:8px;"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Chat Body -->
+                <div id="body-chat" class="sidebar-body">
+                    <div id="chat-list" class="chat-list"></div>
+                    <div class="chat-form">
+                        <input id="chat-input" class="chat-input" type="text" placeholder="Send a message" maxlength="500" autocomplete="off">
+                        <button id="chat-send" class="chat-send-btn"><i class="fa-solid fa-paper-plane"></i></button>
+                    </div>
                 </div>
             </div>
         </div>
 
-        <!-- Throttle Warning Overlay -->
-        <div id="throttleOverlay" style="display:none; width:100%; margin-bottom:12px; pointer-events:none;">
-            <div style="padding:10px 18px; background:rgba(153,27,27,0.9); border-radius:12px; border:1px solid rgba(239,68,68,0.4); display:flex; align-items:center; gap:10px; box-shadow:0 8px 24px rgba(0,0,0,0.55); animation: throttlePulse 1.5s ease-in-out infinite;">
-                <svg viewBox="0 0 24 24" width="20" height="20" stroke="#fca5a5" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
-                    <line x1="12" y1="9" x2="12" y2="13"></line>
-                    <line x1="12" y1="17" x2="12.01" y2="17"></line>
-                </svg>
-                <span style="color:#fca5a5; font-size:13px; font-weight:600;">Poor Upload — Chunks paused. Check your internet connection.</span>
+        <!-- Floating Google Meet Bottom Control Dock -->
+        <div class="meet-dock-wrapper">
+            <div class="meet-dock">
+                <button id="micToggleBtn" class="dock-btn off" title="Toggle microphone"><i class="fa-solid fa-microphone-slash"></i></button>
+                <button id="dock-settings-btn" class="dock-btn" title="Microphone settings"><i class="fa-solid fa-gear"></i></button>
+                
+                <button id="startBtn" class="present-btn" title="Present now"><i class="fa-solid fa-desktop"></i> <span id="presentBtnText">Present now</span></button>
+                
+                <button id="dock-chat-btn" class="dock-btn" title="Chat"><i class="fa-solid fa-message"></i></button>
+                <button id="dock-people-btn" class="dock-btn" title="People" style="position:relative;">
+                    <i class="fa-solid fa-users"></i>
+                    <span id="pendingBadge" class="dock-badge" style="display:none;">0</span>
+                </button>
+                <div class="dock-divider"></div>
+                <button id="stopBtn" class="dock-end-btn" title="End call"><i class="fa-solid fa-phone-slash"></i></button>
+            </div>
+
+            <!-- Settings Menu Popup -->
+            <div id="settings-menu" class="settings-menu">
+                <div class="settings-header"><i class="fa-solid fa-microphone" style="margin-right:6px;"></i>Microphone Device</div>
+                <select id="mic-device-select" class="device-select"></select>
             </div>
         </div>
-        <style>@keyframes throttlePulse { 0%,100%{ opacity:1; } 50%{ opacity:0.7; } }</style>
 
-        <!-- 16:9 Video Player -->
-        <div class="player-wrapper" id="playerWrapper">
-
-
-            <!-- 16:9 Video Player -->
-
-
-            <!-- Placeholder State -->
-            <div class="placeholder" id="placeholder">
-                <div class="placeholder-icon">
-                    <svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round">
-                        <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
-                        <line x1="8" y1="21" x2="16" y2="21"></line>
-                        <line x1="12" y1="17" x2="12" y2="21"></line>
-                    </svg>
-                </div>
-                <h2>No Screen Shared</h2>
-                <p>Click "Share Screen" below to stream high quality chunks to server</p>
-            </div>
-
-            <!-- Video Player -->
-            <video id="previewVideo" autoplay playsinline muted></video>
-
-
-            <!-- Custom Controls Overlay -->
-            <div class="controls-overlay" id="controlsOverlay">
-                <div class="controls-left">
-                    <!-- Play / Pause button: only this toggles playback -->
-                    <button class="control-btn" id="playPauseBtn" title="Play / Pause" style="width:48px;height:48px;">
-                        <svg id="playIcon" viewBox="0 0 24 24">
-                            <polygon points="5 3 19 12 5 21 5 3"></polygon>
-                        </svg>
-                        <svg id="pauseIcon" viewBox="0 0 24 24" style="display: none;">
-                            <rect x="6" y="4" width="4" height="16"></rect>
-                            <rect x="14" y="4" width="4" height="16"></rect>
-                        </svg>
-                    </button>
-
-                    <button class="control-btn" id="muteBtn" title="Mute/Unmute Audio">
-                        <svg id="unmutedIcon" viewBox="0 0 24 24">
-                            <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
-                            <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path>
-                        </svg>
-                        <svg id="mutedIcon" viewBox="0 0 24 24" style="display: none;">
-                            <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
-                            <line x1="23" y1="9" x2="17" y2="15"></line>
-                            <line x1="17" y1="9" x2="23" y2="15"></line>
-                        </svg>
-                    </button>
-                </div>
-                <div class="controls-right">
-                    <button class="control-btn" id="fullscreenBtn" title="Toggle Fullscreen">
-                        <svg viewBox="0 0 24 24">
-                            <path
-                                d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3">
-                            </path>
-                        </svg>
-                    </button>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <!-- Compact Floating Action Bar (Fixed at Bottom Center) -->
-    <div id="buttonContainer" class="action-button-container"
-        style="gap: 12px; padding: 8px 16px; border-radius: 9999px; background: rgba(15, 23, 42, 0.85); backdrop-filter: blur(16px); border: 1px solid rgba(255, 255, 255, 0.12); box-shadow: 0 20px 40px rgba(0,0,0,0.5);">
-        <a href="/" title="Home Dashboard"
-            style="width: 42px; height: 42px; border-radius: 50%; background: rgba(255, 255, 255, 0.1); color: #ffffff; display: flex; align-items: center; justify-content: center; transition: all 0.2s ease;">
-            <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="2" fill="none"
-                stroke-linecap="round" stroke-linejoin="round">
-                <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
-                <polyline points="9 22 9 12 15 12 15 22"></polyline>
-            </svg>
-        </a>
-
-        <button id="toggleShareBtn" class="btn-action btn-share start" title="Start / Stop Sharing"
-            style="padding: 8px 18px; border-radius: 9999px; font-size: 0.85rem;">
-            <svg viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" stroke-width="2" fill="none"
-                stroke-linecap="round" stroke-linejoin="round">
-                <rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect>
-                <line x1="8" y1="21" x2="16" y2="21"></line>
-                <line x1="12" y1="17" x2="12" y2="21"></line>
-            </svg>
-            <span id="btnText">Share Screen</span>
-        </button>
-
-        <a id="watchLiveBtn" href="#" title="Copy Stream Link"
-            style="width: 42px; height: 42px; border-radius: 50%; background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%); color: white; display: flex; align-items: center; justify-content: center; transition: all 0.2s ease; box-shadow: 0 4px 15px rgba(59, 130, 246, 0.4); cursor: pointer;">
-            <!-- Standard Share Icon (arrow out of box) from Feather/typical sets -->
-            <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="2" fill="none"
-                stroke-linecap="round" stroke-linejoin="round">
-                <path d="M4 12v7a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-7"></path>
-                <polyline points="16 6 12 2 8 6"></polyline>
-                <line x1="12" y1="2" x2="12" y2="15"></line>
-            </svg>
-        </a>
+        <div id="toasts" class="toast-box"></div>
     </div>
 
     <script>
-        const toggleShareBtn = document.getElementById('toggleShareBtn');
-        const downloadBtn = document.getElementById('downloadBtn');
-        const btnText = document.getElementById('btnText');
-        const previewVideo = document.getElementById('previewVideo');
-        const placeholder = document.getElementById('placeholder');
-        const topStatusBox = document.getElementById('topStatusBox');
-        const topQualityBadge = document.getElementById('topQualityBadge');
-        const topChunksBadge = document.getElementById('topChunksBadge');
-        const playerWrapper = document.getElementById('playerWrapper');
-        const connDot = document.getElementById('connDot');
-        const connText = document.getElementById('connText');
-
-        // Controls
-        const playPauseBtn = document.getElementById('playPauseBtn');
-        const playIcon = document.getElementById('playIcon');
-        const pauseIcon = document.getElementById('pauseIcon');
-        const muteBtn = document.getElementById('muteBtn');
-        const unmutedIcon = document.getElementById('unmutedIcon');
-        const mutedIcon = document.getElementById('mutedIcon');
-        const fullscreenBtn = document.getElementById('fullscreenBtn');
-
+    (function() {
+        const currentStreamKey = '<%= streamKey %>';
+        const hostName = '<%= user ? user.name : "Host" %>';
+        
+        // ─── State Variables ───
+        let streamWs = null;
+        let peerConnection = null;
         let mediaStream = null;
-        let mediaRecorder = null;
-        let captureStatsInterval = null;
-        let chunkIndex = 0;
-        let isPageUnloading = false;
-        let isThrottled = false;
+        let hostMicStream = null;
+        let hostAudioSender = null;
+        let hostMicEnabled = false;
+        let isSharingScreen = false;
+        let selectedMicId = '';
+        let activeTab = 'people';
+        let sidebarOpen = false;
+        let settingsOpen = false;
+        let participants = [];
+        let pendingParticipants = [];
 
-        // ─── Stream Settings ──────────────────────────────────────────────
-        const STREAM_TARGET = {
-            width: 1280,
-            height: 720,
-            fps: 30,
-            bitrate: 6000000
+        // ─── DOM References ───
+        const $ = id => document.getElementById(id);
+        const localPreview = $('localPreview'), meetGrid = $('meet-grid'), meetVideoContainer = $('meet-video-container');
+        const micToggleBtn = $('micToggleBtn'), startBtn = $('startBtn'), stopBtn = $('stopBtn'), presentBtnText = $('presentBtnText');
+        const dockSettingsBtn = $('dock-settings-btn'), dockChatBtn = $('dock-chat-btn'), dockPeopleBtn = $('dock-people-btn');
+        const settingsMenu = $('settings-menu'), micDeviceSelect = $('mic-device-select');
+        const meetSidebar = $('meet-sidebar'), sidebarClose = $('sidebar-close');
+        const tabChatBtn = $('tab-chat-btn'), tabPeopleBtn = $('tab-people-btn');
+        const bodyChat = $('body-chat'), bodyPeople = $('body-people');
+        const chatList = $('chat-list'), chatInput = $('chat-input'), chatSend = $('chat-send');
+        const pendingSection = $('pending-section'), pendingList = $('pending-list'), pendingCountNum = $('pendingCountNum'), pendingBadge = $('pendingBadge');
+        const approvedList = $('approved-list'), approvedCountNum = $('approvedCountNum'), approveAllBtn = $('approveAllBtn'), defaultTalkCheck = $('defaultTalkCheck');
+        const participantCountText = $('participantCountText'), peopleCount = $('people-count'), modeText = $('mode-text'), timeClock = $('time-clock');
+        const copyLinkBtn = $('copyLinkBtn'), toasts = $('toasts');
+        const viewerAudio = $('viewer-audio');
+
+        localPreview.muted = true;
+        localPreview.volume = 0;
+
+        function updateClock() {
+            const now = new Date();
+            timeClock.textContent = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        }
+        setInterval(updateClock, 1000);
+        updateClock();
+
+        function toast(text) {
+            const t = document.createElement('div');
+            t.className = 'meet-toast';
+            t.textContent = text;
+            toasts.appendChild(t);
+            setTimeout(() => { t.style.opacity = '0'; setTimeout(() => t.remove(), 200); }, 3500);
+        }
+
+        defaultTalkCheck.onchange = () => {
+            wsSend({ type: 'HOST_TOGGLE_DEFAULT_TALK', enabled: defaultTalkCheck.checked });
+            toast(defaultTalkCheck.checked ? 'New members can unmute by default' : 'New members muted by default');
         };
 
-        let streamQuality = STREAM_TARGET.height;
-        let streamBitrate = Math.round(STREAM_TARGET.bitrate / 1000);
-        let throttleSoundPlayed = false;
-        let _settingsRestartPending = false;
-
-        const throttleOverlay = document.getElementById('throttleOverlay');
-
-        function sendSettingsToServer() {
-            if (streamWs && streamWs.readyState === WebSocket.OPEN) {
-                streamWs.send(JSON.stringify({
-                    type: 'HOST_MEDIA_SETTINGS',
-                    quality: streamQuality,
-                    bitrate: streamBitrate
-                }));
-            }
-        }
-
-        window.addEventListener('pagehide', () => {
-            isPageUnloading = true;
-        });
-
-        window.addEventListener('beforeunload', (e) => {
-            if (mediaStream && mediaRecorder && mediaRecorder.state !== 'inactive') {
-                isPageUnloading = true;
-                e.preventDefault();
-                e.returnValue = '';
-                return '';
-            }
-        });
-
-        // Player control helpers
-        function updatePlayPauseUI() {
+        // ─── Enumerate Mic Devices ───
+        async function enumerateMicDevices() {
             try {
-                if (!previewVideo) return;
-                if (previewVideo.paused) {
-                    playIcon.style.display = 'block';
-                    pauseIcon.style.display = 'none';
-                } else {
-                    playIcon.style.display = 'none';
-                    pauseIcon.style.display = 'block';
-                }
-            } catch (e) { }
+                const devices = await navigator.mediaDevices.enumerateDevices();
+                const audioInputs = devices.filter(d => d.kind === 'audioinput');
+                micDeviceSelect.innerHTML = '';
+                audioInputs.forEach((device, index) => {
+                    const opt = document.createElement('option');
+                    opt.value = device.deviceId;
+                    opt.textContent = device.label || `Microphone ${index + 1}`;
+                    if (device.deviceId === selectedMicId) opt.selected = true;
+                    micDeviceSelect.appendChild(opt);
+                });
+            } catch (e) {}
         }
 
-        // Only the play/pause button toggles playback. Prevent clicks on the player area from toggling.
-        if (playPauseBtn) {
-            playPauseBtn.addEventListener('click', (e) => {
-                e.stopPropagation();
-                if (previewVideo.paused) {
-                    previewVideo.play().catch(() => { });
-                } else {
-                    previewVideo.pause();
-                }
-                updatePlayPauseUI();
-                // keep controls visible briefly on interaction
-                showControlsTransient();
-            });
-        }
+        dockSettingsBtn.onclick = () => {
+            settingsOpen = !settingsOpen;
+            settingsMenu.classList.toggle('active', settingsOpen);
+            if (settingsOpen) enumerateMicDevices();
+        };
 
-        previewVideo.addEventListener('play', updatePlayPauseUI);
-        previewVideo.addEventListener('pause', updatePlayPauseUI);
+        micDeviceSelect.onchange = () => {
+            selectedMicId = micDeviceSelect.value;
+            if (hostMicEnabled) toggleHostMic(true);
+        };
 
-        // Prevent native or accidental clicks on the player from toggling playback
-        // Use capture listeners so they run before default browser handlers
-        ['click', 'pointerdown', 'pointerup', 'touchend'].forEach(evt => {
-            playerWrapper.addEventListener(evt, (e) => {
-                // allow interactions that are inside the controls overlay or interactive elements
-                if (e.target && e.target.closest && e.target.closest('#controlsOverlay')) return;
-                // allow clicks on links/buttons within overlays
-                if (e.target && (e.target.tagName === 'BUTTON' || e.target.tagName === 'A' || e.target.closest('button') || e.target.closest('a'))) return;
-                try { e.stopImmediatePropagation(); } catch (_) { }
-                e.stopPropagation();
-                e.preventDefault();
-            }, true); // capture=true
-
-            previewVideo.addEventListener(evt, (e) => {
-                try { e.stopImmediatePropagation(); } catch (_) { }
-                e.stopPropagation();
-                e.preventDefault();
-            }, true); // capture=true
-        });
-
-
-        // Mobile: auto-hide controls after 3 seconds of inactivity
-        const isMobile = ('ontouchstart' in window) || (navigator.maxTouchPoints && navigator.maxTouchPoints > 0) || window.matchMedia('(pointer:coarse)').matches;
-        let controlsHideTimer = null;
-        function showControlsTransient() {
-            if (!controlsOverlay) return;
-            controlsOverlay.classList.add('visible');
-            if (controlsHideTimer) clearTimeout(controlsHideTimer);
-            if (isMobile) {
-                controlsHideTimer = setTimeout(() => {
-                    controlsOverlay.classList.remove('visible');
-                }, 3000);
-            }
-        }
-
-        // Show controls on touch / interaction; on desktop hover still works via CSS
-        ['touchstart', 'mousemove'].forEach(evt => {
-            playerWrapper.addEventListener(evt, (e) => {
-                // if desktop and mousemove, don't force visibility (hover covers it)
-                if (!isMobile && evt === 'mousemove') return;
-                // ignore interactions that originated inside the controls themselves
-                if (e.target.closest && e.target.closest('#controlsOverlay')) return;
-                showControlsTransient();
-            }, { passive: true });
-        });
-
-        // Reset hide timer when interacting with controls
-        [playPauseBtn, muteBtn, fullscreenBtn].forEach(btn => {
-            if (!btn) return;
-            btn.addEventListener('click', () => showControlsTransient());
-        });
-
-        // ensure UI state set on init
-        updatePlayPauseUI();
-
-
-        toggleShareBtn.addEventListener('click', () => {
-            if (mediaStream) {
-                stopSharing();
-            } else {
-                startSharing();
-            }
-        });
-
-        const currentStreamKey = '<%= typeof streamKey !== "undefined" ? streamKey : "default" %>';
-        let streamWs = null;
-
-        let peerConnection = null;
-
-        function preferVideoCodec(transceiver) {
-            try {
-                if (!transceiver || !RTCRtpSender.getCapabilities) return;
-                const capabilities = RTCRtpSender.getCapabilities('video');
-                if (!capabilities || !Array.isArray(capabilities.codecs)) return;
-                const codecs = capabilities.codecs;
-                const preferred = codecs.filter(codec => /video\/H264/i.test(codec.mimeType));
-                const fallback = codecs.filter(codec => !/video\/H264/i.test(codec.mimeType));
-                if (preferred.length && transceiver.setCodecPreferences) {
-                    transceiver.setCodecPreferences([...preferred, ...fallback]);
-                }
-            } catch (e) { }
-        }
-
+        // ─── WebSocket Ingest Connection ───
         function connectStreamWebSocket() {
-            return new Promise((resolve) => {
-                if (streamWs && streamWs.readyState === WebSocket.OPEN) {
-                    resolve();
-                    return;
-                }
-                if (streamWs) {
-                    try { streamWs.close(); } catch (e) { }
-                    streamWs = null;
-                }
+            const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+            streamWs = new WebSocket(`${protocol}//${location.host}/stream-ws?key=${encodeURIComponent(currentStreamKey)}`);
 
-                const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-                const wsUrl = `${protocol}//${window.location.host}/stream-ws?key=${encodeURIComponent(currentStreamKey)}`;
-                streamWs = new WebSocket(wsUrl);
-
-                streamWs.onopen = () => {
-                    console.log('⚡ WebSocket Signaling Connected for [' + currentStreamKey + ']');
-                    resolve();
-                };
-
-                streamWs.onerror = (err) => {
-                    console.warn('WebSocket signaling error:', err);
-                    resolve();
-                };
-
-                streamWs.onmessage = async (event) => {
-                    try {
-                        const msg = JSON.parse(event.data);
-                        if (msg.type === 'WEBRTC_ANSWER') {
-                            if (peerConnection) {
-                                await peerConnection.setRemoteDescription(new RTCSessionDescription({ type: 'answer', sdp: msg.sdp }));
-                                console.log('⚡ WebRTC Answer set successfully!');
-                            }
-                        } else if (msg.type === 'WEBRTC_ICE_CANDIDATE') {
-                            if (peerConnection && msg.candidate) {
-                                await peerConnection.addIceCandidate(new RTCIceCandidate(msg.candidate));
-                            }
-                        }
-                    } catch (e) { }
-                };
-
-                streamWs.onclose = () => {
-                    console.warn('WebSocket closed');
-                    if (mediaStream) {
-                        setTimeout(connectStreamWebSocket, 1000);
-                    }
-                };
-
-                setTimeout(resolve, 3000);
-            });
-        }
-
-        // Status WS: update basic host UI
-        function connectHostStatusWebSocket() {
-            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-            const wsUrl = `${protocol}//${window.location.host}/status-ws?key=${encodeURIComponent(currentStreamKey)}`;
-            const statusWs = new WebSocket(wsUrl);
-
-            statusWs.onmessage = (event) => {
-                try {
-                    const data = JSON.parse(event.data);
-                    if (data.type === 'STATUS') {
-                        if (topStatusBox) topStatusBox.style.display = data.live ? 'flex' : 'none';
-                    }
-                } catch (e) { }
+            streamWs.onopen = () => {
+                console.log('[Host WS] Connected to room server');
             };
 
-            statusWs.onclose = () => setTimeout(connectHostStatusWebSocket, 3000);
-        }
-        connectHostStatusWebSocket();
+            streamWs.onmessage = async (event) => {
+                try {
+                    const msg = JSON.parse(event.data);
 
-        function updateConnBadge(status, color) {
-            if (connDot) connDot.style.background = color;
-            if (connText) connText.textContent = status;
-            const badge = document.getElementById('topConnBadge');
-            if (badge) {
-                badge.style.background = color === '#10b981' ? '#072f18' :
-                    color === '#f59e0b' ? '#2f2207' : '#2f0707';
-                badge.style.color = color === '#10b981' ? '#9fe6c4' :
-                    color === '#f59e0b' ? '#f5c490' : '#f59090';
+                    if (msg.type === 'WEBRTC_ANSWER') {
+                        if (peerConnection) {
+                            await peerConnection.setRemoteDescription(new RTCSessionDescription({ type: 'answer', sdp: msg.sdp }));
+                        }
+                    } else if (msg.type === 'WEBRTC_ICE_CANDIDATE') {
+                        if (peerConnection && msg.candidate) {
+                            await peerConnection.addIceCandidate(new RTCIceCandidate(msg.candidate));
+                        }
+                    } else if (msg.type === 'PARTICIPANT_LIST') {
+                        participants = msg.participants || [];
+                        const approvedIds = new Set(participants.map(p => p.id));
+                        pendingParticipants = pendingParticipants.filter(p => !approvedIds.has(p.id));
+                        renderLists();
+                    } else if (msg.type === 'JOIN_REQUEST') {
+                        pendingParticipants = pendingParticipants.filter(p => p.id !== msg.participantId);
+                        pendingParticipants.push({ id: msg.participantId, name: msg.name });
+                        renderLists();
+                        if (!sidebarOpen) toggleSidebar('people');
+                        toast(`${msg.name} requested to join`);
+                    } else if (msg.type === 'CHAT_MESSAGE') {
+                        addChatMessage(msg.from, msg.text);
+                    }
+                } catch (e) {}
+            };
+
+            streamWs.onclose = () => {
+                setTimeout(connectStreamWebSocket, 2000);
+            };
+        }
+        connectStreamWebSocket();
+
+        function wsSend(obj) {
+            if (streamWs && streamWs.readyState === WebSocket.OPEN) {
+                streamWs.send(JSON.stringify(obj));
             }
         }
 
-        function startConnMonitor() {
-            updateConnBadge('Connecting WebRTC...', '#f59e0b');
-        }
-
-        function stopConnMonitor() {
-            updateConnBadge('Offline', '#6b7280');
-        }
-
-        function showStreamLoader(title, subtitle) {
-            const modal = document.getElementById('streamLoaderModal');
-            if (title) document.getElementById('loaderTitle').textContent = title;
-            if (subtitle) document.getElementById('loaderSubtitle').textContent = subtitle;
-            modal.style.display = 'flex';
-        }
-
-        function hideStreamLoader() {
-            const modal = document.getElementById('streamLoaderModal');
-            modal.style.display = 'none';
-        }
-
-        let keepAliveAudioCtx = null;
-        function enableBackgroundKeepAlive() {
-            try {
-                if (!keepAliveAudioCtx) {
-                    keepAliveAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
-                    const osc = keepAliveAudioCtx.createOscillator();
-                    const gain = keepAliveAudioCtx.createGain();
-                    gain.gain.value = 0.0001;
-                    osc.connect(gain);
-                    gain.connect(keepAliveAudioCtx.destination);
-                    osc.start();
-                }
-                if (keepAliveAudioCtx.state === 'suspended') {
-                    keepAliveAudioCtx.resume();
-                }
-            } catch (e) { }
-        }
-
+        // ─── WebRTC Session Setup ───
         async function startWebRtcSession() {
             if (peerConnection) {
-                try { peerConnection.close(); } catch (e) { }
+                try { peerConnection.close(); } catch (e) {}
                 peerConnection = null;
             }
 
-            peerConnection = new RTCPeerConnection({
-                iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
-            });
+            peerConnection = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
+
+            peerConnection.ontrack = (event) => {
+                const stream = event.streams && event.streams[0] ? event.streams[0] : new MediaStream([event.track]);
+                viewerAudio.srcObject = stream;
+                viewerAudio.play().catch(() => {});
+            };
 
             peerConnection.onicecandidate = (event) => {
-                if (event.candidate && streamWs && streamWs.readyState === WebSocket.OPEN) {
-                    streamWs.send(JSON.stringify({
-                        type: 'WEBRTC_ICE_CANDIDATE',
-                        candidate: event.candidate
-                    }));
+                if (event.candidate) {
+                    wsSend({ type: 'WEBRTC_ICE_CANDIDATE', candidate: event.candidate });
                 }
             };
 
-            peerConnection.oniceconnectionstatechange = () => {
-                console.log(`[WebRTC State] ${peerConnection.iceConnectionState}`);
-                if (peerConnection.iceConnectionState === 'connected' || peerConnection.iceConnectionState === 'completed') {
-                    updateConnBadge('Stable 720p WebRTC', '#10b981');
-                } else if (peerConnection.iceConnectionState === 'failed') {
-                    updateConnBadge('WebRTC Reconnecting', '#ef4444');
-                }
-            };
+            let hasTrack = false;
 
             if (mediaStream) {
                 mediaStream.getTracks().forEach(track => {
-                    const sender = peerConnection.addTrack(track, mediaStream);
-                    if (track.kind === 'video') {
-                        const transceiver = peerConnection.getTransceivers().find(t => t.sender === sender);
-                        preferVideoCodec(transceiver);
-                    }
+                    peerConnection.addTrack(track, mediaStream);
+                    hasTrack = true;
                 });
             }
 
-            const senders = peerConnection.getSenders();
-            const videoSender = senders.find(s => s.track && s.track.kind === 'video');
-            if (videoSender) {
-                try {
-                    const params = videoSender.getParameters();
-                    if (!params.encodings) params.encodings = [{}];
-                    params.encodings[0].maxBitrate = STREAM_TARGET.bitrate;
-                    params.encodings[0].maxFramerate = STREAM_TARGET.fps;
-                    params.encodings[0].priority = 'high';
-                    params.encodings[0].networkPriority = 'high';
-                    await videoSender.setParameters(params);
-                } catch (e) { console.warn('setParameters error', e); }
+            if (hostMicStream) {
+                const audioTracks = hostMicStream.getAudioTracks();
+                if (audioTracks.length > 0 && audioTracks[0].readyState === 'live') {
+                    hostAudioSender = peerConnection.addTrack(audioTracks[0], hostMicStream);
+                    hasTrack = true;
+                }
             }
 
-            const audioSender = senders.find(s => s.track && s.track.kind === 'audio');
-            if (audioSender) {
-                try {
-                    const params = audioSender.getParameters();
-                    if (!params.encodings) params.encodings = [{}];
-                    params.encodings[0].maxBitrate = 256000;
-                    params.encodings[0].priority = 'high';
-                    params.encodings[0].networkPriority = 'high';
-                    await audioSender.setParameters(params);
-                } catch (e) { console.warn('Audio setParameters error', e); }
-            }
-
-            const offer = await peerConnection.createOffer({
-                offerToReceiveAudio: false,
-                offerToReceiveVideo: false
-            });
-
-            let sdp = offer.sdp;
-            if (!sdp.includes('b=AS:')) {
-                sdp = sdp.replace(/(m=video [^\r\n]+\r\n)/, `$1b=AS:${streamBitrate}\r\nb=TIAS:${STREAM_TARGET.bitrate}\r\n`);
-            }
-            await peerConnection.setLocalDescription({ type: 'offer', sdp });
-
-            if (streamWs && streamWs.readyState === WebSocket.OPEN) {
-                streamWs.send(JSON.stringify({
-                    type: 'WEBRTC_OFFER',
-                    sdp: peerConnection.localDescription.sdp
-                }));
-            }
-        }
-
-        async function startSharing() {
-            if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
-                alert("Screen Sharing requires HTTPS or localhost.");
+            if (!hasTrack) {
                 return;
             }
 
+            const offer = await peerConnection.createOffer({ offerToReceiveAudio: true, offerToReceiveVideo: false });
+            
+            let sdp = offer.sdp;
+            sdp = sdp.replace(/(a=fmtp:111 [^\r\n]+)/, "$1;stereo=1;sprop-stereo=1;maxaveragebitrate=510000;cbr=1;useinbandfec=1");
+            
+            await peerConnection.setLocalDescription({ type: 'offer', sdp });
+            wsSend({ type: 'WEBRTC_OFFER', sdp: peerConnection.localDescription.sdp });
+        }
+
+        // ─── Host Microphone Controls ───
+        micToggleBtn.onclick = () => toggleHostMic();
+
+        async function toggleHostMic(forceOn = false) {
+            if (hostMicEnabled && !forceOn) {
+                if (hostMicStream) {
+                    hostMicStream.getTracks().forEach(t => t.stop());
+                    hostMicStream = null;
+                }
+                hostMicEnabled = false;
+                micToggleBtn.classList.add('off');
+                micToggleBtn.querySelector('i').className = 'fa-solid fa-microphone-slash';
+                wsSend({ type: 'HOST_MIC_TOGGLE', enabled: false });
+                if (isSharingScreen) {
+                    await startWebRtcSession();
+                }
+                toast('Microphone muted');
+            } else {
+                try {
+                    const constraints = { audio: { echoCancellation: true, noiseSuppression: true } };
+                    if (selectedMicId) constraints.audio.deviceId = { exact: selectedMicId };
+
+                    hostMicStream = await navigator.mediaDevices.getUserMedia(constraints);
+                    hostMicEnabled = true;
+                    micToggleBtn.classList.remove('off');
+                    micToggleBtn.querySelector('i').className = 'fa-solid fa-microphone';
+                    wsSend({ type: 'HOST_MIC_TOGGLE', enabled: true });
+                    
+                    await startWebRtcSession();
+                    toast('Microphone unmuted');
+                } catch (e) {
+                    toast('Could not access microphone');
+                }
+            }
+            renderMeetGrid();
+        }
+
+        // ─── Host Screen Sharing Controls ───
+        startBtn.onclick = async () => {
+            if (isSharingScreen) {
+                stopScreenShare();
+            } else {
+                startScreenShare();
+            }
+        };
+
+        async function startScreenShare() {
             try {
-                enableBackgroundKeepAlive();
-                const constraints = {
-                    video: {
-                        width: { ideal: STREAM_TARGET.width, max: STREAM_TARGET.width },
-                        height: { ideal: STREAM_TARGET.height, max: STREAM_TARGET.height },
-                        frameRate: { ideal: STREAM_TARGET.fps, max: STREAM_TARGET.fps },
-                        resizeMode: 'crop-and-scale'
-                    },
+                mediaStream = await navigator.mediaDevices.getDisplayMedia({
+                    video: { width: 1920, height: 1080, frameRate: 30 },
                     audio: {
+                        autoGainControl: false,
                         echoCancellation: false,
                         noiseSuppression: false,
-                        autoGainControl: false,
-                        channelCount: 2,
-                        sampleRate: 48000
+                        channelCount: 2
                     }
-                };
+                });
+                
+                localPreview.srcObject = mediaStream;
+                localPreview.muted = true;
+                localPreview.volume = 0;
+                localPreview.play();
 
-                mediaStream = await navigator.mediaDevices.getDisplayMedia(constraints);
+                mediaStream.getVideoTracks()[0].onended = () => stopScreenShare();
 
-                showStreamLoader("Preparing Live Stream Engine...", "Initializing 720p30 WebRTC relay...");
-
-                await fetch('/reset-stream/' + currentStreamKey, { method: 'POST' });
-                startConnMonitor();
-
-                await connectStreamWebSocket();
+                isSharingScreen = true;
+                presentBtnText.textContent = 'Stop sharing';
+                startBtn.classList.add('sharing');
+                
+                updateStageLayout();
                 await startWebRtcSession();
-
-                previewVideo.srcObject = mediaStream;
-                previewVideo.classList.add('active');
-                placeholder.style.display = 'none';
-                if (topStatusBox) topStatusBox.style.display = 'flex';
-
-                const videoTrack = mediaStream.getVideoTracks()[0];
-                if (videoTrack) {
-                    const trackSettings = videoTrack.getSettings();
-                    console.log(`[Capture] Resolution: ${trackSettings.width}x${trackSettings.height} @ ${trackSettings.frameRate}fps`);
-                    if (topQualityBadge) topQualityBadge.textContent = `720p 30FPS WebRTC`;
-
-                    videoTrack.addEventListener('ended', () => {
-                        if (!isPageUnloading && document.visibilityState !== 'hidden') stopSharing();
-                    });
-                }
-
-                toggleShareBtn.classList.remove('start');
-                toggleShareBtn.classList.add('stop');
-                btnText.textContent = 'Stop Sharing';
-
-                previewVideo.play();
-                hideStreamLoader();
-            } catch (err) {
-                console.error("Error accessing screen share:", err);
-                hideStreamLoader();
+                toast('Screen share started');
+            } catch (e) {
+                toast('Screen share cancelled');
             }
         }
 
-        function stopSharing() {
-            if (isPageUnloading || document.visibilityState === 'hidden') return;
-
-            if (peerConnection) {
-                try { peerConnection.close(); } catch (e) { }
-                peerConnection = null;
-            }
-
+        function stopScreenShare() {
             if (mediaStream) {
-                mediaStream.getTracks().forEach(track => track.stop());
+                mediaStream.getTracks().forEach(t => t.stop());
                 mediaStream = null;
             }
-
-            if (streamWs) {
-                try { streamWs.close(); } catch (e) { }
-                streamWs = null;
-            }
-
-            fetch('/stop-stream/' + currentStreamKey, { method: 'POST' }).catch(err => console.warn('Error calling /stop-stream:', err));
-
-            previewVideo.srcObject = null;
-            previewVideo.classList.remove('active');
-            placeholder.style.display = 'flex';
-            if (topStatusBox) topStatusBox.style.display = 'none';
-            stopConnMonitor();
-
-            toggleShareBtn.classList.remove('stop');
-            toggleShareBtn.classList.add('start');
-            btnText.textContent = 'Share Screen';
+            isSharingScreen = false;
+            presentBtnText.textContent = 'Present now';
+            startBtn.classList.remove('sharing');
+            updateStageLayout();
+            if (hostMicEnabled) startWebRtcSession();
+            toast('Screen share stopped');
         }
 
-        // Controls
-        muteBtn.addEventListener('click', () => {
-            previewVideo.muted = !previewVideo.muted;
-            if (previewVideo.muted) {
-                unmutedIcon.style.display = 'none';
-                mutedIcon.style.display = 'block';
+        function updateStageLayout() {
+            if (isSharingScreen) {
+                meetVideoContainer.classList.add('active');
+                meetGrid.style.display = 'none';
+                modeText.textContent = 'Screen Shared';
             } else {
-                unmutedIcon.style.display = 'block';
-                mutedIcon.style.display = 'none';
+                meetVideoContainer.classList.remove('active');
+                meetGrid.style.display = 'grid';
+                modeText.textContent = 'Voice Call Live';
             }
-        });
-
-        fullscreenBtn.addEventListener('click', () => {
-            if (!document.fullscreenElement) {
-                playerWrapper.requestFullscreen().catch(err => console.error(err));
-            } else {
-                document.exitFullscreen();
-            }
-        });
-
-        // Copy live preview link to clipboard when watch/copy button is pressed
-        const watchLiveBtnEl = document.getElementById('watchLiveBtn');
-        function showCopyToast(text) {
-            let toast = document.getElementById('copyToast');
-            if (!toast) {
-                toast = document.createElement('div');
-                toast.id = 'copyToast';
-                toast.style.position = 'fixed';
-                toast.style.bottom = '96px';
-                toast.style.left = '50%';
-                toast.style.transform = 'translateX(-50%)';
-                toast.style.background = 'rgba(0,0,0,0.8)';
-                toast.style.color = '#fff';
-                toast.style.padding = '8px 12px';
-                toast.style.borderRadius = '8px';
-                toast.style.zIndex = '10000';
-                toast.style.fontSize = '0.9rem';
-                toast.style.boxShadow = '0 6px 18px rgba(0,0,0,0.5)';
-                document.body.appendChild(toast);
-            }
-            toast.textContent = text;
-            toast.style.opacity = '1';
-            toast.style.transition = 'opacity 0.25s ease';
-            setTimeout(() => {
-                toast.style.opacity = '0';
-            }, 1800);
         }
 
-        if (watchLiveBtnEl) {
-            watchLiveBtnEl.addEventListener('click', async (e) => {
-                e.preventDefault();
-                const url = `${window.location.protocol}//${window.location.host}/live/${encodeURIComponent(currentStreamKey)}`;
-                try {
-                    if (navigator.clipboard && navigator.clipboard.writeText) {
-                        await navigator.clipboard.writeText(url);
-                        showCopyToast('Stream link copied to clipboard');
-                    } else {
-                        // Fallback copy
-                        const ta = document.createElement('textarea');
-                        ta.value = url;
-                        ta.style.position = 'fixed';
-                        ta.style.opacity = '0';
-                        document.body.appendChild(ta);
-                        ta.select();
-                        document.execCommand('copy');
-                        document.body.removeChild(ta);
-                        showCopyToast('Stream link copied to clipboard');
-                    }
-                    // small visual feedback: flash the button
-                    watchLiveBtnEl.style.transform = 'scale(0.95)';
-                    setTimeout(() => watchLiveBtnEl.style.transform = '', 150);
-                } catch (err) {
-                    console.warn('Copy failed', err);
-                    showCopyToast('Unable to copy link');
-                }
+        // ─── Sidebar Drawer & Tabs ───
+        function toggleSidebar(tab) {
+            if (sidebarOpen && activeTab === tab) {
+                meetSidebar.classList.remove('active');
+                sidebarOpen = false;
+                dockChatBtn.classList.remove('active');
+                dockPeopleBtn.classList.remove('active');
+                return;
+            }
+
+            activeTab = tab;
+            sidebarOpen = true;
+            meetSidebar.classList.add('active');
+            
+            tabChatBtn.classList.toggle('active', tab === 'chat');
+            tabPeopleBtn.classList.toggle('active', tab === 'people');
+            bodyChat.classList.toggle('active', tab === 'chat');
+            bodyPeople.classList.toggle('active', tab === 'people');
+            
+            dockChatBtn.classList.toggle('active', tab === 'chat');
+            dockPeopleBtn.classList.toggle('active', tab === 'people');
+        }
+
+        dockChatBtn.onclick = () => toggleSidebar('chat');
+        dockPeopleBtn.onclick = () => toggleSidebar('people');
+        tabChatBtn.onclick = () => toggleSidebar('chat');
+        tabPeopleBtn.onclick = () => toggleSidebar('people');
+        sidebarClose.onclick = () => {
+            meetSidebar.classList.remove('active');
+            sidebarOpen = false;
+            dockChatBtn.classList.remove('active');
+            dockPeopleBtn.classList.remove('active');
+        };
+
+        function renderLists() {
+            // Pending Requests
+            const pendingLen = pendingParticipants.length;
+            pendingCountNum.textContent = pendingLen;
+            pendingBadge.textContent = pendingLen;
+            pendingBadge.style.display = pendingLen > 0 ? 'flex' : 'none';
+            pendingSection.style.display = pendingLen > 0 ? 'block' : 'none';
+
+            pendingList.innerHTML = '';
+            pendingParticipants.forEach(p => {
+                const card = document.createElement('div');
+                card.className = 'pending-card';
+                const initial = (p.name || 'U').charAt(0).toUpperCase();
+                card.innerHTML = `
+                    <div class="person-info-group">
+                        <div class="person-avatar">${initial}</div>
+                        <div class="person-name">${escapeHtml(p.name)}</div>
+                    </div>
+                    <div class="person-actions-group">
+                        <button class="action-icon-btn btn-approve" title="Approve" onclick="approveUser('${p.id}')"><i class="fa-solid fa-check"></i></button>
+                        <button class="action-icon-btn btn-deny" title="Deny" onclick="denyUser('${p.id}')"><i class="fa-solid fa-xmark"></i></button>
+                    </div>
+                `;
+                pendingList.appendChild(card);
+            });
+
+            // Approved Viewers
+            const approvedViewers = participants.filter(p => p.role !== 'host');
+            approvedCountNum.textContent = approvedViewers.length + 1;
+            peopleCount.textContent = approvedViewers.length + 1;
+            participantCountText.textContent = approvedViewers.length + 1;
+
+            approvedList.innerHTML = '';
+            // Render Host Row
+            const hostRow = document.createElement('div');
+            hostRow.className = 'person-row';
+            hostRow.innerHTML = `
+                <div class="person-info-group">
+                    <div class="person-avatar" style="background:#1a73e8;">${hostName.charAt(0).toUpperCase()}</div>
+                    <div class="person-name">${escapeHtml(hostName)} (You)</div>
+                </div>
+                <div class="person-actions-group">
+                    <i class="fa-solid ${hostMicEnabled ? 'fa-microphone' : 'fa-microphone-slash'}" style="color:${hostMicEnabled ? '#34a853' : 'var(--meet-subtext)'}; font-size:1rem;"></i>
+                </div>
+            `;
+            approvedList.appendChild(hostRow);
+
+            approvedViewers.forEach(p => {
+                const row = document.createElement('div');
+                row.className = 'person-row';
+                const initial = (p.name || 'U').charAt(0).toUpperCase();
+                row.innerHTML = `
+                    <div class="person-info-group">
+                        <div class="person-avatar">${initial}</div>
+                        <div class="person-name">${escapeHtml(p.name)}</div>
+                    </div>
+                    <div class="person-actions-group">
+                        <button class="action-icon-btn btn-talk ${p.canTalk ? 'active' : ''}" title="${p.canTalk ? 'Mute user' : 'Allow talk'}" onclick="toggleTalk('${p.id}', ${!p.canTalk})">
+                            <i class="fa-solid ${p.canTalk ? 'fa-microphone' : 'fa-microphone-slash'}"></i>
+                        </button>
+                        <button class="action-icon-btn btn-kick" title="Remove" onclick="kickUser('${p.id}')">
+                            <i class="fa-solid fa-trash-can"></i>
+                        </button>
+                    </div>
+                `;
+                approvedList.appendChild(row);
+            });
+
+            renderMeetGrid();
+        }
+
+        window.approveUser = function(id) {
+            pendingParticipants = pendingParticipants.filter(p => p.id !== id);
+            renderLists();
+            wsSend({ type: 'HOST_APPROVE', participantId: id });
+        };
+
+        window.denyUser = function(id) {
+            pendingParticipants = pendingParticipants.filter(p => p.id !== id);
+            renderLists();
+            wsSend({ type: 'HOST_DENY', participantId: id });
+        };
+
+        window.toggleTalk = function(id, allowed) {
+            wsSend({ type: 'HOST_ALLOW_TALK', participantId: id, allowed });
+        };
+
+        window.kickUser = function(id) {
+            wsSend({ type: 'HOST_KICK', participantId: id });
+        };
+
+        approveAllBtn.onclick = () => {
+            pendingParticipants = [];
+            renderLists();
+            wsSend({ type: 'HOST_APPROVE_ALL' });
+        };
+
+        // ─── Adaptive Grid Rendering (1, 2, 3... 10 participants) ───
+        function renderMeetGrid() {
+            meetGrid.innerHTML = '';
+            
+            const cardsData = [
+                { id: 'host', name: hostName, isHost: true, micEnabled: hostMicEnabled }
+            ];
+
+            participants.filter(p => p.role !== 'host').forEach(p => {
+                cardsData.push({ id: p.id, name: p.name, isHost: false, micEnabled: p.micEnabled });
+            });
+
+            const count = cardsData.length;
+            if (count === 1) {
+                meetGrid.style.gridTemplateColumns = '1fr';
+                meetGrid.style.gridTemplateRows = '1fr';
+            } else if (count === 2) {
+                meetGrid.style.gridTemplateColumns = '1fr 1fr';
+                meetGrid.style.gridTemplateRows = '1fr';
+            } else if (count <= 4) {
+                meetGrid.style.gridTemplateColumns = '1fr 1fr';
+                meetGrid.style.gridTemplateRows = '1fr 1fr';
+            } else if (count <= 6) {
+                meetGrid.style.gridTemplateColumns = 'repeat(3, 1fr)';
+                meetGrid.style.gridTemplateRows = '1fr 1fr';
+            } else {
+                meetGrid.style.gridTemplateColumns = 'repeat(4, 1fr)';
+                meetGrid.style.gridTemplateRows = 'auto';
+            }
+
+            cardsData.forEach(cardData => {
+                const card = document.createElement('div');
+                card.className = 'meet-card' + (cardData.micEnabled ? ' speaking' : '');
+                const initial = (cardData.name || 'U').charAt(0).toUpperCase();
+                card.innerHTML = `
+                    <div class="meet-avatar" ${cardData.isHost ? 'style="background:#1a73e8;"' : ''}>${initial}</div>
+                    <div class="meet-name-tag"><span>${escapeHtml(cardData.name)} ${cardData.isHost ? '👑' : ''}</span></div>
+                    <div class="meet-card-mic ${cardData.micEnabled ? '' : 'off'}">
+                        <i class="fa-solid ${cardData.micEnabled ? 'fa-microphone' : 'fa-microphone-slash'}"></i>
+                    </div>
+                `;
+                meetGrid.appendChild(card);
             });
         }
+
+        // ─── Chat Message Rendering ───
+        function sendChat() {
+            const text = chatInput.value.trim();
+            if (!text) return;
+            wsSend({ type: 'HOST_CHAT', text });
+            chatInput.value = '';
+        }
+        chatSend.onclick = sendChat;
+        chatInput.onkeydown = (e) => { if (e.key === 'Enter') sendChat(); };
+
+        function addChatMessage(from, text) {
+            const item = document.createElement('div');
+            const isOwn = (from === hostName);
+            item.className = 'chat-item' + (isOwn ? ' own' : '');
+            const now = new Date();
+            const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            
+            item.innerHTML = `
+                <div class="chat-header">
+                    <span class="author">${escapeHtml(isOwn ? 'You' : from)}</span>
+                    <span>${timeStr}</span>
+                </div>
+                <div class="chat-bubble">${escapeHtml(text)}</div>
+            `;
+            chatList.appendChild(item);
+            chatList.scrollTop = chatList.scrollHeight;
+        }
+
+        function escapeHtml(str) {
+            const div = document.createElement('div');
+            div.textContent = str;
+            return div.innerHTML;
+        }
+
+        copyLinkBtn.onclick = () => {
+            const link = `${location.origin}/live/${currentStreamKey}`;
+            navigator.clipboard.writeText(link).then(() => toast('Meeting link copied to clipboard')).catch(() => {});
+        };
+
+        stopBtn.onclick = () => {
+            if (confirm('End meeting call?')) {
+                location.href = '/';
+            }
+        };
+
+        // Render initial host tile and lists on page load immediately!
+        renderLists();
+    })();
     </script>
 </body>
-
 </html>

@@ -1,505 +1,707 @@
 <!DOCTYPE html>
 <html lang="en">
-
 <head>
     <meta charset="UTF-8">
-    <title>
-        <%= stream.title %> | CoWatch Player
-    </title>
+    <title><%= stream.title %> | Google Meet</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <link rel="icon" type="image/png" href="/favicon.png">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
-    <link rel="stylesheet" href="/css/output.css">
+    <link href="https://fonts.googleapis.com/css2?family=Google+Sans:wght@400;500;700&family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
     <style>
-        /* Center play button and improved controls transitions */
         :root {
-            --progress-bg: #2a323b;
-            --progress-fill: #82A3A1;
-            --value: 100%;
+            --meet-bg: #202124;
+            --meet-stage-bg: #141517;
+            --meet-card-bg: #3c4043;
+            --meet-card-dark: #28292c;
+            --meet-hover: #474b50;
+            --meet-primary: #1a73e8;
+            --meet-red: #ea4335;
+            --meet-green: #188038;
+            --meet-text: #e8eaed;
+            --meet-subtext: #9aa0a6;
+            --meet-border: rgba(255, 255, 255, 0.1);
         }
+        * { margin:0; padding:0; box-sizing:border-box; }
+        html, body { width:100%; height:100%; overflow:hidden; font-family:'Google Sans', 'Roboto', sans-serif; background:var(--meet-bg); color:var(--meet-text); }
 
-        html,
-        body {
-            margin: 0;
-            padding: 0;
-            width: 100%;
-            height: 100%;
-            min-height: 100vh;
-            min-height: 100dvh;
-            overflow: hidden;
-            background: #000000;
-        }
+        /* ─── Screens ─── */
+        .screen { position:absolute; inset:0; display:none; flex-direction:column; align-items:center; justify-content:center; z-index:100; }
+        .screen.active { display:flex; }
 
-        .sh-player {
-            width: 100%;
-            max-width: 100%;
-            max-height: 100dvh;
-            aspect-ratio: 16/9;
-            background: #000;
-            position: relative;
-            overflow: hidden;
-            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.8);
-            transition: all 0.3s ease;
-        }
+        /* ─── Join Screen ─── */
+        #join-screen { background:var(--meet-bg); }
+        .join-container { display:flex; gap:40px; align-items:center; max-width:960px; width:90%; }
+        
+        .join-preview { flex:1.2; aspect-ratio:16/9; background:#171717; border-radius:16px; position:relative; overflow:hidden; display:flex; align-items:center; justify-content:center; box-shadow:0 12px 32px rgba(0,0,0,0.5); border:1px solid var(--meet-border); }
+        .join-preview-avatar { width:100px; height:100px; border-radius:50%; background:#5f6368; color:#fff; display:flex; align-items:center; justify-content:center; font-size:2.8rem; font-weight:500; }
 
-        @media (min-width: 1200px) {
-            .sh-player {
-                max-width: 1200px;
-                border-radius: 12px;
-            }
-        }
+        .join-form-card { flex:1; display:flex; flex-direction:column; gap:20px; }
+        .join-form-card h1 { font-size:1.75rem; font-weight:400; color:#fff; letter-spacing:-0.01em; }
+        .join-form-card p { color:var(--meet-subtext); font-size:0.95rem; }
+        .join-input { width:100%; padding:16px 20px; border-radius:8px; border:1px solid #5f6368; background:#28292c; color:#fff; font-size:1rem; outline:none; transition:border-color 0.2s; }
+        .join-input:focus { border-color:var(--meet-primary); }
+        .join-action-btn { padding:14px 28px; border-radius:24px; border:none; background:var(--meet-primary); color:#fff; font-weight:500; font-size:0.95rem; cursor:pointer; transition:all 0.2s; display:inline-flex; align-items:center; justify-content:center; gap:8px; width:fit-content; box-shadow:0 4px 12px rgba(26,115,232,0.3); }
+        .join-action-btn:hover { background:#1557b0; transform:translateY(-1px); }
+        .join-action-btn:disabled { opacity:0.5; cursor:not-allowed; transform:none; }
+        .join-error { color:var(--meet-red); font-size:0.85rem; min-height:20px; }
 
-        :fullscreen .sh-player,
-        :-webkit-full-screen .sh-player,
-        :-moz-full-screen .sh-player {
-            border-radius: 0 !important;
-            width: 100vw !important;
-            height: 100vh !important;
-            max-width: none !important;
-            max-height: none !important;
-            aspect-ratio: auto !important;
-        }
+        /* ─── Waiting & Kicked Screens ─── */
+        #waiting-screen, #kicked-screen { background:var(--meet-bg); text-align:center; }
+        .waiting-box { display:flex; flex-direction:column; align-items:center; gap:16px; max-width:420px; }
+        .waiting-spinner { width:48px; height:48px; border:4px solid rgba(255,255,255,0.1); border-top-color:var(--meet-primary); border-radius:50%; animation:spin 0.8s linear infinite; }
+        @keyframes spin { to { transform:rotate(360deg); } }
 
-        #sh-controls {
-            padding-bottom: calc(env(safe-area-inset-bottom) + 1.25rem) !important;
-        }
+        /* ─── Main Meeting Interface ─── */
+        #main-screen { width:100%; height:100vh; background:var(--meet-stage-bg); flex-direction:column; position:relative; overflow:hidden; }
 
-        /* Smooth controls hide transition */
-        #sh-controls {
-            transition: opacity 0.22s ease, transform 0.18s ease;
-        }
+        /* Top Meeting Header */
+        .meet-top-bar { position:absolute; top:0; left:0; right:0; height:56px; display:flex; align-items:center; justify-content:space-between; padding:0 24px; z-index:30; background:linear-gradient(to bottom, rgba(20,21,23,0.95), transparent); pointer-events:none; }
+        .meet-top-bar > * { pointer-events:auto; }
+        .meet-room-info { display:flex; align-items:center; gap:12px; }
+        .meet-title { font-size:1rem; font-weight:500; color:#fff; }
+        .meet-badge { padding:4px 10px; border-radius:12px; font-size:0.75rem; font-weight:500; background:rgba(255,255,255,0.08); color:var(--meet-subtext); display:inline-flex; align-items:center; gap:6px; }
+        .meet-badge.live { background:rgba(24,128,56,0.2); color:#81c995; }
+        .meet-badge-dot { width:6px; height:6px; border-radius:50%; background:#34a853; }
+
+        /* Main Stage Area */
+        .meet-stage { flex:1; width:100%; height:calc(100vh - 76px); display:flex; flex-direction:row; gap:16px; position:relative; overflow:hidden; padding:64px 16px 16px 16px; align-items:center; justify-content:center; }
+
+        /* Adaptive Grid View (Normal Talking Mode) */
+        .meet-grid { flex:1; min-width:0; height:100%; display:grid; gap:16px; align-content:center; justify-content:center; max-width:1400px; margin:0 auto; transition:all 0.3s ease; }
+        
+        .meet-card { background:var(--meet-card-dark); border-radius:16px; position:relative; overflow:hidden; display:flex; flex-direction:column; align-items:center; justify-content:center; transition:all 0.25s ease; border:2px solid transparent; box-shadow:0 4px 20px rgba(0,0,0,0.4); width:100%; height:100%; min-height:0; }
+        .meet-card.speaking { border-color:#1a73e8; box-shadow:0 0 20px rgba(26,115,232,0.4); }
+        .meet-avatar { width:96px; height:96px; border-radius:50%; background:#5f6368; color:#fff; display:flex; align-items:center; justify-content:center; font-size:2.4rem; font-weight:500; box-shadow:0 4px 16px rgba(0,0,0,0.3); }
+        
+        .meet-name-tag { position:absolute; bottom:12px; left:12px; background:rgba(32,33,36,0.85); backdrop-filter:blur(8px); padding:4px 12px; border-radius:6px; font-size:0.82rem; font-weight:500; color:#fff; display:flex; align-items:center; gap:8px; }
+        .meet-card-mic { position:absolute; top:12px; right:12px; width:28px; height:28px; border-radius:50%; background:rgba(32,33,36,0.85); backdrop-filter:blur(8px); display:flex; align-items:center; justify-content:center; font-size:0.75rem; color:#fff; }
+        .meet-card-mic.off { background:var(--meet-red); color:#fff; }
+
+        /* Video Container (Screen Share Mode) - FULL STAGE */
+        .meet-video-container { flex:1; min-width:0; height:100%; display:none; position:relative; background:#000; border-radius:16px; overflow:hidden; border:1px solid var(--meet-border); align-items:center; justify-content:center; transition:all 0.3s ease; }
+        .meet-video-container.active { display:flex; }
+        #host-video { width:100%; height:100%; object-fit:contain; }
+
+        /* Fullscreen Mode Overrides */
+        :fullscreen .meet-top-bar, :-webkit-full-screen .meet-top-bar { display: none !important; }
+        :fullscreen .meet-stage, :-webkit-full-screen .meet-stage { padding: 0 !important; height: 100vh !important; width: 100vw !important; }
+        :fullscreen .meet-video-container, :-webkit-full-screen .meet-video-container { border-radius: 0 !important; border: none !important; width: 100vw !important; height: 100vh !important; }
+        :fullscreen #host-video, :-webkit-full-screen #host-video { width: 100vw !important; height: 100vh !important; object-fit: contain !important; }
+
+        /* Bottom Control Dock */
+        .meet-dock-wrapper { position:absolute; bottom:16px; left:50%; transform:translateX(-50%); z-index:40; }
+        .meet-dock { background:#202124; border:1px solid rgba(255,255,255,0.08); padding:8px 16px; border-radius:36px; display:flex; align-items:center; gap:12px; box-shadow:0 8px 28px rgba(0,0,0,0.6); }
+        
+        .dock-btn { width:44px; height:44px; border-radius:50%; border:none; background:#3c4043; color:#e8eaed; font-size:1.15rem; cursor:pointer; display:flex; align-items:center; justify-content:center; transition:all 0.2s cubic-bezier(0.4,0,0.2,1); position:relative; }
+        .dock-btn:hover { background:#474b50; transform:scale(1.05); }
+        .dock-btn.active { background:var(--meet-primary); color:#fff; }
+        .dock-btn.off { background:var(--meet-red); color:#fff; }
+        .dock-btn:disabled { opacity:0.4; cursor:not-allowed; transform:none; }
+        
+        .dock-divider { width:1px; height:24px; background:rgba(255,255,255,0.18); margin:0 2px; }
+        .dock-end-btn { width:64px; height:44px; border-radius:22px; border:none; background:var(--meet-red); color:#fff; font-size:1.15rem; cursor:pointer; display:flex; align-items:center; justify-content:center; transition:all 0.2s; }
+        .dock-end-btn:hover { background:#dc2626; transform:scale(1.05); }
+
+        /* Settings Menu Popup */
+        .settings-menu { position:absolute; bottom:70px; left:50%; transform:translateX(-50%); background:#28292c; border:1px solid var(--meet-border); border-radius:12px; padding:12px; width:280px; box-shadow:0 12px 32px rgba(0,0,0,0.6); display:none; flex-direction:column; gap:8px; z-index:50; }
+        .settings-menu.active { display:flex; }
+        .settings-header { font-size:0.85rem; font-weight:500; color:var(--meet-subtext); margin-bottom:4px; }
+        .device-select { width:100%; padding:8px 12px; border-radius:6px; border:1px solid #5f6368; background:#202124; color:#fff; font-size:0.85rem; outline:none; }
+
+        /* Sidebar Drawer */
+        .meet-sidebar { position:relative; width:360px; height:100%; flex-shrink:0; background:#202124; border-radius:16px; border:1px solid var(--meet-border); z-index:35; display:none; flex-direction:column; overflow:hidden; box-shadow:0 12px 36px rgba(0,0,0,0.6); }
+        .meet-sidebar.active { display:flex; }
+
+        .sidebar-header { padding:16px 20px; border-bottom:1px solid var(--meet-border); display:flex; align-items:center; justify-content:space-between; }
+        .sidebar-header h3 { font-size:1.1rem; font-weight:500; }
+        .sidebar-close-btn { background:none; border:none; color:var(--meet-subtext); font-size:1.1rem; cursor:pointer; padding:4px; }
+
+        .sidebar-tabs { display:flex; border-bottom:1px solid var(--meet-border); }
+        .tab-btn { flex:1; padding:12px; border:none; background:transparent; color:var(--meet-subtext); font-size:0.88rem; font-weight:500; cursor:pointer; border-bottom:2px solid transparent; }
+        .tab-btn.active { color:var(--meet-primary); border-bottom-color:var(--meet-primary); }
+
+        .sidebar-body { flex:1; display:none; flex-direction:column; overflow:hidden; }
+        .sidebar-body.active { display:flex; }
+
+        /* Modern Google Meet Chat Message UI */
+        .chat-list { flex:1; overflow-y:auto; padding:16px; display:flex; flex-direction:column; gap:16px; }
+        .chat-item { display:flex; flex-direction:column; gap:4px; max-width:88%; width:fit-content; }
+        .chat-item.own { align-self:flex-end; }
+        .chat-header { display:flex; align-items:center; gap:8px; font-size:0.78rem; color:var(--meet-subtext); }
+        .chat-header .author { font-weight:500; color:#fff; }
+        .chat-bubble { font-size:0.9rem; color:#fff; background:#28292c; padding:10px 14px; border-radius:12px; line-height:1.45; word-break:break-word; border:1px solid var(--meet-border); }
+        .chat-item.own .chat-bubble { background:var(--meet-primary); border-color:var(--meet-primary); }
+        
+        .chat-form { padding:12px 16px; border-top:1px solid var(--meet-border); display:flex; gap:8px; }
+        .chat-input { flex:1; padding:10px 16px; border-radius:20px; border:1px solid #5f6368; background:#28292c; color:#fff; font-size:0.9rem; outline:none; }
+        .chat-send-btn { width:38px; height:38px; border-radius:50%; border:none; background:var(--meet-primary); color:#fff; cursor:pointer; display:flex; align-items:center; justify-content:center; }
+
+        .people-list { flex:1; overflow-y:auto; padding:16px; display:flex; flex-direction:column; gap:10px; }
+        .person-row { display:flex; flex-direction:row; align-items:center; justify-content:space-between; gap:12px; padding:10px 14px; border-radius:12px; background:#28292c; width:100%; border:1px solid var(--meet-border); }
+        .person-info-group { display:flex; align-items:center; gap:12px; flex:1; min-width:0; }
+        .person-avatar { width:38px; height:38px; border-radius:50%; background:#5f6368; color:#fff; display:flex; align-items:center; justify-content:center; font-size:0.95rem; font-weight:500; flex-shrink:0; }
+        .person-name { font-size:0.9rem; font-weight:500; color:#fff; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+
+        .toast-box { position:fixed; bottom:80px; left:24px; z-index:200; display:flex; flex-direction:column; gap:8px; }
+        .meet-toast { padding:12px 20px; border-radius:8px; background:#323232; color:#fff; font-size:0.88rem; box-shadow:0 4px 14px rgba(0,0,0,0.5); }
     </style>
 </head>
+<body>
 
-<body class="flex items-center justify-center bg-black" style="display:flex; align-items:center; justify-content:center;">
+    <audio id="host-audio" autoplay></audio>
 
-    <div class="sh-player group" id="sh-player-container">
+    <!-- ═══ PRE-JOIN PREVIEW SCREEN ═══ -->
+    <div id="join-screen" class="screen active">
+        <div class="join-container">
+            <div class="join-preview">
+                <div class="join-preview-avatar" id="preview-avatar-icon">U</div>
+            </div>
+            <div class="join-form-card">
+                <h1>Ready to join?</h1>
+                <p>Enter your name to request access to <strong><%= stream.title %></strong></p>
+                <input id="join-name" class="join-input" type="text" placeholder="Your name" maxlength="30" autocomplete="off" autofocus>
+                <button id="join-btn" class="join-action-btn"><i class="fa-solid fa-video" style="margin-right:4px;"></i>Ask to join</button>
+                <div id="join-error" class="join-error"></div>
+            </div>
+        </div>
+    </div>
 
-        <!-- HTML5 Video Element -->
-        <video id="sh-video" class="w-full h-full object-contain cursor-pointer" playsinline webkit-playsinline
-            muted></video>
+    <!-- ═══ WAITING FOR HOST SCREEN ═══ -->
+    <div id="waiting-screen" class="screen">
+        <div class="waiting-box">
+            <div class="waiting-spinner"></div>
+            <h2 style="font-size:1.4rem; font-weight:400;">Asking to join...</h2>
+            <p style="color:var(--meet-subtext); font-size:0.9rem;">You'll join the call once the host approves your request.</p>
+        </div>
+    </div>
 
+    <!-- ═══ KICKED SCREEN ═══ -->
+    <div id="kicked-screen" class="screen">
+        <div class="waiting-box">
+            <i class="fa-solid fa-circle-exclamation" style="font-size:3rem; color:var(--meet-red);"></i>
+            <h2 style="font-size:1.4rem; font-weight:400;">You left the meeting</h2>
+            <p style="color:var(--meet-subtext); font-size:0.9rem;" id="kicked-reason">Removed by host</p>
+        </div>
+    </div>
 
-        <!-- Loading Spinner -->
-        <div id="sh-loading"
-            class="absolute inset-0 flex items-center justify-center bg-black/60 backdrop-blur-sm z-30 pointer-events-none transition-opacity duration-300"
-            style="display: none;">
-            <div class="flex flex-col items-center gap-3">
-                <div class="w-12 h-12 border-4 border-indigo-500/30 border-t-indigo-500 rounded-full animate-spin">
+    <!-- ═══ MAIN GOOGLE MEET INTERFACE ═══ -->
+    <div id="main-screen" class="screen">
+        <!-- Top Header Bar -->
+        <div class="meet-top-bar">
+            <div class="meet-room-info">
+                <span class="meet-title"><%= stream.title %></span>
+                <span id="meeting-mode-badge" class="meet-badge"><span class="meet-badge-dot"></span><span id="mode-text">Voice Call</span></span>
+            </div>
+            <div class="meet-room-info">
+                <span id="time-clock" style="font-size:0.88rem; color:var(--meet-subtext);"></span>
+            </div>
+        </div>
+
+        <!-- Main Stage Container -->
+        <div class="meet-stage">
+            <!-- Adaptive Grid View (Normal Talking Mode) -->
+            <div id="meet-grid" class="meet-grid"></div>
+
+            <!-- Video Player (Screen Share Mode) - FULL STAGE -->
+            <div id="meet-video-container" class="meet-video-container">
+                <video id="host-video" autoplay playsinline></video>
+            </div>
+
+            <!-- Google Meet Sidebar -->
+            <div id="meet-sidebar" class="meet-sidebar">
+                <div class="sidebar-header">
+                    <h3 id="sidebar-title">In-call messages</h3>
+                    <button id="sidebar-close" class="sidebar-close-btn"><i class="fa-solid fa-xmark"></i></button>
                 </div>
-                <span class="text-xs font-semibold text-slate-300 tracking-wider uppercase">Loading Stream...</span>
-            </div>
-        </div>
-
-        <!-- Center Play Button Overlay -->
-        <div id="play-overlay"
-            class="absolute inset-0 flex items-center justify-center cursor-pointer"
-            style="display: none; z-index: 35;">
-            <div class="w-20 h-20 rounded-full bg-white/15 backdrop-blur-md border border-white/20 flex items-center justify-center transition-all hover:scale-110 hover:bg-white/25 shadow-2xl">
-                <i class="fa-solid fa-play text-white text-3xl ml-1"></i>
-            </div>
-        </div>
-
-        <!-- Stream Offline Overlay -->
-        <div id="offline-screen"
-            class="absolute inset-0 bg-slate-950 flex flex-col items-center justify-center p-6 text-center z-40"
-            style="display: none;">
-            <div
-                class="w-16 h-16 rounded-2xl bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center text-indigo-400 text-2xl mb-4">
-                <i class="fa-solid fa-satellite-dish animate-pulse"></i>
-            </div>
-            <h2 class="text-2xl font-bold text-white mb-2">Stream Offline</h2>
-            <p class="text-slate-400 text-xs max-w-sm mb-6">
-                The broadcaster is currently offline or reconnecting. The player will automatically resume when live.
-            </p>
-            <button onclick="checkStreamStatus()"
-                class="px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs transition-all shadow-lg shadow-indigo-600/30 flex items-center gap-2">
-                <i class="fa-solid fa-rotate-right"></i>
-                <span>Refresh Status</span>
-            </button>
-        </div>
-
-        <!-- Top Header Info Bar -->
-        <div id="top-header"
-            class="absolute top-0 left-0 right-0 p-4 sm:p-6 bg-gradient-to-b from-black/80 via-black/40 to-transparent flex items-center justify-between z-20 pointer-events-none transition-all duration-300">
-            <div class="flex items-center gap-2 pointer-events-auto">
-                <span
-                    class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-red-500/20 text-red-400 border border-red-500/30 flex items-center gap-1">
-                    <span class="w-1.5 h-1.5 rounded-full bg-red-400 animate-ping"></span> LIVE
-                </span>
-                <span id="conn-badge"
-                    class="px-2 py-0.5 rounded text-[10px] font-semibold bg-green-500/20 text-green-400 border border-green-500/30 flex items-center gap-1">
-                    <span id="conn-dot" class="w-1.5 h-1.5 rounded-full bg-green-400"></span>
-                    <span id="conn-label">Stable</span>
-                </span>
-            </div>
-        </div>
-
-        <!-- Custom Player Controls Bar -->
-        <div id="sh-controls"
-            class="absolute bottom-0 left-0 right-0 p-4 sm:p-6 bg-gradient-to-t from-black/90 via-black/50 to-transparent z-20 flex flex-col gap-3 transition-all duration-300">
-            <div class="flex items-center justify-between">
-                <div class="flex items-center gap-3">
-                    <button id="sh-mute-btn"
-                        class="w-10 h-10 rounded-xl bg-white/10 hover:bg-white/20 text-white flex items-center justify-center text-base transition-colors">
-                        <i class="fa-solid fa-volume-xmark" id="sh-mute-icon"></i>
-                    </button>
-                    <span id="sh-current-time" class="text-xs font-mono text-slate-300 font-semibold">00:00</span>
+                <div class="sidebar-tabs">
+                    <button id="tab-chat-btn" class="tab-btn active">Chat</button>
+                    <button id="tab-people-btn" class="tab-btn">People (<span id="people-count">0</span>)</button>
                 </div>
 
-                <div class="flex items-center gap-3 relative">
-                    <!-- Quality Badge -->
-                    <span id="quality-badge"
-                        class="px-2 py-0.5 rounded text-[10px] font-semibold bg-indigo-500/20 text-indigo-400 border border-indigo-500/30">720p WebRTC</span>
+                <!-- Chat Body -->
+                <div id="body-chat" class="sidebar-body active">
+                    <div id="chat-list" class="chat-list"></div>
+                    <div class="chat-form">
+                        <input id="chat-input" class="chat-input" type="text" placeholder="Send a message" maxlength="500" autocomplete="off">
+                        <button id="chat-send" class="chat-send-btn"><i class="fa-solid fa-paper-plane"></i></button>
+                    </div>
+                </div>
 
-                    <!-- Fullscreen Button -->
-                    <button id="sh-full-btn"
-                        class="w-10 h-10 rounded-xl bg-white/10 hover:bg-white/20 text-white flex items-center justify-center text-base transition-colors">
-                        <i class="fa-solid fa-expand"></i>
-                    </button>
+                <!-- People Body -->
+                <div id="body-people" class="sidebar-body">
+                    <div id="people-list" class="people-list"></div>
                 </div>
             </div>
         </div>
 
+        <!-- Floating Google Meet Bottom Control Dock -->
+        <div class="meet-dock-wrapper">
+            <div class="meet-dock">
+                <button id="dock-mic-btn" class="dock-btn off" title="Toggle mic" disabled><i class="fa-solid fa-microphone-slash"></i></button>
+                <button id="dock-settings-btn" class="dock-btn" title="Microphone settings"><i class="fa-solid fa-gear"></i></button>
+                <button id="dock-fullscreen-btn" class="dock-btn" title="Toggle full screen"><i class="fa-solid fa-expand"></i></button>
+                <button id="dock-chat-btn" class="dock-btn" title="Chat"><i class="fa-solid fa-message"></i></button>
+                <button id="dock-people-btn" class="dock-btn" title="People"><i class="fa-solid fa-users"></i></button>
+                <div class="dock-divider"></div>
+                <button id="dock-end-btn" class="dock-end-btn" title="Leave call"><i class="fa-solid fa-phone-slash"></i></button>
+            </div>
+
+            <!-- Settings Menu Popup -->
+            <div id="settings-menu" class="settings-menu">
+                <div class="settings-header"><i class="fa-solid fa-microphone" style="margin-right:6px;"></i>Microphone Device</div>
+                <select id="mic-device-select" class="device-select"></select>
+            </div>
+        </div>
+
+        <div id="toasts" class="toast-box"></div>
     </div>
 
     <script>
-            (function () {
-                const player = document.getElementById('sh-player-container');
-                const video = document.getElementById('sh-video');
-                const muteBtn = document.getElementById('sh-mute-btn');
-                const muteIcon = document.getElementById('sh-mute-icon');
-                const currentTimeEl = document.getElementById('sh-current-time');
-                const fullBtn = document.getElementById('sh-full-btn');
-                const loadingSpinner = document.getElementById('sh-loading');
-                const controls = document.getElementById('sh-controls');
-                const topHeader = document.getElementById('top-header');
-                const offlineScreen = document.getElementById('offline-screen');
-                const playOverlay = document.getElementById('play-overlay');
-                const connBadge = document.getElementById('conn-badge');
-                const connDot = document.getElementById('conn-dot');
-                const connLabel = document.getElementById('conn-label');
-                const qualityBadge = document.getElementById('quality-badge');
+    (function() {
+        const streamKey = '<%= streamKey %>';
+        const streamTitle = '<%= stream.title %>';
 
-                const currentStreamKey = '<%= typeof streamKey !== "undefined" ? streamKey : "default" %>';
+        // ─── State Variables ───
+        let myName = '';
+        let myParticipantId = null;
+        let statusWs = null;
+        let pc = null;
+        let remoteStream = null;
+        let isLive = false;
+        let isScreenSharing = false;
+        let canTalk = false;
+        let micEnabled = false;
+        let micStream = null;
+        let selectedMicId = '';
+        let audioCtx = null;
+        let activeTab = 'chat';
+        let sidebarOpen = false;
+        let settingsOpen = false;
+        let participants = [];
 
-                let pc = null;
-                let statusWs = null;
-                let controlsTimeout = null;
-                let remoteStream = null;
-                let playPending = false;
-                const STREAM_TARGET = {
-                    height: 720,
-                    fps: 30,
-                    bitrate: 6000000
-                };
+        // ─── DOM References ───
+        const $ = id => document.getElementById(id);
+        const screens = { join: $('join-screen'), waiting: $('waiting-screen'), kicked: $('kicked-screen'), main: $('main-screen') };
+        const joinName = $('join-name'), joinBtn = $('join-btn'), joinError = $('join-error'), previewAvatarIcon = $('preview-avatar-icon');
+        const hostVideo = $('host-video'), hostAudio = $('host-audio'), meetGrid = $('meet-grid'), meetVideoContainer = $('meet-video-container');
+        const dockMicBtn = $('dock-mic-btn'), dockSettingsBtn = $('dock-settings-btn'), dockFullscreenBtn = $('dock-fullscreen-btn');
+        const dockChatBtn = $('dock-chat-btn'), dockPeopleBtn = $('dock-people-btn'), dockEndBtn = $('dock-end-btn');
+        const settingsMenu = $('settings-menu'), micDeviceSelect = $('mic-device-select');
+        const meetSidebar = $('meet-sidebar'), sidebarClose = $('sidebar-close');
+        const tabChatBtn = $('tab-chat-btn'), tabPeopleBtn = $('tab-people-btn');
+        const bodyChat = $('body-chat'), bodyPeople = $('body-people');
+        const chatList = $('chat-list'), chatInput = $('chat-input'), chatSend = $('chat-send');
+        const peopleList = $('people-list'), peopleCount = $('people-count');
+        const modeText = $('mode-text'), timeClock = $('time-clock'), toasts = $('toasts');
 
-                function showControls() {
-                    controls.style.opacity = '1';
-                    controls.style.pointerEvents = 'auto';
-                    if (topHeader) topHeader.style.opacity = '1';
-                    resetControlsTimer();
-                }
+        function updateClock() {
+            const now = new Date();
+            timeClock.textContent = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        }
+        setInterval(updateClock, 1000);
+        updateClock();
 
-                function hideControls() {
-                    if (!video.paused) {
-                        controls.style.opacity = '0';
-                        controls.style.pointerEvents = 'none';
-                        if (topHeader) topHeader.style.opacity = '0';
-                    }
-                }
+        joinName.addEventListener('input', () => {
+            const val = joinName.value.trim();
+            previewAvatarIcon.textContent = (val || 'U').charAt(0).toUpperCase();
+        });
 
-                function resetControlsTimer() {
-                    if (controlsTimeout) clearTimeout(controlsTimeout);
-                    controlsTimeout = setTimeout(hideControls, 3000);
-                }
+        function showScreen(name) {
+            Object.values(screens).forEach(s => s.classList.remove('active'));
+            screens[name].classList.add('active');
+            if (name === 'main') {
+                setTimeout(() => startWebRtcViewer(), 200);
+            }
+        }
 
-                player.addEventListener('mousemove', showControls);
-                player.addEventListener('touchstart', showControls, { passive: true });
-                player.addEventListener('touchmove', showControls, { passive: true });
-                player.addEventListener('click', showControls);
+        function toast(text) {
+            const t = document.createElement('div');
+            t.className = 'meet-toast';
+            t.textContent = text;
+            toasts.appendChild(t);
+            setTimeout(() => { t.style.opacity = '0'; setTimeout(() => t.remove(), 200); }, 3500);
+        }
 
-                playOverlay.addEventListener('click', () => {
-                    hidePlayOverlay();
-                    startWebRtcViewer();
+        // ─── Enumerate Mic Devices ───
+        async function enumerateMicDevices() {
+            try {
+                const devices = await navigator.mediaDevices.enumerateDevices();
+                const audioInputs = devices.filter(d => d.kind === 'audioinput');
+                micDeviceSelect.innerHTML = '';
+                audioInputs.forEach((device, index) => {
+                    const opt = document.createElement('option');
+                    opt.value = device.deviceId;
+                    opt.textContent = device.label || `Microphone ${index + 1}`;
+                    if (device.deviceId === selectedMicId) opt.selected = true;
+                    micDeviceSelect.appendChild(opt);
                 });
+            } catch (e) {}
+        }
 
-                function showOffline() {
-                    offlineScreen.style.display = 'flex';
-                    hideLoading();
+        dockSettingsBtn.onclick = () => {
+            settingsOpen = !settingsOpen;
+            settingsMenu.classList.toggle('active', settingsOpen);
+            if (settingsOpen) enumerateMicDevices();
+        };
+
+        micDeviceSelect.onchange = () => {
+            selectedMicId = micDeviceSelect.value;
+            if (micEnabled) enableMic();
+        };
+
+        // ─── Pre-Join & Unlocking Audio Permission ───
+        joinBtn.onclick = () => {
+            const name = joinName.value.trim();
+            if (!name) { joinError.textContent = 'Please enter your name'; return; }
+            myName = name;
+            joinError.textContent = '';
+            joinBtn.disabled = true;
+            joinBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Joining...';
+
+            try {
+                if (!audioCtx) {
+                    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                }
+                if (audioCtx.state === 'suspended') {
+                    audioCtx.resume();
+                }
+            } catch (e) {}
+
+            try {
+                hostAudio.play().catch(() => {});
+                hostVideo.play().catch(() => {});
+            } catch (e) {}
+
+            connectStatusWs();
+        };
+
+        joinName.onkeydown = (e) => { if (e.key === 'Enter') joinBtn.click(); };
+
+        // ─── WebSocket Signaling ───
+        function connectStatusWs() {
+            const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+            statusWs = new WebSocket(`${protocol}//${location.host}/view-ws?key=${encodeURIComponent(streamKey)}`);
+
+            statusWs.onopen = () => {
+                statusWs.send(JSON.stringify({ type: 'JOIN_REQUEST', name: myName }));
+            };
+
+            statusWs.onmessage = (event) => {
+                try {
+                    const data = JSON.parse(event.data);
+                    handleWsMessage(data);
+                } catch (e) {}
+            };
+
+            statusWs.onclose = () => {
+                if (screens.main.classList.contains('active')) {
+                    setTimeout(connectStatusWs, 3000);
+                }
+            };
+        }
+
+        function handleWsMessage(data) {
+            switch (data.type) {
+                case 'JOIN_PENDING':
+                    showScreen('waiting');
+                    break;
+
+                case 'JOIN_APPROVED':
+                    myParticipantId = data.participantId;
+                    showScreen('main');
+                    break;
+
+                case 'JOIN_DENIED':
+                    joinError.textContent = data.reason || 'Access denied by host';
+                    joinBtn.disabled = false;
+                    joinBtn.innerHTML = '<i class="fa-solid fa-video" style="margin-right:4px;"></i>Ask to join';
+                    break;
+
+                case 'KICKED':
+                    showScreen('kicked');
+                    $('kicked-reason').textContent = data.reason || 'Removed by host';
+                    if (statusWs) statusWs.close();
                     if (pc) { pc.close(); pc = null; }
-                    remoteStream = null;
-                    video.srcObject = null;
-                    video.pause();
+                    break;
+
+                case 'STATUS':
+                    isLive = data.live;
+                    isScreenSharing = !!data.isScreenSharing;
+                    updateStageLayout();
+                    break;
+
+                case 'PARTICIPANT_LIST':
+                    if (data.participants) {
+                        participants = data.participants;
+                        peopleCount.textContent = participants.length;
+                        renderPeopleList();
+                        renderMeetGrid();
+                    }
+                    break;
+
+                case 'TALK_PERMISSION':
+                    canTalk = data.allowed;
+                    dockMicBtn.disabled = !canTalk;
+                    if (!canTalk && micEnabled) disableMic();
+                    toast(canTalk ? 'Microphone unmuted by host' : 'Host muted your microphone');
+                    break;
+
+                case 'CHAT_MESSAGE':
+                    addChatMessage(data.from, data.text);
+                    break;
+
+                case 'VIEWER_WEBRTC_ANSWER':
+                    if (pc && data.sdp) {
+                        pc.setRemoteDescription({ type: 'answer', sdp: data.sdp }).catch(() => {});
+                    }
+                    break;
+
+                case 'VIEWER_ICE_CANDIDATE':
+                    if (pc && data.candidate) {
+                        pc.addIceCandidate(data.candidate).catch(() => {});
+                    }
+                    break;
+            }
+        }
+
+        function updateStageLayout() {
+            const hasVideoTrack = remoteStream && remoteStream.getVideoTracks().some(t => t.readyState === 'live' && t.enabled);
+            if (isLive && (isScreenSharing || hasVideoTrack)) {
+                meetVideoContainer.classList.add('active');
+                meetGrid.style.display = 'none';
+                modeText.textContent = 'Screen Shared';
+            } else {
+                meetVideoContainer.classList.remove('active');
+                meetGrid.style.display = 'grid';
+                modeText.textContent = 'Voice Call';
+            }
+        }
+
+        // ─── WebRTC Voice & Movie Stream ───
+        function startWebRtcViewer() {
+            if (pc) { pc.close(); pc = null; }
+            remoteStream = new MediaStream();
+
+            pc = new RTCPeerConnection({ iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] });
+
+            pc.ontrack = (event) => {
+                const stream = event.streams && event.streams[0] ? event.streams[0] : remoteStream;
+                for (const track of stream.getTracks()) {
+                    if (!remoteStream.getTracks().some(t => t.id === track.id)) remoteStream.addTrack(track);
                 }
+                hostVideo.srcObject = remoteStream;
+                hostAudio.srcObject = remoteStream;
+                
+                hostAudio.play().catch(() => {});
+                hostVideo.play().catch(() => {});
+            };
 
-                function hideOffline() {
-                    offlineScreen.style.display = 'none';
+            pc.onicecandidate = (event) => {
+                if (event.candidate && statusWs && statusWs.readyState === WebSocket.OPEN) {
+                    statusWs.send(JSON.stringify({ type: 'VIEWER_ICE_CANDIDATE', candidate: event.candidate }));
                 }
+            };
 
-                function showPlayOverlay() {
-                    playOverlay.style.display = 'flex';
+            pc.addTransceiver('video', { direction: 'recvonly' });
+            pc.addTransceiver('audio', { direction: 'sendrecv' });
+
+            pc.createOffer().then(offer => {
+                let sdp = offer.sdp;
+                sdp = sdp.replace(/(a=fmtp:111 [^\r\n]+)/, "$1;stereo=1;sprop-stereo=1;maxaveragebitrate=510000;cbr=1;useinbandfec=1");
+                return pc.setLocalDescription({ type: 'offer', sdp });
+            }).then(() => {
+                if (statusWs && statusWs.readyState === WebSocket.OPEN) {
+                    statusWs.send(JSON.stringify({ type: 'VIEWER_WEBRTC_OFFER', sdp: pc.localDescription.sdp }));
                 }
+            }).catch(() => {});
+        }
 
-                function hidePlayOverlay() {
-                    playOverlay.style.display = 'none';
-                }
+        // ─── Microphone Controls ───
+        dockMicBtn.onclick = () => {
+            if (!canTalk) return;
+            micEnabled ? disableMic() : enableMic();
+        };
 
-                function showLoading() {
-                    loadingSpinner.style.display = 'flex';
-                }
+        async function enableMic() {
+            try {
+                const constraints = { audio: { echoCancellation: true, noiseSuppression: true } };
+                if (selectedMicId) constraints.audio.deviceId = { exact: selectedMicId };
 
-                function hideLoading() {
-                    loadingSpinner.style.display = 'none';
-                }
-
-                function formatTime(sec) {
-                    if (!sec || !isFinite(sec)) return '00:00';
-                    const s = Math.floor(sec % 60);
-                    const m = Math.floor(sec / 60);
-                    return String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0');
-                }
-
-                ['click', 'pointerdown', 'pointerup', 'touchend', 'touchstart'].forEach(evt => {
-                    player.addEventListener(evt, (e) => {
-                        if (e.target && e.target.closest && (e.target.closest('#sh-controls'))) return;
-                        if (e.target && e.target.closest && (e.target.closest('#play-overlay'))) return;
-                        if (e.target && (e.target.tagName === 'BUTTON' || e.target.tagName === 'A' || e.target.closest('button') || e.target.closest('a'))) return;
-                        if (evt === 'touchstart' || (evt === 'pointerdown' && e.pointerType === 'touch')) {
-                            try { showControls(); } catch (err) { }
-                        }
-                        try { e.stopImmediatePropagation(); } catch (e) { }
-                        e.stopPropagation();
-                        e.preventDefault();
-                    }, true);
-
-                    video.addEventListener(evt, (e) => {
-                        try { e.stopImmediatePropagation(); } catch (e) { }
-                        e.stopPropagation();
-                        e.preventDefault();
-                    }, true);
-                });
-
-                muteBtn.addEventListener('click', () => {
-                    video.muted = !video.muted;
-                    muteIcon.className = video.muted ? 'fa-solid fa-volume-xmark' : 'fa-solid fa-volume-high';
-                });
-
-                video.addEventListener('timeupdate', () => {
-                    currentTimeEl.textContent = formatTime(video.currentTime || 0);
-                });
-
-                video.addEventListener('play', () => { hideLoading(); });
-                video.addEventListener('pause', () => { showControls(); });
-
-                async function toggleFullscreen() {
-                    if (document.fullscreenElement || document.webkitFullscreenElement) {
-                        try {
-                            if (document.exitFullscreen) await document.exitFullscreen();
-                            else if (document.webkitExitFullscreen) await document.webkitExitFullscreen();
-                        } catch (e) { }
-                        if (screen.orientation && typeof screen.orientation.unlock === 'function') {
-                            try { screen.orientation.unlock(); } catch (e) { }
-                        }
+                micStream = await navigator.mediaDevices.getUserMedia(constraints);
+                if (pc && micStream.getAudioTracks().length > 0) {
+                    const audioTrack = micStream.getAudioTracks()[0];
+                    const existingSender = pc.getSenders().find(s => s.track && s.track.kind === 'audio');
+                    if (existingSender) {
+                        await existingSender.replaceTrack(audioTrack);
                     } else {
-                        try {
-                            if (player.requestFullscreen) await player.requestFullscreen();
-                            else if (player.webkitRequestFullscreen) await player.webkitRequestFullscreen();
-                        } catch (e) { }
-                        if (screen.orientation && typeof screen.orientation.lock === 'function') {
-                            try { await screen.orientation.lock('landscape'); } catch (e) { }
-                        }
+                        pc.addTrack(audioTrack, micStream);
                     }
                 }
-
-                fullBtn.addEventListener('click', toggleFullscreen);
-
-                if (qualityBadge) {
-                    qualityBadge.textContent = '720p 30fps';
-                    qualityBadge.style.cursor = 'default';
+                micEnabled = true;
+                dockMicBtn.classList.remove('off');
+                dockMicBtn.classList.add('active');
+                dockMicBtn.querySelector('i').className = 'fa-solid fa-microphone';
+                if (statusWs && statusWs.readyState === WebSocket.OPEN) {
+                    statusWs.send(JSON.stringify({ type: 'MIC_TOGGLE', enabled: true }));
                 }
+                toast('Microphone unmuted');
+            } catch (e) {
+                toast('Could not access microphone');
+            }
+        }
 
-                function preferVideoCodec(transceiver) {
-                    try {
-                        if (!transceiver || !RTCRtpReceiver.getCapabilities) return;
-                        const capabilities = RTCRtpReceiver.getCapabilities('video');
-                        if (!capabilities || !Array.isArray(capabilities.codecs)) return;
-                        const codecs = capabilities.codecs;
-                        const preferred = codecs.filter(codec => /video\/H264/i.test(codec.mimeType));
-                        const fallback = codecs.filter(codec => !/video\/H264/i.test(codec.mimeType));
-                        if (preferred.length && transceiver.setCodecPreferences) {
-                            transceiver.setCodecPreferences([...preferred, ...fallback]);
-                        }
-                    } catch (e) { }
-                }
+        function disableMic() {
+            if (micStream) {
+                micStream.getTracks().forEach(t => t.stop());
+                micStream = null;
+            }
+            micEnabled = false;
+            dockMicBtn.classList.add('off');
+            dockMicBtn.classList.remove('active');
+            dockMicBtn.querySelector('i').className = 'fa-solid fa-microphone-slash';
+            if (statusWs && statusWs.readyState === WebSocket.OPEN) {
+                statusWs.send(JSON.stringify({ type: 'MIC_TOGGLE', enabled: false }));
+            }
+            toast('Microphone muted');
+        }
 
-                // ─── WebRTC Viewer Relay ──────────────────────────────────────────────
-                let viewerStarted = false;
+        // ─── Full Screen Toggle ───
+        dockFullscreenBtn.onclick = () => {
+            const stage = $('main-screen');
+            if (document.fullscreenElement) {
+                document.exitFullscreen().catch(() => {});
+            } else {
+                (stage.requestFullscreen || stage.webkitRequestFullscreen).call(stage);
+            }
+        };
 
-                async function startWebRtcViewer() {
-                    if (viewerStarted) return;
-                    viewerStarted = true;
-                    if (pc) { pc.close(); pc = null; }
-                    remoteStream = new MediaStream();
-                    showLoading();
-                    hideOffline();
+        // ─── Sidebar Drawer (Chat & People) ───
+        function toggleSidebar(tab) {
+            if (sidebarOpen && activeTab === tab) {
+                meetSidebar.classList.remove('active');
+                sidebarOpen = false;
+                dockChatBtn.classList.remove('active');
+                dockPeopleBtn.classList.remove('active');
+                return;
+            }
 
-                    pc = new RTCPeerConnection({
-                        iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
-                    });
+            activeTab = tab;
+            sidebarOpen = true;
+            meetSidebar.classList.add('active');
+            
+            tabChatBtn.classList.toggle('active', tab === 'chat');
+            tabPeopleBtn.classList.toggle('active', tab === 'people');
+            bodyChat.classList.toggle('active', tab === 'chat');
+            bodyPeople.classList.toggle('active', tab === 'people');
+            
+            dockChatBtn.classList.toggle('active', tab === 'chat');
+            dockPeopleBtn.classList.toggle('active', tab === 'people');
+        }
 
-                    pc.ontrack = (event) => {
-                        const stream = event.streams && event.streams[0] ? event.streams[0] : remoteStream;
-                        for (const track of stream.getTracks()) {
-                            if (!remoteStream.getTracks().some(existing => existing.id === track.id)) {
-                                remoteStream.addTrack(track);
-                            }
-                        }
-                        if (!remoteStream.getTracks().some(track => track.id === event.track.id)) {
-                            remoteStream.addTrack(event.track);
-                        }
-                        if (video.srcObject !== remoteStream) {
-                            video.srcObject = remoteStream;
-                        }
-                        if (!playPending) {
-                            playPending = true;
-                            video.play().then(() => {
-                                hideLoading();
-                                showControls();
-                            }).catch(err => {
-                                console.warn('[WebRTC Viewer] autoplay blocked or delayed:', err);
-                                hideLoading();
-                                showControls();
-                            }).finally(() => { playPending = false; });
-                        }
-                    };
+        dockChatBtn.onclick = () => toggleSidebar('chat');
+        dockPeopleBtn.onclick = () => toggleSidebar('people');
+        tabChatBtn.onclick = () => toggleSidebar('chat');
+        tabPeopleBtn.onclick = () => toggleSidebar('people');
+        sidebarClose.onclick = () => {
+            meetSidebar.classList.remove('active');
+            sidebarOpen = false;
+            dockChatBtn.classList.remove('active');
+            dockPeopleBtn.classList.remove('active');
+        };
 
-                    pc.oniceconnectionstatechange = () => {
-                        const state = pc.iceConnectionState;
-                        console.log('[WebRTC Viewer] ICE state:', state);
-                        if (state === 'connected' || state === 'completed') {
-                            updateConnViewer('stable');
-                        } else if (state === 'disconnected') {
-                            updateConnViewer('slow');
-                            viewerStarted = false;
-                            setTimeout(() => {
-                                if (!viewerStarted) {
-                                    showPlayOverlay();
-                                }
-                            }, 5000);
-                        } else if (state === 'failed') {
-                            updateConnViewer('poor');
-                            viewerStarted = false;
-                            showPlayOverlay();
-                        }
-                    };
+        function sendChat() {
+            const text = chatInput.value.trim();
+            if (!text || !statusWs || statusWs.readyState !== WebSocket.OPEN) return;
+            statusWs.send(JSON.stringify({ type: 'CHAT_MESSAGE', text }));
+            chatInput.value = '';
+        }
+        chatSend.onclick = sendChat;
+        chatInput.onkeydown = (e) => { if (e.key === 'Enter') sendChat(); };
 
-                    pc.onicecandidate = (event) => {
-                        if (event.candidate && statusWs && statusWs.readyState === WebSocket.OPEN) {
-                            statusWs.send(JSON.stringify({
-                                type: 'VIEWER_ICE_CANDIDATE',
-                                candidate: event.candidate
-                            }));
-                        }
-                    };
+        function addChatMessage(from, text) {
+            const item = document.createElement('div');
+            const isOwn = (from === myName);
+            item.className = 'chat-item' + (isOwn ? ' own' : '');
+            const now = new Date();
+            const timeStr = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            
+            item.innerHTML = `
+                <div class="chat-header">
+                    <span class="author">${escapeHtml(isOwn ? 'You' : from)}</span>
+                    <span>${timeStr}</span>
+                </div>
+                <div class="chat-bubble">${escapeHtml(text)}</div>
+            `;
+            chatList.appendChild(item);
+            chatList.scrollTop = chatList.scrollHeight;
+        }
 
-                    const videoTransceiver = pc.addTransceiver('video', { direction: 'recvonly' });
-                    preferVideoCodec(videoTransceiver);
-                    pc.addTransceiver('audio', { direction: 'recvonly' });
+        function renderPeopleList() {
+            peopleList.innerHTML = '';
+            participants.forEach(p => {
+                const row = document.createElement('div');
+                row.className = 'person-row';
+                const initial = (p.name || 'U').charAt(0).toUpperCase();
+                row.innerHTML = `
+                    <div class="person-info-group">
+                        <div class="person-avatar" ${p.role === 'host' ? 'style="background:#1a73e8;"' : ''}>${initial}</div>
+                        <div class="person-name">${escapeHtml(p.name)} ${p.role === 'host' ? '(Host)' : (p.id === myParticipantId ? '(You)' : '')}</div>
+                    </div>
+                    <i class="fa-solid ${p.micEnabled ? 'fa-microphone' : 'fa-microphone-slash'}" style="color:${p.micEnabled ? '#34a853' : 'var(--meet-subtext)'}; font-size:1rem;"></i>
+                `;
+                peopleList.appendChild(row);
+            });
+        }
 
-                    const offer = await pc.createOffer();
-                    await pc.setLocalDescription(offer);
+        // ─── Adaptive Grid Rendering (1, 2, 3... 10 participants) ───
+        function renderMeetGrid() {
+            meetGrid.innerHTML = '';
+            const count = participants.length;
 
-                    if (statusWs && statusWs.readyState === WebSocket.OPEN) {
-                        console.log('[WebRTC Viewer] Sending offer');
-                        statusWs.send(JSON.stringify({
-                            type: 'VIEWER_WEBRTC_OFFER',
-                            sdp: pc.localDescription.sdp
-                        }));
-                    }
-                }
+            if (count === 1) {
+                meetGrid.style.gridTemplateColumns = '1fr';
+                meetGrid.style.gridTemplateRows = '1fr';
+            } else if (count === 2) {
+                meetGrid.style.gridTemplateColumns = '1fr 1fr';
+                meetGrid.style.gridTemplateRows = '1fr';
+            } else if (count <= 4) {
+                meetGrid.style.gridTemplateColumns = '1fr 1fr';
+                meetGrid.style.gridTemplateRows = '1fr 1fr';
+            } else if (count <= 6) {
+                meetGrid.style.gridTemplateColumns = 'repeat(3, 1fr)';
+                meetGrid.style.gridTemplateRows = '1fr 1fr';
+            } else {
+                meetGrid.style.gridTemplateColumns = 'repeat(4, 1fr)';
+                meetGrid.style.gridTemplateRows = 'auto';
+            }
 
-                function updateConnViewer(level) {
-                    const colors = { good: '#22c55e', stable: '#10b981', slow: '#f59e0b', poor: '#ef4444' };
-                    const labels = { good: 'Good', stable: 'Stable', slow: 'Reconnecting', poor: 'Poor' };
-                    const bgColors = { good: 'bg-green-500/20', stable: 'bg-green-500/20', slow: 'bg-amber-500/20', poor: 'bg-red-500/20' };
-                    const textColors = { good: 'text-green-400', stable: 'text-green-400', slow: 'text-amber-400', poor: 'text-red-400' };
-                    const borderColors = { good: 'border-green-500/30', stable: 'border-green-500/30', slow: 'border-amber-500/30', poor: 'border-red-500/30' };
-                    if (connDot) connDot.style.background = colors[level] || colors.stable;
-                    if (connLabel) connLabel.textContent = labels[level] || 'Stable';
-                    if (connBadge) {
-                        connBadge.className = connBadge.className
-                            .replace(/bg-\w+-500\/20/g, '').replace(/text-\w+-400/g, '').replace(/border-\w+-500\/30/g, '')
-                            + ' ' + (bgColors[level] || bgColors.stable) + ' ' + (textColors[level] || textColors.stable) + ' ' + (borderColors[level] || borderColors.stable);
-                    }
-                }
+            participants.forEach(p => {
+                const card = document.createElement('div');
+                card.className = 'meet-card' + (p.micEnabled ? ' speaking' : '');
+                const initial = (p.name || 'U').charAt(0).toUpperCase();
+                card.innerHTML = `
+                    <div class="meet-avatar" ${p.role === 'host' ? 'style="background:#1a73e8;"' : ''}>${initial}</div>
+                    <div class="meet-name-tag"><span>${escapeHtml(p.name)} ${p.role === 'host' ? '👑' : ''} ${p.id === myParticipantId ? '(You)' : ''}</span></div>
+                    <div class="meet-card-mic ${p.micEnabled ? '' : 'off'}">
+                        <i class="fa-solid ${p.micEnabled ? 'fa-microphone' : 'fa-microphone-slash'}"></i>
+                    </div>
+                `;
+                meetGrid.appendChild(card);
+            });
+        }
 
-                function connectStatusWebSocket() {
-                    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-                    const wsUrl = `${protocol}//${window.location.host}/view-ws?key=${encodeURIComponent(currentStreamKey)}`;
-                    statusWs = new WebSocket(wsUrl);
+        function escapeHtml(str) {
+            const div = document.createElement('div');
+            div.textContent = str;
+            return div.innerHTML;
+        }
 
-                    statusWs.onopen = () => {
-                        console.log('[Viewer WS] Connected');
-                    };
-
-                    statusWs.onmessage = async (event) => {
-                        try {
-                            const data = JSON.parse(event.data);
-                            if (data.type === 'STATUS') {
-                                if (data.live) {
-                                    hideOffline();
-                                    if (!viewerStarted) {
-                                        showPlayOverlay();
-                                    }
-                                } else {
-                                    showOffline();
-                                    hidePlayOverlay();
-                                    viewerStarted = false;
-                                    if (pc) { pc.close(); pc = null; }
-                                    remoteStream = null;
-                                    video.srcObject = null;
-                                }
-                            } else if (data.type === 'VIEWER_WEBRTC_ANSWER') {
-                                if (pc && data.sdp) {
-                                    await pc.setRemoteDescription({ type: 'answer', sdp: data.sdp });
-                                }
-                            } else if (data.type === 'VIEWER_ICE_CANDIDATE') {
-                                if (pc && data.candidate) {
-                                    try { await pc.addIceCandidate(data.candidate); } catch (e) { }
-                                }
-                            } else if (data.type === 'HOST_HEALTH') {
-                                if (data.health === 'poor') {
-                                    updateConnViewer('poor');
-                                } else if (data.health === 'slow') {
-                                    updateConnViewer('slow');
-                                }
-                            }
-                        } catch (err) { console.error('[Viewer WS]', err); }
-                    };
-
-                    statusWs.onclose = () => setTimeout(connectStatusWebSocket, 3000);
-                }
-
-                window.checkStreamStatus = function () {
-                    showLoading();
-                    fetch('/live/status/' + currentStreamKey)
-                        .then(res => res.json())
-                        .then(data => {
-                            hideLoading();
-                            if (data.live) {
-                                hideOffline();
-                                showPlayOverlay();
-                            } else {
-                                showOffline();
-                            }
-                        })
-                        .catch(() => showOffline());
-                };
-
-                connectStatusWebSocket();
-            })();
+        dockEndBtn.onclick = () => {
+            if (confirm('Leave meeting?')) {
+                location.href = '/';
+            }
+        };
+    })();
     </script>
 </body>
-
 </html>

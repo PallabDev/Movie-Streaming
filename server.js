@@ -109,6 +109,8 @@ async function requireAdmin(req, res, next) {
     } catch (e) { return res.status(403).send('Forbidden'); }
 }
 
+
+
 // ─── Multi-Stream Session Manager ──────────────────────────────────────────────
 const activeStreams = new Map();
 
@@ -144,7 +146,12 @@ function getOrCreateStreamSession(streamKey, title = 'Live Movie Stream', user =
         initSegment: null,
         peakViewersCount: 0,
         _sessionLoggedToDb: false,
-        hostAlive: false
+        hostAlive: false,
+        participants: new Map(),
+        pendingParticipants: new Map(),
+        maxParticipants: 10,
+        hostMicEnabled: false,
+        allowViewerTalkByDefault: true
     };
 
     if (!fs.existsSync(session.liveDir)) {
@@ -162,6 +169,71 @@ function clearLiveFolder(session) {
             try { fs.unlinkSync(path.join(session.liveDir, file)); } catch (err) { }
         }
     }
+}
+
+    let participantIdCounter = 0;
+function generateParticipantId() {
+    return 'p_' + (++participantIdCounter) + '_' + Date.now().toString(36);
+}
+
+function getParticipantList(session) {
+    const list = [];
+    const hostUser = session.user || { name: 'System Admin' };
+    list.push({
+        id: 'host',
+        name: hostUser.name || 'Host',
+        role: 'host',
+        micEnabled: !!session.hostMicEnabled,
+        canTalk: true,
+        joinedAt: session.createdAt
+    });
+    for (const [id, p] of session.participants) {
+        list.push({ id, name: p.name, role: p.role, micEnabled: p.micEnabled, canTalk: p.canTalk, joinedAt: p.joinedAt });
+    }
+    return list;
+}
+
+function broadcastParticipantList(session) {
+    const msg = JSON.stringify({ type: 'PARTICIPANT_LIST', participants: getParticipantList(session) });
+    for (const client of streamWss.clients) {
+        if (client.streamKey === session.streamKey && client.readyState === 1) {
+            client.send(msg);
+        }
+    }
+    for (const [id, p] of session.participants) {
+        if (p.ws && p.ws.readyState === 1) {
+            p.ws.send(msg);
+        }
+    }
+}
+
+function broadcastChat(session, fromName, text) {
+    const msg = JSON.stringify({ type: 'CHAT_MESSAGE', from: fromName, text, timestamp: Date.now() });
+    for (const client of streamWss.clients) {
+        if (client.streamKey === session.streamKey && client.readyState === 1) {
+            client.send(msg);
+        }
+    }
+    for (const [id, p] of session.participants) {
+        if (p.ws && p.ws.readyState === 1) {
+            p.ws.send(msg);
+        }
+    }
+}
+
+function kickParticipant(session, participantId) {
+    const p = session.participants.get(participantId);
+    if (!p) return;
+    if (p.ws && p.ws.readyState === 1) {
+        p.ws.send(JSON.stringify({ type: 'KICKED', reason: 'Removed by host' }));
+    }
+    if (p.viewerSession) {
+        p.viewerSession.close();
+        session.viewerSessions.delete(p.viewerSession);
+    }
+    session.participants.delete(participantId);
+    broadcastParticipantList(session);
+    broadcastStatus(session, session.isLive);
 }
 
 // ─── WebSocket Servers (Status, Viewers Count & Telemetries) ───────────────────
@@ -218,6 +290,55 @@ wss.on('connection', (ws) => {
     ws.on('error', (err) => logger.warn(`[Status WS Error ${key}]: ${err.message}`));
 });
 
+streamWss.on('connection', (ws) => {
+    const key = ws.streamKey || 'default';
+    logger.info(`Host connected to WebSocket Ingest for [${key}]`);
+
+    const session = activeStreams.get(key);
+    if (session) {
+        session.hostAlive = true;
+        if (session.disconnectTimer) {
+            logger.info(`Host reconnected to WebSocket Ingest for [${key}]. Cancelled 90-second grace timer.`);
+            clearTimeout(session.disconnectTimer);
+            session.disconnectTimer = null;
+        }
+
+        // Push any existing pending join requests immediately to host!
+        if (session.pendingParticipants && session.pendingParticipants.size > 0) {
+            for (const [participantId, pending] of session.pendingParticipants) {
+                ws.send(JSON.stringify({
+                    type: 'JOIN_REQUEST',
+                    participantId,
+                    name: pending.name,
+                    pending: session.pendingParticipants.size
+                }));
+                logger.info(`[Session ${key}] Pushed pending join request for "${pending.name}" (${participantId}) to host`);
+            }
+        }
+    }
+
+    ws.on('message', async (data, isBinary) => {
+        const session = activeStreams.get(key);
+        if (session) {
+            if (await tryHandleHostControlMessage(session, data, isBinary, ws)) return;
+        }
+    });
+
+    ws.on('error', (err) => {
+        logger.warn(`[Stream WS Error ${key}]: ${err.message}`);
+        const session = activeStreams.get(key);
+        if (session) session.failureCount = (session.failureCount || 0) + 1;
+    });
+
+    ws.on('close', () => {
+        logger.info(`Host WebSocket disconnected for [${key}]`);
+        const session = activeStreams.get(key);
+        if (session) {
+            session.hostAlive = false;
+        }
+    });
+});
+
 function broadcastStatus(session, liveState) {
     if (!session) return;
     session.isLive = liveState;
@@ -226,8 +347,11 @@ function broadcastStatus(session, liveState) {
     const msg = JSON.stringify({
         type: 'STATUS',
         live: session.isLive,
+        isScreenSharing: !!session.isScreenSharing,
         streamKey: session.streamKey,
-        viewers: viewerCount
+        viewers: viewerCount,
+        participants: session.participants ? session.participants.size : 0,
+        pendingCount: session.pendingParticipants ? session.pendingParticipants.size : 0
     });
 
     for (const client of wss.clients) {
@@ -263,17 +387,17 @@ function broadcastAdminTelemetry() {
 }
 
 function tryHandleHostControlMessage(session, data, isBinary, ws) {
+    const key = session.streamKey;
     if (isBinary) return false;
     try {
         const raw = typeof data === 'string' ? data : data.toString();
         const parsed = JSON.parse(raw);
 
         if (parsed.type === 'WEBRTC_OFFER') {
-            logger.info(`[WebRTC ${session.streamKey}] Received SDP offer from host`);
-            if (session.webrtcIngest) {
-                try { session.webrtcIngest.close(); } catch (e) { }
-                session.webrtcIngest = null;
-            }
+            const hasVideo = /m=video\s+\d+/i.test(parsed.sdp) && !/a=inactive/i.test(parsed.sdp);
+            session.isScreenSharing = hasVideo;
+            session.webrtcIngest?.stop?.();
+            session.webrtcIngest = null;
             session.webrtcIngest = new WebRtcIngestSession(session, ws, async () => {
                 session.webrtcIngest.onVideoRtp = (rtp) => {
                     for (const vs of session.viewerSessions) {
@@ -323,6 +447,105 @@ function tryHandleHostControlMessage(session, data, isBinary, ws) {
             })}`);
             return true;
         }
+
+        // ─── Host Participant Controls ──────────────────────
+        if (parsed.type === 'HOST_APPROVE') {
+            const pending = session.pendingParticipants.get(parsed.participantId);
+            if (pending) {
+                session.pendingParticipants.delete(parsed.participantId);
+                const defaultCanTalk = session.allowViewerTalkByDefault !== false;
+                const participant = {
+                    id: pending.id,
+                    name: pending.name,
+                    ws: pending.ws,
+                    role: 'viewer',
+                    micEnabled: false,
+                    canTalk: defaultCanTalk,
+                    joinedAt: Date.now(),
+                    viewerSession: null
+                };
+                session.participants.set(pending.id, participant);
+                if (pending.ws && pending.ws.readyState === 1) {
+                    pending.ws.send(JSON.stringify({ type: 'JOIN_APPROVED', participantId: pending.id, hostName: session.hostName }));
+                    pending.ws.send(JSON.stringify({ type: 'TALK_PERMISSION', allowed: defaultCanTalk }));
+                }
+                broadcastParticipantList(session);
+                broadcastStatus(session, session.isLive);
+                logger.info(`[Session ${key}] Approved "${pending.name}" (${pending.id}), canTalk=${defaultCanTalk}`);
+            }
+            return true;
+        }
+
+        if (parsed.type === 'HOST_DENY') {
+            const pending = session.pendingParticipants.get(parsed.participantId);
+            if (pending) {
+                session.pendingParticipants.delete(parsed.participantId);
+                if (pending.ws && pending.ws.readyState === 1) {
+                    pending.ws.send(JSON.stringify({ type: 'JOIN_DENIED', reason: 'Denied by host' }));
+                }
+                logger.info(`[Session ${key}] Denied "${pending.name}"`);
+            }
+            return true;
+        }
+
+        if (parsed.type === 'HOST_KICK') {
+            kickParticipant(session, parsed.participantId);
+            return true;
+        }
+
+        if (parsed.type === 'HOST_ALLOW_TALK') {
+            const p = session.participants.get(parsed.participantId);
+            if (p) {
+                p.canTalk = !!parsed.allowed;
+                broadcastParticipantList(session);
+                if (p.ws && p.ws.readyState === 1) {
+                    p.ws.send(JSON.stringify({ type: 'TALK_PERMISSION', allowed: p.canTalk }));
+                }
+            }
+            return true;
+        }
+
+        if (parsed.type === 'HOST_TOGGLE_DEFAULT_TALK') {
+            session.allowViewerTalkByDefault = !!parsed.enabled;
+            logger.info(`[Session ${key}] Host toggled default talk permission to ${session.allowViewerTalkByDefault}`);
+            return true;
+        }
+
+        if (parsed.type === 'HOST_MIC_TOGGLE') {
+            session.hostMicEnabled = !!parsed.enabled;
+            broadcastParticipantList(session);
+            return true;
+        }
+
+        if (parsed.type === 'HOST_CHAT') {
+            const text = (parsed.text || '').trim().substring(0, 500);
+            if (text) broadcastChat(session, session.hostName || 'Host', text);
+            return true;
+        }
+
+        if (parsed.type === 'HOST_APPROVE_ALL') {
+            for (const [id, pending] of session.pendingParticipants) {
+                const participant = {
+                    id: pending.id,
+                    name: pending.name,
+                    ws: pending.ws,
+                    role: 'viewer',
+                    micEnabled: false,
+                    canTalk: false,
+                    joinedAt: Date.now(),
+                    viewerSession: null
+                };
+                session.participants.set(pending.id, participant);
+                if (pending.ws && pending.ws.readyState === 1) {
+                    pending.ws.send(JSON.stringify({ type: 'JOIN_APPROVED', participantId: pending.id, hostName: session.hostName }));
+                }
+            }
+            session.pendingParticipants.clear();
+            broadcastParticipantList(session);
+            broadcastStatus(session, session.isLive);
+            return true;
+        }
+
         return false;
     } catch (e) {
         return false;
@@ -332,55 +555,6 @@ function tryHandleHostControlMessage(session, data, isBinary, ws) {
 function hasRunningFfmpeg(session) {
     return !!(session.ffmpegProcess && !session.ffmpegProcess.killed);
 }
-
-streamWss.on('connection', (ws) => {
-    const key = ws.streamKey || 'default';
-    logger.info(`Host connected to WebSocket Ingest for [${key}]`);
-
-    const session = activeStreams.get(key);
-    if (session) {
-        session.hostAlive = true;
-        if (session.disconnectTimer) {
-            logger.info(`Host reconnected to WebSocket Ingest for [${key}]. Cancelled 90-second grace timer.`);
-            clearTimeout(session.disconnectTimer);
-            session.disconnectTimer = null;
-        }
-        session.isLive = true;
-        broadcastStatus(session, true);
-        broadcastAdminTelemetry();
-    }
-
-    ws.on('message', async (data, isBinary) => {
-        const session = activeStreams.get(key);
-        if (session) {
-            if (await tryHandleHostControlMessage(session, data, isBinary, ws)) return;
-        }
-    });
-
-    ws.on('error', (err) => {
-        logger.warn(`[Stream WS Error ${key}]: ${err.message}`);
-        const session = activeStreams.get(key);
-        if (session) session.failureCount = (session.failureCount || 0) + 1;
-    });
-    ws.on('close', () => {
-        logger.info(`Host WebSocket disconnected for [${key}]. Keeping FFmpeg process alive for 90s reconnection window...`);
-        const session = activeStreams.get(key);
-        if (session) {
-            session.hostAlive = false;
-        }
-        if (session && session.isLive) {
-            if (session.disconnectTimer) clearTimeout(session.disconnectTimer);
-            session.disconnectTimer = setTimeout(async () => {
-                logger.info(`90-second reconnection window expired for [${key}]. Stopping FFmpeg process...`);
-                await logStreamSession(session);
-                stopFfmpegLive(session);
-                broadcastStatus(session, false);
-                broadcastAdminTelemetry();
-                session.disconnectTimer = null;
-            }, 90 * 1000);
-        }
-    });
-});
 
 // ─── Viewer WebSocket Handler ──────────────────────────────────────────────
 function getTotalViewerCount(session) {
@@ -409,7 +583,101 @@ viewWss.on('connection', (ws) => {
         try {
             const parsed = JSON.parse(typeof data === 'string' ? data : data.toString());
 
+            // ─── Join Flow ─────────────────────────────────
+            if (parsed.type === 'JOIN_REQUEST') {
+                const name = (parsed.name || '').trim().substring(0, 30);
+                if (!name) {
+                    ws.send(JSON.stringify({ type: 'JOIN_DENIED', reason: 'Name required' }));
+                    return;
+                }
+
+                // Check if already a participant
+                for (const [id, p] of session.participants) {
+                    if (p.ws === ws) {
+                        ws.send(JSON.stringify({ type: 'JOIN_DENIED', reason: 'Already in room' }));
+                        return;
+                    }
+                }
+
+                // Check max participants (approved + pending)
+                const totalPending = session.pendingParticipants.size;
+                const totalActive = session.participants.size;
+                if (totalActive >= session.maxParticipants) {
+                    ws.send(JSON.stringify({ type: 'JOIN_DENIED', reason: `Room is full (${session.maxParticipants} max)` }));
+                    return;
+                }
+
+                const participantId = generateParticipantId();
+                session.pendingParticipants.set(participantId, {
+                    id: participantId,
+                    name,
+                    ws,
+                    requestedAt: Date.now()
+                });
+
+                // Notify host
+                let hostNotified = false;
+                logger.info(`[Session ${key}] Notifying host: streamWss.clients=${streamWss.clients.size}, session.streamKey="${session.streamKey}"`);
+                for (const client of streamWss.clients) {
+                    logger.info(`[Session ${key}]   client.streamKey="${client.streamKey}", readyState=${client.readyState}`);
+                    if (client.streamKey === session.streamKey && client.readyState === 1) {
+                        client.send(JSON.stringify({
+                            type: 'JOIN_REQUEST',
+                            participantId,
+                            name,
+                            pending: session.pendingParticipants.size
+                        }));
+                        hostNotified = true;
+                        logger.info(`[Session ${key}]   -> sent JOIN_REQUEST to host`);
+                    }
+                }
+                if (!hostNotified) {
+                    logger.warn(`[Session ${key}] No host found in streamWss.clients for key="${session.streamKey}"`);
+                }
+
+                ws.send(JSON.stringify({ type: 'JOIN_PENDING', participantId }));
+                logger.info(`[Session ${key}] Join request from "${name}" (${participantId})`);
+                return;
+            }
+
+            // ─── Chat ─────────────────────────────────────
+            if (parsed.type === 'CHAT_MESSAGE') {
+                const text = (parsed.text || '').trim().substring(0, 500);
+                if (!text) return;
+                const participant = findParticipantByWs(session, ws);
+                const fromName = participant ? participant.name : (session.hostName || 'Host');
+                broadcastChat(session, fromName, text);
+                return;
+            }
+
+            // ─── Mic Toggle (viewer) ───────────────────────
+            if (parsed.type === 'MIC_TOGGLE') {
+                const participant = findParticipantByWs(session, ws);
+                if (!participant) return;
+                participant.micEnabled = !!parsed.enabled;
+                broadcastParticipantList(session);
+                // Notify host
+                for (const client of streamWss.clients) {
+                    if (client.streamKey === session.streamKey && client.readyState === 1) {
+                        client.send(JSON.stringify({
+                            type: 'PARTICIPANT_MIC_CHANGED',
+                            participantId: participant.id,
+                            name: participant.name,
+                            micEnabled: participant.micEnabled
+                        }));
+                    }
+                }
+                return;
+            }
+
+            // ─── WebRTC (only for approved participants) ───
             if (parsed.type === 'VIEWER_WEBRTC_OFFER') {
+                const participant = findParticipantByWs(session, ws);
+                if (!participant) {
+                    ws.send(JSON.stringify({ type: 'JOIN_DENIED', reason: 'Not approved yet' }));
+                    return;
+                }
+
                 const viewerSession = new WebRtcViewerSession(
                     key,
                     ws,
@@ -419,6 +687,19 @@ viewWss.on('connection', (ws) => {
                         session.webrtcIngest?.requestVideoKeyframe?.();
                     }
                 );
+                viewerSession.onViewerAudioRtp = (rtp) => {
+                    if (participant.canTalk && participant.micEnabled) {
+                        if (session.webrtcIngest) {
+                            session.webrtcIngest.sendAudioRtp(rtp);
+                        }
+                        for (const vs of session.viewerSessions) {
+                            if (vs !== viewerSession) {
+                                vs.sendAudioRtp(rtp);
+                            }
+                        }
+                    }
+                };
+                participant.viewerSession = viewerSession;
                 session.viewerSessions.add(viewerSession);
                 try {
                     await viewerSession.handleOffer(parsed.sdp);
@@ -443,17 +724,37 @@ viewWss.on('connection', (ws) => {
 
     ws.on('close', () => {
         session.viewers.delete(ws);
-        for (const vs of session.viewerSessions) {
-            if (vs.ws === ws) {
-                vs.close();
-                session.viewerSessions.delete(vs);
+        // Remove from participants
+        for (const [id, p] of session.participants) {
+            if (p.ws === ws) {
+                if (p.viewerSession) {
+                    p.viewerSession.close();
+                    session.viewerSessions.delete(p.viewerSession);
+                }
+                session.participants.delete(id);
+                break;
             }
         }
-        logger.info(`Viewer disconnected from [${key}] (${getTotalViewerCount(session)} total)`);
+        // Remove from pending
+        for (const [id, p] of session.pendingParticipants) {
+            if (p.ws === ws) {
+                session.pendingParticipants.delete(id);
+                break;
+            }
+        }
+        broadcastParticipantList(session);
         broadcastStatus(session, session.isLive);
+        logger.info(`Viewer disconnected from [${key}]`);
     });
     ws.on('error', (err) => logger.warn(`[Viewer WS Error ${key}]: ${err.message}`));
 });
+
+function findParticipantByWs(session, ws) {
+    for (const [id, p] of session.participants) {
+        if (p.ws === ws) return p;
+    }
+    return null;
+}
 
 setInterval(() => {
     broadcastAdminTelemetry();
@@ -466,7 +767,6 @@ function broadcastHostHealth() {
         let health = 'good';
         if (!session.hostAlive) health = 'poor';
         else if (!session.webrtcIngest && !hasRunningFfmpeg(session)) health = 'slow';
-
         const msg = JSON.stringify({ type: 'HOST_HEALTH', health });
         for (const client of wss.clients) {
             if (client.streamKey === session.streamKey && client.readyState === 1 && client.role === 'viewer') {

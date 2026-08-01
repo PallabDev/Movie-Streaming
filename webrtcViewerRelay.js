@@ -1,4 +1,4 @@
-import { RTCPeerConnection, RtpPacket, useH264, useOPUS, useVP8 } from 'werift';
+import { RTCPeerConnection, useH264, useOPUS, useVP8 } from 'werift';
 import logger from './logger.js';
 
 const WEBRTC_ICE_SERVERS = [{ urls: 'stun:stun.l.google.com:19302' }];
@@ -37,6 +37,8 @@ export class WebRtcViewerSession {
         this.videoPt = 0;
         this.audioPt = 0;
         this.stats = { videoPackets: 0, audioPackets: 0, droppedPackets: 0 };
+        this._lastPliAt = 0;
+        this.onViewerAudioRtp = null;
     }
 
     async handleOffer(sdpOffer) {
@@ -57,6 +59,17 @@ export class WebRtcViewerSession {
             }
         });
 
+        this.pc.onTrack.subscribe(track => {
+            if (track.kind === 'audio') {
+                logger.info(`[Viewer Relay ${this.streamKey}] Received incoming viewer mic track`);
+                track.onReceiveRtp.subscribe(rtp => {
+                    if (this.onViewerAudioRtp) {
+                        try { this.onViewerAudioRtp(rtp); } catch (e) { }
+                    }
+                });
+            }
+        });
+
         await this.pc.setRemoteDescription({ type: 'offer', sdp: sdpOffer });
 
         const transceivers = this.pc.getTransceivers();
@@ -66,10 +79,15 @@ export class WebRtcViewerSession {
                 t.direction = 'sendonly';
                 this.videoSender = t.sender;
                 this.videoSsrc = t.sender.ssrc;
-                this.videoSender.onPictureLossIndication.subscribe(() => this.requestKeyframe('viewer pli'));
+                this.videoSender.onPictureLossIndication.subscribe(() => {
+                    const now = Date.now();
+                    if (now - this._lastPliAt < 1000) return;
+                    this._lastPliAt = now;
+                    this.requestKeyframe('viewer pli');
+                });
                 logger.info(`[Viewer Relay ${this.streamKey}] Video sender ssrc=${this.videoSsrc} track=${!!t.sender.track}`);
             } else if (t.kind === 'audio') {
-                t.direction = 'sendonly';
+                t.direction = 'sendrecv';
                 this.audioSender = t.sender;
                 this.audioSsrc = t.sender.ssrc;
             }
@@ -95,8 +113,8 @@ export class WebRtcViewerSession {
         }
 
         logger.info(`[Viewer Relay ${this.streamKey}] SDP answer sent. Codec=${this.videoCodec}`);
-        setTimeout(() => this.requestKeyframe('viewer joined'), 500);
-        setTimeout(() => this.requestKeyframe('viewer warmup'), 2000);
+        setTimeout(() => this.requestKeyframe('viewer joined'), 300);
+        setTimeout(() => this.requestKeyframe('viewer warmup'), 1200);
     }
 
     async handleIceCandidate(candidate) {
@@ -120,11 +138,12 @@ export class WebRtcViewerSession {
                 return;
             }
 
-            const cloned = RtpPacket.deSerialize(rtp.serialize());
-            cloned.header.ssrc = this.videoSsrc;
-            cloned.header.payloadType = this.videoPt;
+            const origSsrc = rtp.header.ssrc;
+            const origPt = rtp.header.payloadType;
+            rtp.header.ssrc = this.videoSsrc;
+            rtp.header.payloadType = this.videoPt;
 
-            this.videoSender.sendRtp(cloned).then(sent => {
+            this.videoSender.sendRtp(rtp).then(sent => {
                 if (this.stats.videoPackets < 5) {
                     logger.info(`[Viewer Relay ${this.streamKey}] video packet sent OK: bytes=${sent}`);
                 }
@@ -132,9 +151,12 @@ export class WebRtcViewerSession {
                 this.stats.droppedPackets++;
                 logger.error(`[Viewer Relay ${this.streamKey}] sendRtp error: ${e.message}`);
             });
+
+            rtp.header.ssrc = origSsrc;
+            rtp.header.payloadType = origPt;
             this.stats.videoPackets++;
             if (this.stats.videoPackets <= 5) {
-                logger.info(`[Viewer Relay ${this.streamKey}] video packet queued: total=${this.stats.videoPackets} pt=${this.videoPt} ssrc=${this.videoSsrc} payloadLen=${cloned.payload?.length}`);
+                logger.info(`[Viewer Relay ${this.streamKey}] video packet sent: total=${this.stats.videoPackets} pt=${this.videoPt} ssrc=${this.videoSsrc} payloadLen=${rtp.payload?.length}`);
             }
         } catch (e) {
             this.stats.droppedPackets++;
@@ -152,13 +174,17 @@ export class WebRtcViewerSession {
     sendAudioRtp(rtp) {
         if (!this.alive || !this.audioSender) return;
         try {
-            const cloned = RtpPacket.deSerialize(rtp.serialize());
-            cloned.header.ssrc = this.audioSsrc;
-            cloned.header.payloadType = this.audioPt;
+            const origSsrc = rtp.header.ssrc;
+            const origPt = rtp.header.payloadType;
+            rtp.header.ssrc = this.audioSsrc;
+            rtp.header.payloadType = this.audioPt;
 
-            this.audioSender.sendRtp(cloned).catch(() => {
+            this.audioSender.sendRtp(rtp).catch(() => {
                 this.stats.droppedPackets++;
             });
+
+            rtp.header.ssrc = origSsrc;
+            rtp.header.payloadType = origPt;
             this.stats.audioPackets++;
         } catch (e) {
             this.stats.droppedPackets++;
