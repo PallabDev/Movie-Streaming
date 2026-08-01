@@ -10,7 +10,6 @@
     <link rel="icon" type="image/png" href="/favicon.png">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
     <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
     <script>
         tailwind.config = {
             theme: {
@@ -168,13 +167,7 @@
                 <div class="flex items-center gap-3 relative">
                     <!-- Quality Badge -->
                     <span id="quality-badge"
-                        class="px-2 py-0.5 rounded text-[10px] font-semibold bg-indigo-500/20 text-indigo-400 border border-indigo-500/30 cursor-pointer hover:bg-indigo-500/30 transition-colors"
-                        title="Click to change quality">Auto</span>
-
-                    <!-- Quality Dropdown (rebuilt dynamically from HLS levels) -->
-                    <div id="quality-dropdown"
-                        class="absolute bottom-full right-0 mb-2 bg-slate-900/95 backdrop-blur-sm border border-white/10 rounded-xl shadow-2xl py-1 min-w-[140px] hidden z-30">
-                    </div>
+                        class="px-2 py-0.5 rounded text-[10px] font-semibold bg-indigo-500/20 text-indigo-400 border border-indigo-500/30">720p WebRTC</span>
 
                     <!-- Fullscreen Button -->
                     <button id="sh-full-btn"
@@ -205,12 +198,10 @@
                 const connDot = document.getElementById('conn-dot');
                 const connLabel = document.getElementById('conn-label');
                 const qualityBadge = document.getElementById('quality-badge');
-                const qualityDropdown = document.getElementById('quality-dropdown');
 
                 const currentStreamKey = '<%= typeof streamKey !== "undefined" ? streamKey : "default" %>';
-                const masterUrl = `/live-playlist/${encodeURIComponent(currentStreamKey)}/master.m3u8`;
 
-                let hls = null;
+                let pc = null;
                 let statusWs = null;
                 let controlsTimeout = null;
 
@@ -242,8 +233,7 @@
                 function showOffline() {
                     offlineScreen.style.display = 'flex';
                     hideLoading();
-                    if (playlistRefreshTimer) { clearInterval(playlistRefreshTimer); playlistRefreshTimer = null; }
-                    if (hls) { hls.destroy(); hls = null; }
+                    if (pc) { pc.close(); pc = null; }
                     video.pause();
                     updatePlayIcon();
                 }
@@ -258,121 +248,6 @@
 
                 function hideLoading() {
                     loadingSpinner.style.display = 'none';
-                }
-
-                function initHlsPlayer() {
-                    if (hls) { hls.destroy(); hls = null; }
-                    if (playlistRefreshTimer) { clearInterval(playlistRefreshTimer); playlistRefreshTimer = null; }
-                    showLoading();
-                    hideOffline();
-
-                    if (Hls.isSupported()) {
-                        hls = new Hls({
-                            enableWorker: true,
-                            lowLatencyMode: false,
-                            liveSyncDurationCount: 3,
-                            liveMaxLatencyDurationCount: 8,
-                            backBufferLength: 60,
-                            maxBufferLength: 30,
-                            maxMaxBufferLength: 60,
-                            manifestLoadingTimeOut: 10000,
-                            manifestLoadingMaxRetry: 10,
-                            manifestLoadingRetryDelay: 500,
-                            levelLoadingTimeOut: 10000,
-                            levelLoadingMaxRetry: 10,
-                            levelLoadingRetryDelay: 500,
-                            fragLoadingTimeOut: 10000,
-                            fragLoadingMaxRetry: 10,
-                            fragLoadingRetryDelay: 500,
-                        });
-
-                        hls.loadSource(masterUrl);
-                        hls.attachMedia(video);
-
-                        hls.on(Hls.Events.MANIFEST_PARSED, (event, data) => {
-                            hideOffline();
-                            hideLoading();
-                            showControls();
-                            rebuildQualityDropdown(data.levels);
-                            // Initialize quality badge
-                            if (data.levels && data.levels.length > 0) {
-                                const autoHeight = data.levels[hls.currentLevel >= 0 ? hls.currentLevel : 0]?.height;
-                                qualityBadge.textContent = currentQuality === 'auto' ? (autoHeight ? autoHeight + 'p' : 'Auto') : currentQuality + 'p';
-                            }
-                            // Seek to live edge on start/reconnect
-                            if (video.duration && video.duration > 0) {
-                                video.currentTime = video.duration - 10;
-                            }
-                            video.play().then(() => updatePlayIcon()).catch(() => updatePlayIcon());
-                        });
-
-                        hls.on(Hls.Events.ERROR, (event, data) => {
-                            if (data.fatal) {
-                                switch (data.type) {
-                                    case Hls.ErrorTypes.NETWORK_ERROR:
-                                        console.warn('Network error, retrying HLS manifest...');
-                                        updateConnViewer('poor');
-                                        setTimeout(() => { if (hls) hls.loadSource(masterUrl); }, 1000);
-                                        break;
-                                    case Hls.ErrorTypes.MEDIA_ERROR:
-                                        console.warn('Media error, recovering...');
-                                        hls.recoverMediaError();
-                                        break;
-                                    default:
-                                        showOffline();
-                                        break;
-                                }
-                            }
-                        });
-
-                        // ─── Viewer Connection Quality Monitor ─────────────────────────
-                        let viewerConn = { loads: 0, fails: 0, lastBandwidth: 0 };
-                        let viewerConnTimer = null;
-
-                        function updateConnViewer(level) {
-                            const colors = { good: '#22c55e', stable: '#10b981', slow: '#f59e0b', poor: '#ef4444' };
-                            const labels = { good: 'Good', stable: 'Stable', slow: 'Slow Upload', poor: 'Poor' };
-                            const bgColors = { good: 'bg-green-500/20', stable: 'bg-green-500/20', slow: 'bg-amber-500/20', poor: 'bg-red-500/20' };
-                            const textColors = { good: 'text-green-400', stable: 'text-green-400', slow: 'text-amber-400', poor: 'text-red-400' };
-                            const borderColors = { good: 'border-green-500/30', stable: 'border-green-500/30', slow: 'border-amber-500/30', poor: 'border-red-500/30' };
-                            if (connDot) connDot.style.background = colors[level] || colors.stable;
-                            if (connLabel) connLabel.textContent = labels[level] || 'Stable';
-                            if (connBadge) {
-                                connBadge.className = connBadge.className
-                                    .replace(/bg-\w+-500\/20/g, '').replace(/text-\w+-400/g, '').replace(/border-\w+-500\/30/g, '')
-                                    + ' ' + (bgColors[level] || bgColors.stable) + ' ' + (textColors[level] || textColors.stable) + ' ' + (borderColors[level] || borderColors.stable);
-                            }
-                        }
-
-                        hls.on(Hls.Events.FRAG_LOADED, () => {
-                            viewerConn.loads++;
-                        });
-                        hls.on(Hls.Events.FRAG_LOAD_ERROR, () => {
-                            viewerConn.fails++;
-                        });
-                        hls.on(Hls.Events.FRAG_BUFFERED, () => {
-                            if (hls.bandwidthEstimate) viewerConn.lastBandwidth = hls.bandwidthEstimate;
-                        });
-
-                        if (viewerConnTimer) clearInterval(viewerConnTimer);
-                        viewerConnTimer = setInterval(() => {
-                            const total = viewerConn.loads;
-                            if (total < 2) return;
-                            const failRate = viewerConn.fails / total;
-                            const bw = viewerConn.lastBandwidth;
-                            if (failRate > 0.3 || bw < 500000) {
-                                updateConnViewer('poor');
-                            } else if (failRate > 0.1 || bw < 2000000) {
-                                updateConnViewer('good');
-                            } else {
-                                updateConnViewer('stable');
-                            }
-                            viewerConn = { loads: 0, fails: 0, lastBandwidth: viewerConn.lastBandwidth };
-                        }, 5000);
-                    } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-                        video.src = masterUrl;
-                        video.play().then(() => updatePlayIcon()).catch(() => updatePlayIcon());
-                    }
                 }
 
                 function formatTime(sec) {
@@ -392,30 +267,24 @@
                     }
                 }
 
-                // Play/Pause button: only this toggles playback
                 playBtn.addEventListener('click', () => {
                     if (video.paused) video.play();
                     else video.pause();
                     updatePlayIcon();
-                    // ensure controls remain visible briefly after interaction
                     showControls();
                 });
 
-                // Remove native click-to-toggle behavior: prevent clicks on player/video from toggling playback
                 ['click', 'pointerdown', 'pointerup', 'touchend', 'touchstart'].forEach(evt => {
                     player.addEventListener(evt, (e) => {
-                        // allow interactions inside controls
                         if (e.target && e.target.closest && (e.target.closest('#sh-controls'))) return;
-                        // allow clicks on control buttons
                         if (e.target && (e.target.tagName === 'BUTTON' || e.target.tagName === 'A' || e.target.closest('button') || e.target.closest('a'))) return;
-                        // On touchstart or pointerdown (touch), we still want to show controls but prevent native play/pause toggling
                         if (evt === 'touchstart' || (evt === 'pointerdown' && e.pointerType === 'touch')) {
                             try { showControls(); } catch (err) { }
                         }
                         try { e.stopImmediatePropagation(); } catch (e) { }
                         e.stopPropagation();
                         e.preventDefault();
-                    }, true); // capture
+                    }, true);
 
                     video.addEventListener(evt, (e) => {
                         try { e.stopImmediatePropagation(); } catch (e) { }
@@ -423,8 +292,6 @@
                         e.preventDefault();
                     }, true);
                 });
-
-                // initialize center visibility state is not needed since there is no center button
 
                 muteBtn.addEventListener('click', () => {
                     video.muted = !video.muted;
@@ -435,7 +302,6 @@
                     currentTimeEl.textContent = formatTime(video.currentTime || 0);
                 });
 
-                // Keep UI in sync with playback state
                 video.addEventListener('play', () => { updatePlayIcon(); hideLoading(); });
                 video.addEventListener('pause', () => { updatePlayIcon(); showControls(); });
 
@@ -461,140 +327,106 @@
 
                 fullBtn.addEventListener('click', toggleFullscreen);
 
-                // ─── Quality Switching ───────────────────────────────────────────────
-                let currentQuality = 'auto';
+                if (qualityBadge) {
+                    qualityBadge.textContent = '720p';
+                    qualityBadge.style.cursor = 'default';
+                }
 
-                function rebuildQualityDropdown(levels) {
-                    if (!qualityDropdown || !levels) return;
-                    const icons = ['fa-solid fa-wand-magic-sparkles', 'fa-solid fa-star', 'fa-solid fa-video', 'fa-solid fa-signal'];
-                    const colors = ['text-indigo-400', 'text-amber-400', 'text-green-400', 'text-cyan-400'];
-                    let html = `<button data-quality="auto" class="quality-option w-full text-left px-4 py-2 text-xs font-semibold text-slate-300 hover:bg-white/10 hover:text-white transition-colors flex items-center gap-2"><i class="${icons[0]} ${colors[0]} w-4"></i> Auto</button>`;
-                    const seen = new Set();
-                    levels.forEach((level, i) => {
-                        const h = level.height;
-                        if (!h || seen.has(h)) return;
-                        seen.add(h);
-                        const icon = icons[Math.min(i + 1, icons.length - 1)];
-                        const color = colors[Math.min(i + 1, colors.length - 1)];
-                        html += `<button data-quality="${h}" class="quality-option w-full text-left px-4 py-2 text-xs font-semibold text-slate-300 hover:bg-white/10 hover:text-white transition-colors flex items-center gap-2"><i class="${icon} ${color} w-4"></i> ${h}p</button>`;
+                // ─── WebRTC Viewer Relay ──────────────────────────────────────────────
+                async function startWebRtcViewer() {
+                    if (pc) { pc.close(); pc = null; }
+                    showLoading();
+                    hideOffline();
+
+                    pc = new RTCPeerConnection({
+                        iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
                     });
-                    qualityDropdown.innerHTML = html;
-                    qualityDropdown.querySelectorAll('.quality-option').forEach(btn => {
-                        btn.addEventListener('click', (e) => {
-                            e.stopPropagation();
-                            setQuality(btn.dataset.quality);
-                        });
-                    });
-                }
 
-                function setQuality(level) {
-                    if (!hls) return;
-                    if (level === 'auto') {
-                        hls.currentLevel = -1;
-                        currentQuality = 'auto';
-                        qualityBadge.textContent = 'Auto';
-                    } else {
-                        const targetHeight = parseInt(level);
-                        for (let i = 0; i < hls.levels.length; i++) {
-                            if (hls.levels[i].height === targetHeight) {
-                                hls.currentLevel = i;
-                                currentQuality = level;
-                                qualityBadge.textContent = targetHeight + 'p';
-                                return;
-                            }
+                    pc.ontrack = (event) => {
+                        if (event.streams && event.streams[0]) {
+                            video.srcObject = event.streams[0];
+                            video.play().then(() => {
+                                hideLoading();
+                                showControls();
+                            }).catch(() => updatePlayIcon());
+                        } else {
+                            const stream = new MediaStream([event.track]);
+                            video.srcObject = stream;
+                            video.play().then(() => {
+                                hideLoading();
+                                showControls();
+                            }).catch(() => updatePlayIcon());
                         }
-                        // Fallback: find closest level
-                        let closest = 0;
-                        let minDiff = Infinity;
-                        for (let i = 0; i < hls.levels.length; i++) {
-                            const diff = Math.abs((hls.levels[i].height || 0) - targetHeight);
-                            if (diff < minDiff) { minDiff = diff; closest = i; }
+                    };
+
+                    pc.oniceconnectionstatechange = () => {
+                        const state = pc.iceConnectionState;
+                        if (state === 'connected' || state === 'completed') {
+                            updateConnViewer('stable');
+                        } else if (state === 'disconnected') {
+                            updateConnViewer('slow');
+                        } else if (state === 'failed') {
+                            updateConnViewer('poor');
                         }
-                        hls.currentLevel = closest;
-                        currentQuality = String(hls.levels[closest].height || level);
-                        qualityBadge.textContent = (hls.levels[closest].height || '?') + 'p';
+                    };
+
+                    pc.addTransceiver('video', { direction: 'recvonly' });
+                    pc.addTransceiver('audio', { direction: 'recvonly' });
+
+                    const offer = await pc.createOffer();
+                    await pc.setLocalDescription(offer);
+
+                    if (statusWs && statusWs.readyState === WebSocket.OPEN) {
+                        statusWs.send(JSON.stringify({
+                            type: 'VIEWER_WEBRTC_OFFER',
+                            sdp: pc.localDescription.sdp
+                        }));
                     }
-                    qualityDropdown.classList.add('hidden');
                 }
 
-                function updateQualityBadgeFromHls() {
-                    if (!hls || currentQuality !== 'auto') return;
-                    if (hls.currentLevel >= 0 && hls.levels[hls.currentLevel]) {
-                        qualityBadge.textContent = (hls.levels[hls.currentLevel].height || 'Auto') + 'p';
+                function updateConnViewer(level) {
+                    const colors = { good: '#22c55e', stable: '#10b981', slow: '#f59e0b', poor: '#ef4444' };
+                    const labels = { good: 'Good', stable: 'Stable', slow: 'Reconnecting', poor: 'Poor' };
+                    const bgColors = { good: 'bg-green-500/20', stable: 'bg-green-500/20', slow: 'bg-amber-500/20', poor: 'bg-red-500/20' };
+                    const textColors = { good: 'text-green-400', stable: 'text-green-400', slow: 'text-amber-400', poor: 'text-red-400' };
+                    const borderColors = { good: 'border-green-500/30', stable: 'border-green-500/30', slow: 'border-amber-500/30', poor: 'border-red-500/30' };
+                    if (connDot) connDot.style.background = colors[level] || colors.stable;
+                    if (connLabel) connLabel.textContent = labels[level] || 'Stable';
+                    if (connBadge) {
+                        connBadge.className = connBadge.className
+                            .replace(/bg-\w+-500\/20/g, '').replace(/text-\w+-400/g, '').replace(/border-\w+-500\/30/g, '')
+                            + ' ' + (bgColors[level] || bgColors.stable) + ' ' + (textColors[level] || textColors.stable) + ' ' + (borderColors[level] || borderColors.stable);
                     }
                 }
-
-                // Toggle dropdown
-                qualityBadge.addEventListener('click', (e) => {
-                    e.stopPropagation();
-                    qualityDropdown.classList.toggle('hidden');
-                });
-
-                // Close dropdown on outside click
-                document.addEventListener('click', (e) => {
-                    if (!qualityDropdown.contains(e.target) && e.target !== qualityBadge) {
-                        qualityDropdown.classList.add('hidden');
-                    }
-                });
-
-                // Update quality badge on level switch
-                let lastLevel = -1;
-                setInterval(() => {
-                    if (hls && hls.currentLevel !== lastLevel) {
-                        lastLevel = hls.currentLevel;
-                        updateQualityBadgeFromHls();
-                    }
-                }, 2000);
-
-                // ─── Auto-refresh playlist when host changes quality settings ──
-                let lastMasterContent = '';
-                let playlistRefreshTimer = null;
-
-                async function checkPlaylistUpdate() {
-                    if (!hls || !masterUrl) return;
-                    try {
-                        const res = await fetch(masterUrl + '?t=' + Date.now());
-                        const text = await res.text();
-                        if (lastMasterContent && text !== lastMasterContent) {
-                            console.log('[HLS] Playlist changed — reloading quality levels');
-                            const prevQuality = currentQuality;
-                            function onReparsed(e, data) {
-                                hls.off(Hls.Events.MANIFEST_PARSED, onReparsed);
-                                rebuildQualityDropdown(data.levels);
-                                if (data.levels && data.levels.length > 0) {
-                                    if (prevQuality === 'auto') {
-                                        hls.currentLevel = -1;
-                                        currentQuality = 'auto';
-                                    } else {
-                                        setQuality(prevQuality);
-                                    }
-                                    const h = data.levels[hls.currentLevel >= 0 ? hls.currentLevel : 0]?.height;
-                                    qualityBadge.textContent = currentQuality === 'auto' ? (h ? h + 'p' : 'Auto') : currentQuality + 'p';
-                                }
-                            }
-                            hls.on(Hls.Events.MANIFEST_PARSED, onReparsed);
-                            hls.loadSource(masterUrl + '?t=' + Date.now());
-                        }
-                        lastMasterContent = text;
-                    } catch (e) { }
-                }
-
-                playlistRefreshTimer = setInterval(checkPlaylistUpdate, 5000);
 
                 function connectStatusWebSocket() {
                     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-                    const wsUrl = `${protocol}//${window.location.host}/status-ws?key=${encodeURIComponent(currentStreamKey)}&role=viewer`;
+                    const wsUrl = `${protocol}//${window.location.host}/view-ws?key=${encodeURIComponent(currentStreamKey)}`;
                     statusWs = new WebSocket(wsUrl);
 
-                    statusWs.onmessage = (event) => {
+                    statusWs.onopen = () => {
+                        checkStreamStatus();
+                    };
+
+                    statusWs.onmessage = async (event) => {
                         try {
                             const data = JSON.parse(event.data);
                             if (data.type === 'STATUS') {
                                 if (data.live) {
                                     hideOffline();
-                                    if (!hls) initHlsPlayer();
+                                    if (!pc || pc.connectionState === 'closed' || pc.connectionState === 'failed') {
+                                        startWebRtcViewer();
+                                    }
                                 } else {
                                     showOffline();
+                                }
+                            } else if (data.type === 'VIEWER_WEBRTC_ANSWER') {
+                                if (pc && data.sdp) {
+                                    await pc.setRemoteDescription({ type: 'answer', sdp: data.sdp });
+                                }
+                            } else if (data.type === 'VIEWER_ICE_CANDIDATE') {
+                                if (pc && data.candidate) {
+                                    try { await pc.addIceCandidate(data.candidate); } catch (e) { }
                                 }
                             } else if (data.type === 'HOST_HEALTH') {
                                 if (data.health === 'poor') {
@@ -615,7 +447,7 @@
                         .then(res => res.json())
                         .then(data => {
                             if (data.live) {
-                                initHlsPlayer();
+                                startWebRtcViewer();
                             } else {
                                 showOffline();
                             }
@@ -624,7 +456,6 @@
                 };
 
                 connectStatusWebSocket();
-                checkStreamStatus();
             })();
     </script>
 </body>

@@ -17,6 +17,7 @@ import logger, { getCpuUsage, getSystemInfo } from './logger.js';
 import { initDb } from './db/migrate.js';
 import { eq, desc, sql } from 'drizzle-orm';
 import { WebRtcIngestSession } from './webrtcIngest.js';
+import { WebRtcViewerSession } from './webrtcViewerRelay.js';
 
 EventEmitter.defaultMaxListeners = 50;
 
@@ -132,6 +133,7 @@ function getOrCreateStreamSession(streamKey, title = 'Live Movie Stream', user =
         hostBitrate: 4000,
         ffmpegRestartBlocked: false,
         viewers: new Set(),
+        viewerSessions: new Set(),
         initSegment: null,
         peakViewersCount: 0,
         _sessionLoggedToDb: false,
@@ -261,6 +263,16 @@ function tryHandleHostControlMessage(session, data, isBinary, ws) {
                 session.webrtcIngest = null;
             }
             session.webrtcIngest = new WebRtcIngestSession(session, ws, async () => {
+                session.webrtcIngest.onVideoRtp = (rtp) => {
+                    for (const vs of session.viewerSessions) {
+                        vs.sendVideoRtp(rtp);
+                    }
+                };
+                session.webrtcIngest.onAudioRtp = (rtp) => {
+                    for (const vs of session.viewerSessions) {
+                        vs.sendAudioRtp(rtp);
+                    }
+                };
                 if (!hasRunningFfmpeg(session) && !session.ffmpegRestartBlocked) {
                     try {
                         await startFfmpegLive(session);
@@ -384,14 +396,45 @@ viewWss.on('connection', (ws) => {
     }
     logger.info(`Viewer connected to [${key}] (${getTotalViewerCount(session)} total)`);
 
-    if (session.initSegment) {
-        try { ws.send(session.initSegment); } catch (e) { }
-    }
-
     broadcastStatus(session, session.isLive);
+
+    ws.on('message', async (data, isBinary) => {
+        if (isBinary) return;
+        try {
+            const parsed = JSON.parse(typeof data === 'string' ? data : data.toString());
+
+            if (parsed.type === 'VIEWER_WEBRTC_OFFER') {
+                const viewerSession = new WebRtcViewerSession(key, ws);
+                session.viewerSessions.add(viewerSession);
+                try {
+                    await viewerSession.initialize();
+                    await viewerSession.handleOffer(parsed.sdp);
+                } catch (e) {
+                    logger.error(`[Viewer Relay ${key}] Failed to handle offer: ${e.message}`);
+                    viewerSession.close();
+                    session.viewerSessions.delete(viewerSession);
+                }
+                return;
+            }
+
+            if (parsed.type === 'VIEWER_ICE_CANDIDATE') {
+                const lastViewer = Array.from(session.viewerSessions).pop();
+                if (lastViewer && parsed.candidate) {
+                    lastViewer.handleIceCandidate(parsed.candidate);
+                }
+                return;
+            }
+        } catch (e) { }
+    });
 
     ws.on('close', () => {
         session.viewers.delete(ws);
+        for (const vs of session.viewerSessions) {
+            if (vs.ws === ws) {
+                vs.close();
+                session.viewerSessions.delete(vs);
+            }
+        }
         logger.info(`Viewer disconnected from [${key}] (${getTotalViewerCount(session)} total)`);
         broadcastStatus(session, session.isLive);
     });
@@ -503,6 +546,10 @@ function writeMasterPlaylist(session) {
 function buildFfmpegArgs720p(session) {
     const hlsDir = session.liveDir.replace(/\\/g, '/');
     const sdpPath = path.join(session.liveDir, 'input.sdp').replace(/\\/g, '/');
+    const videoCodec = session.webrtcIngest?.videoCodec || 'vp8';
+    const videoCodecArgs = videoCodec === 'vp8'
+        ? ['-c:v', 'libx264', '-preset', 'ultrafast', '-tune', 'zerolatency', '-b:v', '4M', '-maxrate', '4M', '-bufsize', '8M']
+        : ['-c:v', 'copy'];
     return [
         '-y',
         '-protocol_whitelist', 'file,udp,rtp',
@@ -510,7 +557,7 @@ function buildFfmpegArgs720p(session) {
         '-analyzeduration', '2000000',
         '-probesize', '2M',
         '-i', sdpPath,
-        '-c:v', 'copy',
+        ...videoCodecArgs,
         '-c:a', 'aac', '-b:a', '128k', '-ar:a', '48000', '-ac:a', '2',
         '-f', 'hls', '-hls_time', '2', '-hls_list_size', '20',
         '-hls_flags', 'delete_segments+independent_segments',
@@ -589,9 +636,9 @@ async function startFfmpegLive(session, opts = {}) {
 
     writeMasterPlaylist(session);
 
-    logger.info(`Spawning FFmpeg for [${session.streamKey}] — 720p H264 passthrough...`, { sys: getSystemInfo() });
+    logger.info(`Spawning FFmpeg for [${session.streamKey}] — 720p VP8→H264 transcode...`, { sys: getSystemInfo() });
     session.ffmpegProcess = spawn('ffmpeg', buildFfmpegArgs720p(session), { stdio: ['pipe', 'pipe', 'pipe'] });
-    attachFfmpegLogging(session, session.ffmpegProcess, '720p Passthrough');
+    attachFfmpegLogging(session, session.ffmpegProcess, '720p Transcode');
 
     session.isLive = true;
     session.ffmpegSpawnedAt = Date.now();

@@ -823,19 +823,6 @@
                 });
             }
 
-            const transceivers = peerConnection.getTransceivers();
-            for (const t of transceivers) {
-                if (t.receiver.track.kind === 'video') {
-                    try {
-                        const caps = RTCRtpReceiver.getCapabilities('video');
-                        if (caps && caps.codecs) {
-                            const h264 = caps.codecs.filter(c => c.mimeType === 'video/H264');
-                            if (h264.length) t.setCodecPreferences(h264);
-                        }
-                    } catch (e) { console.warn('setCodecPreferences error', e); }
-                }
-            }
-
             const senders = peerConnection.getSenders();
             const videoSender = senders.find(s => s.track && s.track.kind === 'video');
             if (videoSender) {

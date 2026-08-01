@@ -18,6 +18,8 @@ export class WebRtcIngestSession {
         this.audioPt = 111;
         this.videoCodec = 'vp8';
         this.stats = { bytes: 0, packets: 0 };
+        this.onVideoRtp = null;
+        this.onAudioRtp = null;
     }
 
     async initialize() {
@@ -51,6 +53,9 @@ export class WebRtcIngestSession {
                     if (this.videoSocket) {
                         try { this.videoSocket.send(buf, this.videoPort, '127.0.0.1'); } catch (e) { }
                     }
+                    if (this.onVideoRtp) {
+                        try { this.onVideoRtp(rtp); } catch (e) { }
+                    }
                 });
             } else if (track.kind === 'audio') {
                 track.onReceiveRtp.subscribe(rtp => {
@@ -59,6 +64,9 @@ export class WebRtcIngestSession {
                     this.stats.packets++;
                     if (this.audioSocket) {
                         try { this.audioSocket.send(buf, this.audioPort, '127.0.0.1'); } catch (e) { }
+                    }
+                    if (this.onAudioRtp) {
+                        try { this.onAudioRtp(rtp); } catch (e) { }
                     }
                 });
             }
