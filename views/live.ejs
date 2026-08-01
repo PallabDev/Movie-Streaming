@@ -204,6 +204,11 @@
                 let pc = null;
                 let statusWs = null;
                 let controlsTimeout = null;
+                const STREAM_TARGET = {
+                    height: 720,
+                    fps: 30,
+                    bitrate: 6000000
+                };
 
                 function showControls() {
                     controls.style.opacity = '1';
@@ -328,8 +333,22 @@
                 fullBtn.addEventListener('click', toggleFullscreen);
 
                 if (qualityBadge) {
-                    qualityBadge.textContent = '720p';
+                    qualityBadge.textContent = '720p 30fps';
                     qualityBadge.style.cursor = 'default';
+                }
+
+                function preferVideoCodec(transceiver) {
+                    try {
+                        if (!transceiver || !RTCRtpReceiver.getCapabilities) return;
+                        const capabilities = RTCRtpReceiver.getCapabilities('video');
+                        if (!capabilities || !Array.isArray(capabilities.codecs)) return;
+                        const codecs = capabilities.codecs;
+                        const preferred = codecs.filter(codec => /video\/H264/i.test(codec.mimeType));
+                        const fallback = codecs.filter(codec => !/video\/H264/i.test(codec.mimeType));
+                        if (preferred.length && transceiver.setCodecPreferences) {
+                            transceiver.setCodecPreferences([...preferred, ...fallback]);
+                        }
+                    } catch (e) { }
                 }
 
                 // ─── WebRTC Viewer Relay ──────────────────────────────────────────────
@@ -373,7 +392,8 @@
                         }
                     };
 
-                    pc.addTransceiver('video', { direction: 'recvonly' });
+                    const videoTransceiver = pc.addTransceiver('video', { direction: 'recvonly' });
+                    preferVideoCodec(videoTransceiver);
                     pc.addTransceiver('audio', { direction: 'recvonly' });
 
                     const offer = await pc.createOffer();

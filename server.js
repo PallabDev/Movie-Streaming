@@ -21,6 +21,13 @@ import { WebRtcViewerSession } from './webrtcViewerRelay.js';
 
 EventEmitter.defaultMaxListeners = 50;
 
+const STREAM_QUALITY = Object.freeze({
+    height: 720,
+    fps: 30,
+    bitrateKbps: 6000,
+    bitrateBps: 6000000
+});
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -129,8 +136,8 @@ function getOrCreateStreamSession(streamKey, title = 'Live Movie Stream', user =
         createdAt: new Date(),
         totalChunksCount: 0,
         failureCount: 0,
-        hostQuality: 720,
-        hostBitrate: 4000,
+        hostQuality: STREAM_QUALITY.height,
+        hostBitrate: STREAM_QUALITY.bitrateKbps,
         ffmpegRestartBlocked: false,
         viewers: new Set(),
         viewerSessions: new Set(),
@@ -403,7 +410,7 @@ viewWss.on('connection', (ws) => {
             const parsed = JSON.parse(typeof data === 'string' ? data : data.toString());
 
             if (parsed.type === 'VIEWER_WEBRTC_OFFER') {
-                const viewerSession = new WebRtcViewerSession(key, ws);
+                const viewerSession = new WebRtcViewerSession(key, ws, session.webrtcIngest?.videoCodec || 'h264');
                 session.viewerSessions.add(viewerSession);
                 try {
                     await viewerSession.handleOffer(parsed.sdp);
@@ -450,7 +457,7 @@ function broadcastHostHealth() {
         if (!session.isLive) continue;
         let health = 'good';
         if (!session.hostAlive) health = 'poor';
-        else if (!hasRunningFfmpeg(session)) health = 'slow';
+        else if (!session.webrtcIngest && !hasRunningFfmpeg(session)) health = 'slow';
 
         const msg = JSON.stringify({ type: 'HOST_HEALTH', health });
         for (const client of wss.clients) {
@@ -547,7 +554,7 @@ function buildFfmpegArgs720p(session) {
     const sdpPath = path.join(session.liveDir, 'input.sdp').replace(/\\/g, '/');
     const videoCodec = session.webrtcIngest?.videoCodec || 'vp8';
     const videoCodecArgs = videoCodec === 'vp8'
-        ? ['-c:v', 'libx264', '-preset', 'ultrafast', '-tune', 'zerolatency', '-b:v', '4M', '-maxrate', '4M', '-bufsize', '8M']
+        ? ['-c:v', 'libx264', '-preset', 'ultrafast', '-tune', 'zerolatency', '-b:v', `${STREAM_QUALITY.bitrateKbps}k`, '-maxrate', `${STREAM_QUALITY.bitrateKbps}k`, '-bufsize', `${STREAM_QUALITY.bitrateKbps * 2}k`, '-r', String(STREAM_QUALITY.fps)]
         : ['-c:v', 'copy'];
     return [
         '-y',

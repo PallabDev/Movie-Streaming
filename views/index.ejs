@@ -537,8 +537,15 @@
         let isThrottled = false;
 
         // ─── Stream Settings ──────────────────────────────────────────────
-        let streamQuality = 720;
-        let streamBitrate = 4000;
+        const STREAM_TARGET = {
+            width: 1280,
+            height: 720,
+            fps: 30,
+            bitrate: 6000000
+        };
+
+        let streamQuality = STREAM_TARGET.height;
+        let streamBitrate = Math.round(STREAM_TARGET.bitrate / 1000);
         let throttleSoundPlayed = false;
         let _settingsRestartPending = false;
 
@@ -667,6 +674,20 @@
         let streamWs = null;
 
         let peerConnection = null;
+
+        function preferVideoCodec(transceiver) {
+            try {
+                if (!transceiver || !RTCRtpSender.getCapabilities) return;
+                const capabilities = RTCRtpSender.getCapabilities('video');
+                if (!capabilities || !Array.isArray(capabilities.codecs)) return;
+                const codecs = capabilities.codecs;
+                const preferred = codecs.filter(codec => /video\/H264/i.test(codec.mimeType));
+                const fallback = codecs.filter(codec => !/video\/H264/i.test(codec.mimeType));
+                if (preferred.length && transceiver.setCodecPreferences) {
+                    transceiver.setCodecPreferences([...preferred, ...fallback]);
+                }
+            } catch (e) { }
+        }
 
         function connectStreamWebSocket() {
             return new Promise((resolve) => {
@@ -819,7 +840,11 @@
 
             if (mediaStream) {
                 mediaStream.getTracks().forEach(track => {
-                    peerConnection.addTrack(track, mediaStream);
+                    const sender = peerConnection.addTrack(track, mediaStream);
+                    if (track.kind === 'video') {
+                        const transceiver = peerConnection.getTransceivers().find(t => t.sender === sender);
+                        preferVideoCodec(transceiver);
+                    }
                 });
             }
 
@@ -829,8 +854,10 @@
                 try {
                     const params = videoSender.getParameters();
                     if (!params.encodings) params.encodings = [{}];
-                    params.encodings[0].maxBitrate = 4000000;
-                    params.encodings[0].maxFramerate = 30;
+                    params.encodings[0].maxBitrate = STREAM_TARGET.bitrate;
+                    params.encodings[0].maxFramerate = STREAM_TARGET.fps;
+                    params.encodings[0].priority = 'high';
+                    params.encodings[0].networkPriority = 'high';
                     await videoSender.setParameters(params);
                 } catch (e) { console.warn('setParameters error', e); }
             }
@@ -842,7 +869,7 @@
 
             let sdp = offer.sdp;
             if (!sdp.includes('b=AS:')) {
-                sdp = sdp.replace(/(m=video [^\r\n]+\r\n)/, '$1b=AS:4000\r\nb=TIAS:4000000\r\n');
+                sdp = sdp.replace(/(m=video [^\r\n]+\r\n)/, `$1b=AS:${streamBitrate}\r\nb=TIAS:${STREAM_TARGET.bitrate}\r\n`);
             }
             await peerConnection.setLocalDescription({ type: 'offer', sdp });
 
@@ -864,9 +891,10 @@
                 enableBackgroundKeepAlive();
                 const constraints = {
                     video: {
-                        width: { ideal: 1280, max: 1280 },
-                        height: { ideal: 720, max: 720 },
-                        frameRate: { ideal: 30, max: 30 }
+                        width: { ideal: STREAM_TARGET.width, max: STREAM_TARGET.width },
+                        height: { ideal: STREAM_TARGET.height, max: STREAM_TARGET.height },
+                        frameRate: { ideal: STREAM_TARGET.fps, max: STREAM_TARGET.fps },
+                        resizeMode: 'crop-and-scale'
                     },
                     audio: {
                         echoCancellation: false,
@@ -879,7 +907,7 @@
 
                 mediaStream = await navigator.mediaDevices.getDisplayMedia(constraints);
 
-                showStreamLoader("Preparing Live Stream Engine...", "Initializing 720p WebRTC stream & FFmpeg passthrough...");
+                showStreamLoader("Preparing Live Stream Engine...", "Initializing 720p30 WebRTC relay...");
 
                 await fetch('/reset-stream/' + currentStreamKey, { method: 'POST' });
                 startConnMonitor();
@@ -896,7 +924,7 @@
                 if (videoTrack) {
                     const trackSettings = videoTrack.getSettings();
                     console.log(`[Capture] Resolution: ${trackSettings.width}x${trackSettings.height} @ ${trackSettings.frameRate}fps`);
-                    if (topQualityBadge) topQualityBadge.textContent = `720p 30FPS Passthrough`;
+                    if (topQualityBadge) topQualityBadge.textContent = `720p 30FPS WebRTC`;
 
                     videoTrack.addEventListener('ended', () => {
                         if (!isPageUnloading && document.visibilityState !== 'hidden') stopSharing();

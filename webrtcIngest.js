@@ -1,8 +1,14 @@
-import { RTCPeerConnection } from 'werift';
+import { RTCPeerConnection, useH264, useOPUS, useVP8 } from 'werift';
 import dgram from 'dgram';
 import fs from 'fs';
 import path from 'path';
 import logger from './logger.js';
+
+const WEBRTC_ICE_SERVERS = [{ urls: 'stun:stun.l.google.com:19302' }];
+const WEBRTC_CODECS = {
+    audio: [useOPUS()],
+    video: [useH264(), useVP8()]
+};
 
 export class WebRtcIngestSession {
     constructor(session, ws, onWebRtcReady) {
@@ -32,7 +38,8 @@ export class WebRtcIngestSession {
         logger.info(`[WebRTC ${this.session.streamKey}] Allocated UDP ports for FFmpeg: Video=${this.videoPort}, Audio=${this.audioPort}`);
 
         this.pc = new RTCPeerConnection({
-            iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+            iceServers: WEBRTC_ICE_SERVERS,
+            codecs: WEBRTC_CODECS
         });
 
         this.pc.onIceCandidate.subscribe(candidate => {
