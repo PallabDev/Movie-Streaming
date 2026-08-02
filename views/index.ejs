@@ -981,6 +981,7 @@
             const participantCountText = $('participantCountText'), peopleCount = $('people-count'), modeText = $('mode-text'), timeClock = $('time-clock');
             const copyLinkBtn = $('copyLinkBtn'), toasts = $('toasts');
             const viewerAudio = $('viewer-audio');
+            const viewerAudioStream = new MediaStream();
 
             localPreview.muted = true;
             localPreview.volume = 0;
@@ -1170,17 +1171,14 @@
                     case 'CONSUMED': {
                         const consumer = await recvTransport.consume(msg.consumerOptions);
                         consumers.set(consumer.producerId, consumer);
-                        const stream = new MediaStream([consumer.track]);
                         
-                        let audioEl = document.getElementById(`audio-producer-${msg.consumerOptions.producerId}`);
-                        if (!audioEl) {
-                            audioEl = document.createElement('audio');
-                            audioEl.id = `audio-producer-${msg.consumerOptions.producerId}`;
-                            audioEl.autoplay = true;
-                            document.body.appendChild(audioEl);
+                        if (consumer.kind === 'audio') {
+                            viewerAudioStream.addTrack(consumer.track);
+                            if (viewerAudio) {
+                                viewerAudio.srcObject = viewerAudioStream;
+                                viewerAudio.play().catch(() => {});
+                            }
                         }
-                        audioEl.srcObject = stream;
-                        audioEl.play().catch(() => {});
                         
                         wsSend({ type: 'RESUME_CONSUMER', consumerId: consumer.id });
                         break;
@@ -1189,11 +1187,12 @@
                     case 'PRODUCER_CLOSED': {
                         const consumer = consumers.get(msg.producerId);
                         if (consumer) {
+                            if (consumer.kind === 'audio') {
+                                viewerAudioStream.removeTrack(consumer.track);
+                            }
                             consumer.close();
                             consumers.delete(msg.producerId);
                         }
-                        const audioEl = document.getElementById(`audio-producer-${msg.producerId}`);
-                        if (audioEl) audioEl.remove();
                         break;
                     }
 
@@ -1205,11 +1204,12 @@
                         break;
 
                     case 'JOIN_REQUEST':
-                        pendingParticipants = pendingParticipants.filter(p => p.id !== msg.participantId);
-                        pendingParticipants.push({ id: msg.participantId, name: msg.name });
-                        renderLists();
-                        if (!sidebarOpen) toggleSidebar('people');
-                        toast(`${msg.name} requested to join`);
+                        if (!pendingParticipants.some(p => p.id === msg.participantId) && !participants.some(p => p.id === msg.participantId)) {
+                            pendingParticipants.push({ id: msg.participantId, name: msg.name });
+                            renderLists();
+                            if (!sidebarOpen) toggleSidebar('people');
+                            toast(`${msg.name} requested to join`);
+                        }
                         break;
 
                     case 'CHAT_MESSAGE':

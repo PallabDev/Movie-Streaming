@@ -801,23 +801,16 @@ async function handleViewerMessage(session, ws, data, isBinary) {
             });
 
             // Notify host
-            let hostNotified = false;
-            logger.info(`[Session ${key}] Notifying host: streamWss.clients=${streamWss.clients.size}, session.streamKey="${session.streamKey}"`);
-            for (const client of streamWss.clients) {
-                logger.info(`[Session ${key}]   client.streamKey="${client.streamKey}", readyState=${client.readyState}`);
-                if (client.streamKey === session.streamKey && client.readyState === 1) {
-                    client.send(JSON.stringify({
-                        type: 'JOIN_REQUEST',
-                        participantId,
-                        name,
-                        pending: session.pendingParticipants.size
-                    }));
-                    hostNotified = true;
-                    logger.info(`[Session ${key}]   -> sent JOIN_REQUEST to host`);
-                }
-            }
-            if (!hostNotified) {
-                logger.warn(`[Session ${key}] No host found in streamWss.clients for key="${session.streamKey}"`);
+            if (session.hostWs && session.hostWs.readyState === 1) {
+                session.hostWs.send(JSON.stringify({
+                    type: 'JOIN_REQUEST',
+                    participantId,
+                    name,
+                    pending: session.pendingParticipants.size
+                }));
+                logger.info(`[Session ${key}] Sent JOIN_REQUEST to host for "${name}" (${participantId})`);
+            } else {
+                logger.warn(`[Session ${key}] Host WebSocket not active when join request received`);
             }
 
             ws.send(JSON.stringify({ type: 'JOIN_PENDING', participantId }));
