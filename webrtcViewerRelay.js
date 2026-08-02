@@ -1,5 +1,8 @@
-import { RTCPeerConnection, useH264, useOPUS, useVP8 } from 'werift';
+import { RTCPeerConnection, useH264, useOPUS, useVP8, MediaStreamTrack } from 'werift';
 import logger from './logger.js';
+
+const dummyVideoTrack = new MediaStreamTrack({ kind: 'video' });
+const dummyAudioTrack = new MediaStreamTrack({ kind: 'audio' });
 
 const WEBRTC_ICE_SERVERS = [
     { urls: 'stun:stun.l.google.com:19302' },
@@ -83,6 +86,7 @@ export class WebRtcViewerSession {
             logger.info(`[Viewer Relay ${this.streamKey}] Transceiver: kind=${t.kind} mid=${t.mid} direction=${t.direction}`);
             if (t.kind === 'video') {
                 t.direction = 'sendonly';
+                t.sender.replaceTrack(dummyVideoTrack);
                 this.videoSender = t.sender;
                 this.videoSsrc = t.sender.ssrc;
                 this.videoSender.onPictureLossIndication.subscribe(() => {
@@ -94,6 +98,7 @@ export class WebRtcViewerSession {
                 logger.info(`[Viewer Relay ${this.streamKey}] Video sender ssrc=${this.videoSsrc} track=${!!t.sender.track}`);
             } else if (t.kind === 'audio') {
                 t.direction = 'sendrecv';
+                t.sender.replaceTrack(dummyAudioTrack);
                 this.audioSender = t.sender;
                 this.audioSsrc = t.sender.ssrc;
             }

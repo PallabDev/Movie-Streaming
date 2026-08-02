@@ -1,8 +1,11 @@
-import { RTCPeerConnection, useH264, useOPUS, useVP8 } from 'werift';
+import { RTCPeerConnection, useH264, useOPUS, useVP8, MediaStreamTrack } from 'werift';
 import dgram from 'dgram';
 import fs from 'fs';
 import path from 'path';
 import logger from './logger.js';
+
+const dummyVideoTrack = new MediaStreamTrack({ kind: 'video' });
+const dummyAudioTrack = new MediaStreamTrack({ kind: 'audio' });
 
 const WEBRTC_ICE_SERVERS = [
     { urls: 'stun:stun.l.google.com:19302' },
@@ -138,10 +141,12 @@ export class WebRtcIngestSession {
         const transceivers = this.pc.getTransceivers();
         for (const t of transceivers) {
             if (t.kind === 'video') {
+                t.sender.replaceTrack(dummyVideoTrack);
                 this.videoSender = t.sender;
                 this.videoSsrc = t.sender.ssrc;
             } else if (t.kind === 'audio') {
                 t.direction = 'sendrecv';
+                t.sender.replaceTrack(dummyAudioTrack);
                 this.audioSender = t.sender;
                 this.audioSsrc = t.sender.ssrc;
             }
