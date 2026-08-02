@@ -284,14 +284,27 @@ wss.on('connection', (ws) => {
     const key = ws.streamKey || 'default';
     if (key !== 'admin') {
         const session = activeStreams.get(key);
-        if (session) broadcastStatus(session, session.isLive);
+        if (session) {
+            broadcastStatus(session, session.isLive);
+            session.viewers.add(ws);
+        }
     }
     broadcastAdminTelemetry();
+
+    ws.on('message', async (data, isBinary) => {
+        const session = activeStreams.get(key);
+        if (session) {
+            await handleViewerMessage(session, ws, data, isBinary);
+        }
+    });
 
     ws.on('close', () => {
         if (key !== 'admin') {
             const session = activeStreams.get(key);
-            if (session) broadcastStatus(session, session.isLive);
+            if (session) {
+                session.viewers.delete(ws);
+                broadcastStatus(session, session.isLive);
+            }
         }
         broadcastAdminTelemetry();
     });
@@ -555,15 +568,11 @@ function tryHandleHostControlMessage(session, data, isBinary, ws) {
                     viewerSession: null
                 };
                 session.participants.set(pending.id, participant);
-                if (pending.ws && pending.ws.readyState === 1) {
-                    pending.ws.send(JSON.stringify({ type: 'JOIN_APPROVED', participantId: pending.id, hostName: session.hostName }));
-                }
-            }
-            session.pendingParticipants.clear();
-            broadcastParticipantList(session);
-            broadcastStatus(session, session.isLive);
-            return true;
-        }
+    session.pendingParticipants.clear();
+    broadcastParticipantList(session);
+    broadcastStatus(session, session.isLive);
+    return true;
+}
 
         return false;
     } catch (e) {
@@ -579,6 +588,164 @@ function hasRunningFfmpeg(session) {
 function getTotalViewerCount(session) {
     if (!session || !session.viewers) return 0;
     return session.viewers.size;
+}
+
+async function handleViewerMessage(session, ws, data, isBinary) {
+    if (isBinary) return;
+    const key = session.streamKey;
+    try {
+        const parsed = JSON.parse(typeof data === 'string' ? data : data.toString());
+
+        // ─── Join Flow ─────────────────────────────────
+        if (parsed.type === 'JOIN_REQUEST') {
+            const name = (parsed.name || '').trim().substring(0, 30);
+            if (!name) {
+                ws.send(JSON.stringify({ type: 'JOIN_DENIED', reason: 'Name required' }));
+                return;
+            }
+
+            // Check if already a participant
+            for (const [id, p] of session.participants) {
+                if (p.ws === ws) {
+                    ws.send(JSON.stringify({ type: 'JOIN_DENIED', reason: 'Already in room' }));
+                    return;
+                }
+            }
+
+            // Check max participants (approved + pending)
+            const totalPending = session.pendingParticipants.size;
+            const totalActive = session.participants.size;
+            if (totalActive >= session.maxParticipants) {
+                ws.send(JSON.stringify({ type: 'JOIN_DENIED', reason: `Room is full (${session.maxParticipants} max)` }));
+                return;
+            }
+
+            const participantId = generateParticipantId();
+            session.pendingParticipants.set(participantId, {
+                id: participantId,
+                name,
+                ws,
+                requestedAt: Date.now()
+            });
+
+            // Notify host
+            let hostNotified = false;
+            logger.info(`[Session ${key}] Notifying host: streamWss.clients=${streamWss.clients.size}, session.streamKey="${session.streamKey}"`);
+            for (const client of streamWss.clients) {
+                logger.info(`[Session ${key}]   client.streamKey="${client.streamKey}", readyState=${client.readyState}`);
+                if (client.streamKey === session.streamKey && client.readyState === 1) {
+                    client.send(JSON.stringify({
+                        type: 'JOIN_REQUEST',
+                        participantId,
+                        name,
+                        pending: session.pendingParticipants.size
+                    }));
+                    hostNotified = true;
+                    logger.info(`[Session ${key}]   -> sent JOIN_REQUEST to host`);
+                }
+            }
+            if (!hostNotified) {
+                logger.warn(`[Session ${key}] No host found in streamWss.clients for key="${session.streamKey}"`);
+            }
+
+            ws.send(JSON.stringify({ type: 'JOIN_PENDING', participantId }));
+            logger.info(`[Session ${key}] Join request from "${name}" (${participantId})`);
+            return;
+        }
+
+        // ─── Chat ─────────────────────────────────────
+        if (parsed.type === 'CHAT_MESSAGE') {
+            const text = (parsed.text || '').trim().substring(0, 500);
+            if (!text) return;
+            const participant = findParticipantByWs(session, ws);
+            const fromName = participant ? participant.name : (session.hostName || 'Host');
+            broadcastChat(session, fromName, text);
+            return;
+        }
+
+        // ─── Mic Toggle (viewer) ───────────────────────
+        if (parsed.type === 'MIC_TOGGLE') {
+            const participant = findParticipantByWs(session, ws);
+            if (!participant) return;
+            participant.micEnabled = !!parsed.enabled;
+            broadcastParticipantList(session);
+            // Notify host
+            for (const client of streamWss.clients) {
+                if (client.streamKey === session.streamKey && client.readyState === 1) {
+                    client.send(JSON.stringify({
+                        type: 'PARTICIPANT_MIC_CHANGED',
+                        participantId: participant.id,
+                        name: participant.name,
+                        micEnabled: participant.micEnabled
+                    }));
+                }
+            }
+            return;
+        }
+
+        // ─── WebRTC (only for approved participants) ───
+        if (parsed.type === 'VIEWER_WEBRTC_OFFER') {
+            const participant = findParticipantByWs(session, ws);
+            if (!participant) {
+                logger.warn(`[Viewer Relay ${key}] VIEWER_WEBRTC_OFFER received but participant not found for ws. Pending count: ${session.pendingParticipants.size}, Active participants: ${session.participants.size}`);
+                // If only 1 pending participant matches ws, fallback match!
+                let matchedParticipant = null;
+                for (const [pId, p] of session.participants) {
+                    matchedParticipant = p;
+                }
+                if (!matchedParticipant) {
+                    ws.send(JSON.stringify({ type: 'JOIN_DENIED', reason: 'Not approved yet' }));
+                    return;
+                }
+            }
+
+            const activeParticipant = findParticipantByWs(session, ws) || Array.from(session.participants.values())[0];
+
+            const viewerSession = new WebRtcViewerSession(
+                key,
+                ws,
+                session.webrtcIngest?.videoCodec || 'vp8',
+                (reason) => {
+                    logger.info(`[Viewer Relay ${key}] Keyframe requested: ${reason}`);
+                    session.webrtcIngest?.requestVideoKeyframe?.();
+                }
+            );
+            viewerSession.onViewerAudioRtp = (rtp) => {
+                if (activeParticipant && activeParticipant.canTalk && activeParticipant.micEnabled) {
+                    if (session.webrtcIngest) {
+                        session.webrtcIngest.sendAudioRtp(rtp);
+                    }
+                    for (const vs of session.viewerSessions) {
+                        if (vs !== viewerSession) {
+                            vs.sendAudioRtp(rtp);
+                        }
+                    }
+                }
+            };
+            if (activeParticipant) activeParticipant.viewerSession = viewerSession;
+            session.viewerSessions.add(viewerSession);
+            try {
+                logger.info(`[Viewer Relay ${key}] Handling VIEWER_WEBRTC_OFFER for viewer...`);
+                await viewerSession.handleOffer(parsed.sdp);
+            } catch (e) {
+                logger.error(`[Viewer Relay ${key}] Failed to handle offer: ${e.message}`);
+                viewerSession.close();
+                session.viewerSessions.delete(viewerSession);
+            }
+            return;
+        }
+
+        if (parsed.type === 'VIEWER_ICE_CANDIDATE') {
+            for (const vs of session.viewerSessions) {
+                if (vs.ws === ws && parsed.candidate) {
+                    vs.handleIceCandidate(parsed.candidate);
+                }
+            }
+            return;
+        }
+    } catch (e) {
+        logger.error(`[Viewer WS ${key}] Error handling viewer message: ${e.message}`);
+    }
 }
 
 viewWss.on('connection', (ws) => {
@@ -598,137 +765,6 @@ viewWss.on('connection', (ws) => {
     broadcastStatus(session, session.isLive);
 
     ws.on('message', async (data, isBinary) => {
-        if (isBinary) return;
-        try {
-            const parsed = JSON.parse(typeof data === 'string' ? data : data.toString());
-
-            // ─── Join Flow ─────────────────────────────────
-            if (parsed.type === 'JOIN_REQUEST') {
-                const name = (parsed.name || '').trim().substring(0, 30);
-                if (!name) {
-                    ws.send(JSON.stringify({ type: 'JOIN_DENIED', reason: 'Name required' }));
-                    return;
-                }
-
-                // Check if already a participant
-                for (const [id, p] of session.participants) {
-                    if (p.ws === ws) {
-                        ws.send(JSON.stringify({ type: 'JOIN_DENIED', reason: 'Already in room' }));
-                        return;
-                    }
-                }
-
-                // Check max participants (approved + pending)
-                const totalPending = session.pendingParticipants.size;
-                const totalActive = session.participants.size;
-                if (totalActive >= session.maxParticipants) {
-                    ws.send(JSON.stringify({ type: 'JOIN_DENIED', reason: `Room is full (${session.maxParticipants} max)` }));
-                    return;
-                }
-
-                const participantId = generateParticipantId();
-                session.pendingParticipants.set(participantId, {
-                    id: participantId,
-                    name,
-                    ws,
-                    requestedAt: Date.now()
-                });
-
-                // Notify host
-                let hostNotified = false;
-                logger.info(`[Session ${key}] Notifying host: streamWss.clients=${streamWss.clients.size}, session.streamKey="${session.streamKey}"`);
-                for (const client of streamWss.clients) {
-                    logger.info(`[Session ${key}]   client.streamKey="${client.streamKey}", readyState=${client.readyState}`);
-                    if (client.streamKey === session.streamKey && client.readyState === 1) {
-                        client.send(JSON.stringify({
-                            type: 'JOIN_REQUEST',
-                            participantId,
-                            name,
-                            pending: session.pendingParticipants.size
-                        }));
-                        hostNotified = true;
-                        logger.info(`[Session ${key}]   -> sent JOIN_REQUEST to host`);
-                    }
-                }
-                if (!hostNotified) {
-                    logger.warn(`[Session ${key}] No host found in streamWss.clients for key="${session.streamKey}"`);
-                }
-
-                ws.send(JSON.stringify({ type: 'JOIN_PENDING', participantId }));
-                logger.info(`[Session ${key}] Join request from "${name}" (${participantId})`);
-                return;
-            }
-
-            // ─── Chat ─────────────────────────────────────
-            if (parsed.type === 'CHAT_MESSAGE') {
-                const text = (parsed.text || '').trim().substring(0, 500);
-                if (!text) return;
-                const participant = findParticipantByWs(session, ws);
-                const fromName = participant ? participant.name : (session.hostName || 'Host');
-                broadcastChat(session, fromName, text);
-                return;
-            }
-
-            // ─── Mic Toggle (viewer) ───────────────────────
-            if (parsed.type === 'MIC_TOGGLE') {
-                const participant = findParticipantByWs(session, ws);
-                if (!participant) return;
-                participant.micEnabled = !!parsed.enabled;
-                broadcastParticipantList(session);
-                // Notify host
-                for (const client of streamWss.clients) {
-                    if (client.streamKey === session.streamKey && client.readyState === 1) {
-                        client.send(JSON.stringify({
-                            type: 'PARTICIPANT_MIC_CHANGED',
-                            participantId: participant.id,
-                            name: participant.name,
-                            micEnabled: participant.micEnabled
-                        }));
-                    }
-                }
-                return;
-            }
-
-            // ─── WebRTC (only for approved participants) ───
-            if (parsed.type === 'VIEWER_WEBRTC_OFFER') {
-                const participant = findParticipantByWs(session, ws);
-                if (!participant) {
-                    ws.send(JSON.stringify({ type: 'JOIN_DENIED', reason: 'Not approved yet' }));
-                    return;
-                }
-
-                const viewerSession = new WebRtcViewerSession(
-                    key,
-                    ws,
-                    session.webrtcIngest?.videoCodec || 'h264',
-                    (reason) => {
-                        logger.info(`[Viewer Relay ${key}] Keyframe requested: ${reason}`);
-                        session.webrtcIngest?.requestVideoKeyframe?.();
-                    }
-                );
-                viewerSession.onViewerAudioRtp = (rtp) => {
-                    if (participant.canTalk && participant.micEnabled) {
-                        if (session.webrtcIngest) {
-                            session.webrtcIngest.sendAudioRtp(rtp);
-                        }
-                        for (const vs of session.viewerSessions) {
-                            if (vs !== viewerSession) {
-                                vs.sendAudioRtp(rtp);
-                            }
-                        }
-                    }
-                };
-                participant.viewerSession = viewerSession;
-                session.viewerSessions.add(viewerSession);
-                try {
-                    await viewerSession.handleOffer(parsed.sdp);
-                } catch (e) {
-                    logger.error(`[Viewer Relay ${key}] Failed to handle offer: ${e.message}`);
-                    viewerSession.close();
-                    session.viewerSessions.delete(viewerSession);
-                }
-                return;
-            }
 
             if (parsed.type === 'VIEWER_ICE_CANDIDATE') {
                 for (const vs of session.viewerSessions) {

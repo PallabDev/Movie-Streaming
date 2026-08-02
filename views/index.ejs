@@ -1027,6 +1027,8 @@
             };
 
             // ─── WebSocket Connection ───
+            let pendingIceCandidates = [];
+
             function connectStreamWebSocket() {
                 const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
                 console.log(`[Host WS] Connecting to ${protocol}//${location.host}/stream-ws?key=${currentStreamKey}...`);
