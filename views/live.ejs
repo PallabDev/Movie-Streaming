@@ -1139,16 +1139,18 @@
                 if (isLive && (isScreenSharing || hasVideoTrack)) {
                     meetVideoContainer.classList.add('active');
                     meetGrid.style.display = 'none';
-                    modeText.textContent = 'Screen Shared';
+                    modeText.textContent = isScreenSharing ? 'Screen Shared' : 'Live Stream';
                     if (hostVideo.srcObject !== remoteStream) {
                         console.log('[Viewer Stage] Binding remoteStream to hostVideo element');
                         hostVideo.srcObject = remoteStream;
                     }
-                    hostVideo.play().then(() => {
-                        console.log('[Viewer Stage] ✅ hostVideo play() succeeded');
-                    }).catch(e => {
-                        console.warn('[Viewer Stage] hostVideo play() blocked/failed:', e);
-                    });
+                    if (hostVideo.paused) {
+                        hostVideo.play().then(() => {
+                            console.log('[Viewer Stage] ✅ hostVideo play() succeeded');
+                        }).catch(e => {
+                            console.warn('[Viewer Stage] hostVideo play() blocked/failed:', e);
+                        });
+                    }
                 } else {
                     meetVideoContainer.classList.remove('active');
                     meetGrid.style.display = 'grid';
@@ -1217,11 +1219,20 @@
                             remoteStream.addTrack(track);
                         }
                     }
-                    hostVideo.srcObject = remoteStream;
-                    hostAudio.srcObject = remoteStream;
+                    if (hostVideo && hostVideo.srcObject !== remoteStream) {
+                        console.log('[Viewer WebRTC] Binding remoteStream to hostVideo element (once)');
+                        hostVideo.srcObject = remoteStream;
+                    }
+                    if (hostAudio && hostAudio.srcObject !== remoteStream) {
+                        hostAudio.srcObject = remoteStream;
+                    }
 
-                    hostAudio.play().catch(e => console.warn('[Viewer Audio Play error]', e));
-                    hostVideo.play().catch(e => console.warn('[Viewer Video Play error]', e));
+                    if (hostAudio && hostAudio.paused) {
+                        hostAudio.play().catch(e => console.warn('[Viewer Audio Play error]', e));
+                    }
+                    if (hostVideo && hostVideo.paused) {
+                        hostVideo.play().catch(e => console.warn('[Viewer Video Play error]', e));
+                    }
                     updateStageLayout();
                 };
 

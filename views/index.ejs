@@ -1041,18 +1041,31 @@
                 streamWs.onmessage = async (event) => {
                     try {
                         const msg = JSON.parse(event.data);
-                        console.log('[Host WS] Received message:', msg.type);
 
                         if (msg.type === 'WEBRTC_ANSWER') {
                             console.log('[Host WebRTC] Setting remote SDP answer...');
                             if (peerConnection) {
                                 await peerConnection.setRemoteDescription(new RTCSessionDescription({ type: 'answer', sdp: msg.sdp }));
                                 console.log('[Host WebRTC] ✅ Remote description set successfully');
+
+                                // Flush queued ICE candidates
+                                for (const candidate of pendingIceCandidates) {
+                                    try {
+                                        await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+                                        console.log('[Host WebRTC] Added queued ICE candidate');
+                                    } catch (err) {
+                                        console.warn('[Host WebRTC] Error adding queued ICE candidate:', err.message);
+                                    }
+                                }
+                                pendingIceCandidates = [];
                             }
                         } else if (msg.type === 'WEBRTC_ICE_CANDIDATE') {
-                            console.log('[Host WebRTC] Adding remote ICE candidate:', msg.candidate?.candidate);
-                            if (peerConnection && msg.candidate) {
-                                await peerConnection.addIceCandidate(new RTCIceCandidate(msg.candidate));
+                            if (peerConnection && peerConnection.remoteDescription && peerConnection.remoteDescription.type) {
+                                console.log('[Host WebRTC] Adding remote ICE candidate:', msg.candidate?.candidate);
+                                await peerConnection.addIceCandidate(new RTCIceCandidate(msg.candidate)).catch(err => console.warn('[Host WebRTC] addIceCandidate error:', err.message));
+                            } else {
+                                console.log('[Host WebRTC] Queueing ICE candidate until remote description is set:', msg.candidate?.candidate);
+                                if (msg.candidate) pendingIceCandidates.push(msg.candidate);
                             }
                         } else if (msg.type === 'PARTICIPANT_LIST') {
                             participants = msg.participants || [];
