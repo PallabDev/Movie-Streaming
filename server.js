@@ -781,16 +781,28 @@ async function handleViewerMessage(session, ws, data, isBinary) {
                 return;
             }
 
-            // Check if already a participant
+            // Check if already an active approved participant
             for (const [id, p] of session.participants) {
-                if (p.ws === ws) {
-                    ws.send(JSON.stringify({ type: 'JOIN_DENIED', reason: 'Already in room' }));
+                if (p.name.toLowerCase() === name.toLowerCase() || p.ws === ws) {
+                    p.ws = ws;
+                    ws.send(JSON.stringify({ type: 'JOIN_APPROVED', participantId: id, hostName: session.hostName }));
+                    ws.send(JSON.stringify({ type: 'TALK_PERMISSION', allowed: p.canTalk }));
+                    logger.info(`[Session ${key}] Re-connected active participant "${name}" (${id})`);
+                    return;
+                }
+            }
+
+            // Check if user with same name or ws is already pending
+            for (const [id, pending] of session.pendingParticipants) {
+                if (pending.name.toLowerCase() === name.toLowerCase() || pending.ws === ws) {
+                    pending.ws = ws;
+                    ws.send(JSON.stringify({ type: 'JOIN_PENDING', participantId: id }));
+                    logger.info(`[Session ${key}] Re-used existing pending request for "${name}" (${id})`);
                     return;
                 }
             }
 
             // Check max participants (approved + pending)
-            const totalPending = session.pendingParticipants.size;
             const totalActive = session.participants.size;
             if (totalActive >= session.maxParticipants) {
                 ws.send(JSON.stringify({ type: 'JOIN_DENIED', reason: `Room is full (${session.maxParticipants} max)` }));
@@ -819,7 +831,7 @@ async function handleViewerMessage(session, ws, data, isBinary) {
             }
 
             ws.send(JSON.stringify({ type: 'JOIN_PENDING', participantId }));
-            logger.info(`[Session ${key}] Join request from "${name}" (${participantId})`);
+            logger.info(`[Session ${key}] New join request from "${name}" (${participantId})`);
             return;
         }
 
