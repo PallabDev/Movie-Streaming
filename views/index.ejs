@@ -402,9 +402,79 @@
         document.addEventListener('click', unlockAudio, { once: true });
         document.addEventListener('keydown', unlockAudio, { once: true });
 
-        // ─── Permanent WebRTC Session Initialization (ONCE) ───
-        async function initWebRtcSession() {
-            if (peerConnection) return;
+        // ─── Web Audio API Mixer for Host Microphone + Screen Share System Audio ───
+        let audioMixerCtx = null;
+        let mixerDestination = null;
+        let micSourceNode = null;
+        let screenSourceNode = null;
+        let keeperOsc = null;
+
+        function getMixedAudioTrack() {
+            if (!audioMixerCtx) {
+                audioMixerCtx = new (window.AudioContext || window.webkitAudioContext)();
+                mixerDestination = audioMixerCtx.createMediaStreamDestination();
+                
+                // Continuous silent keeper so AudioContext continuously emits audio RTP packets even when quiet
+                keeperOsc = audioMixerCtx.createOscillator();
+                const keeperGain = audioMixerCtx.createGain();
+                keeperGain.gain.value = 0.00001;
+                keeperOsc.connect(keeperGain);
+                keeperGain.connect(mixerDestination);
+                keeperOsc.start();
+            }
+            if (audioMixerCtx.state === 'suspended') {
+                audioMixerCtx.resume();
+            }
+
+            // Connect / Disconnect Mic Track
+            if (hostAudioTrack && hostMicEnabled) {
+                if (!micSourceNode) {
+                    try {
+                        micSourceNode = audioMixerCtx.createMediaStreamSource(new MediaStream([hostAudioTrack]));
+                        micSourceNode.connect(mixerDestination);
+                    } catch (e) {}
+                }
+            } else {
+                if (micSourceNode) {
+                    try { micSourceNode.disconnect(); } catch (e) {}
+                    micSourceNode = null;
+                }
+            }
+
+            // Connect / Disconnect Screen Share Audio Track
+            if (mediaStream && mediaStream.getAudioTracks().length > 0) {
+                const screenAudioTrack = mediaStream.getAudioTracks()[0];
+                if (screenAudioTrack && screenAudioTrack.readyState === 'live') {
+                    if (!screenSourceNode) {
+                        try {
+                            screenSourceNode = audioMixerCtx.createMediaStreamSource(new MediaStream([screenAudioTrack]));
+                            screenSourceNode.connect(mixerDestination);
+                        } catch (e) {}
+                    }
+                }
+            } else {
+                if (screenSourceNode) {
+                    try { screenSourceNode.disconnect(); } catch (e) {}
+                    screenSourceNode = null;
+                }
+            }
+
+            return mixerDestination.stream.getAudioTracks()[0];
+        }
+
+        function updateMixedAudioTrack() {
+            const mixedTrack = getMixedAudioTrack();
+            if (hostAudioSender && mixedTrack) {
+                hostAudioSender.replaceTrack(mixedTrack).catch(() => {});
+            }
+        }
+
+        // ─── Permanent WebRTC Session Initialization ───
+        async function initWebRtcSession(isScreenShare = false) {
+            if (peerConnection) {
+                try { peerConnection.close(); } catch(e) {}
+                peerConnection = null;
+            }
 
             peerConnection = new RTCPeerConnection({ iceServers: [
                 { urls: 'stun:stun.l.google.com:19302' },
@@ -429,71 +499,41 @@
                 }
             };
 
-            // Add persistent transceivers for Video and Audio
-            const videoTransceiver = peerConnection.addTransceiver('video', { direction: 'sendrecv' });
-            hostVideoSender = videoTransceiver.sender;
+            // 1. Attach Video Track
+            let activeVideoTrack = null;
+            let videoStreamForTrack = null;
 
-            const audioTransceiver = peerConnection.addTransceiver('audio', { direction: 'sendrecv' });
-            hostAudioSender = audioTransceiver.sender;
+            if (isScreenShare && mediaStream && mediaStream.getVideoTracks().length > 0) {
+                activeVideoTrack = mediaStream.getVideoTracks()[0];
+                videoStreamForTrack = mediaStream;
+            } else {
+                // Create a dummy black canvas stream track so WebRTC negotiates live video stream from second 1!
+                const canvas = document.createElement('canvas');
+                canvas.width = 640;
+                canvas.height = 360;
+                const ctx = canvas.getContext('2d');
+                ctx.fillStyle = '#141517';
+                ctx.fillRect(0, 0, 640, 360);
+                videoStreamForTrack = canvas.captureStream(5);
+                activeVideoTrack = videoStreamForTrack.getVideoTracks()[0];
+            }
 
-            updateMixedAudioTrack();
+            if (activeVideoTrack) {
+                hostVideoSender = peerConnection.addTrack(activeVideoTrack, videoStreamForTrack);
+            }
+
+            // 2. Attach Mixed Audio Track
+            const mixedAudioTrack = getMixedAudioTrack();
+            if (mixedAudioTrack) {
+                hostAudioSender = peerConnection.addTrack(mixedAudioTrack, mixerDestination.stream);
+            }
 
             const offer = await peerConnection.createOffer({ offerToReceiveAudio: true, offerToReceiveVideo: false });
             let sdp = offer.sdp;
             sdp = sdp.replace(/(a=fmtp:111 [^\r\n]+)/, "$1;stereo=1;sprop-stereo=1;maxaveragebitrate=510000;cbr=1;useinbandfec=1");
 
             await peerConnection.setLocalDescription({ type: 'offer', sdp });
-            wsSend({ type: 'WEBRTC_OFFER', sdp: peerConnection.localDescription.sdp, isScreenSharing: false });
-        }
-
-        // ─── Web Audio API Mixer for Host Microphone + Screen Share System Audio ───
-        let audioMixerCtx = null;
-        let mixerDestination = null;
-        let micSourceNode = null;
-        let screenSourceNode = null;
-
-        function updateMixedAudioTrack() {
-            if (!audioMixerCtx) {
-                audioMixerCtx = new (window.AudioContext || window.webkitAudioContext)();
-                mixerDestination = audioMixerCtx.createMediaStreamDestination();
-            }
-            if (audioMixerCtx.state === 'suspended') {
-                audioMixerCtx.resume();
-            }
-
-            // Connect / Disconnect Mic Track
-            if (hostAudioTrack && hostMicEnabled) {
-                if (!micSourceNode) {
-                    micSourceNode = audioMixerCtx.createMediaStreamSource(new MediaStream([hostAudioTrack]));
-                    micSourceNode.connect(mixerDestination);
-                }
-            } else {
-                if (micSourceNode) {
-                    try { micSourceNode.disconnect(); } catch (e) {}
-                    micSourceNode = null;
-                }
-            }
-
-            // Connect / Disconnect Screen Share Audio Track
-            if (mediaStream && mediaStream.getAudioTracks().length > 0) {
-                const screenAudioTrack = mediaStream.getAudioTracks()[0];
-                if (screenAudioTrack && screenAudioTrack.readyState === 'live') {
-                    if (!screenSourceNode) {
-                        screenSourceNode = audioMixerCtx.createMediaStreamSource(new MediaStream([screenAudioTrack]));
-                        screenSourceNode.connect(mixerDestination);
-                    }
-                }
-            } else {
-                if (screenSourceNode) {
-                    try { screenSourceNode.disconnect(); } catch (e) {}
-                    screenSourceNode = null;
-                }
-            }
-
-            const mixedTrack = mixerDestination.stream.getAudioTracks()[0];
-            if (hostAudioSender && mixedTrack) {
-                hostAudioSender.replaceTrack(mixedTrack);
-            }
+            wsSend({ type: 'WEBRTC_OFFER', sdp: peerConnection.localDescription.sdp, isScreenSharing: isScreenShare });
         }
 
         // ─── Host Microphone Controls ───
@@ -562,19 +602,15 @@
                 localPreview.play();
 
                 const videoTrack = mediaStream.getVideoTracks()[0];
-                if (hostVideoSender) {
-                    await hostVideoSender.replaceTrack(videoTrack);
-                }
+                videoTrack.onended = () => stopScreenShare();
 
                 updateMixedAudioTrack();
-
-                videoTrack.onended = () => stopScreenShare();
 
                 isSharingScreen = true;
                 presentBtnText.textContent = 'Stop sharing';
                 startBtn.classList.add('sharing');
                 
-                wsSend({ type: 'SCREEN_SHARE_TOGGLE', sharing: true });
+                await initWebRtcSession(true);
                 updateStageLayout();
                 toast('Screen share started');
             } catch (e) {
@@ -583,9 +619,6 @@
         }
 
         async function stopScreenShare() {
-            if (hostVideoSender) {
-                await hostVideoSender.replaceTrack(null);
-            }
             if (mediaStream) {
                 mediaStream.getTracks().forEach(t => t.stop());
                 mediaStream = null;
@@ -596,7 +629,7 @@
             presentBtnText.textContent = 'Present now';
             startBtn.classList.remove('sharing');
             
-            wsSend({ type: 'SCREEN_SHARE_TOGGLE', sharing: false });
+            await initWebRtcSession(false);
             updateStageLayout();
             toast('Screen share stopped');
         }
