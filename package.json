@@ -5,6 +5,8 @@
     "main": "server.js",
     "scripts": {
         "build:css": "npx @tailwindcss/cli -i ./src/input.css -o ./public/css/output.css --minify",
+        "build:client": "npx esbuild node_modules/mediasoup-client/lib/index.js --bundle --minify --format=iife --global-name=mediasoupClient --outfile=public/js/mediasoup-client.min.js",
+        "postinstall": "npx esbuild node_modules/mediasoup-client/lib/index.js --bundle --minify --format=iife --global-name=mediasoupClient --outfile=public/js/mediasoup-client.min.js",
         "watch:css": "npx @tailwindcss/cli -i ./src/input.css -o ./public/css/output.css --watch",
         "start": "node server.js",
         "dev": "node --watch server.js"
@@ -22,6 +24,7 @@
         "express": "^5.2.1",
         "jsonwebtoken": "^9.0.3",
         "mediasoup": "^3.15.2",
+        "mediasoup-client": "^3.21.0",
         "node-datachannel": "^0.32.3",
         "pg": "^8.22.0",
         "ssh2-sftp-client": "^12.1.1",

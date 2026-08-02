@@ -8,8 +8,9 @@ WORKDIR /app
 # Copy dependency definition
 COPY package*.json ./
 
-# Install production dependencies
-RUN npm install --production
+# Install dependencies and build client bundle
+RUN npm install
+RUN npm run build:client
 
 # Copy application files
 COPY . .
