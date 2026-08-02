@@ -21,6 +21,7 @@
         "ejs": "^3.1.9",
         "express": "^5.2.1",
         "jsonwebtoken": "^9.0.3",
+        "mediasoup": "^3.15.2",
         "node-datachannel": "^0.32.3",
         "pg": "^8.22.0",
         "ssh2-sftp-client": "^12.1.1",

@@ -10,3 +10,6 @@ services:
       - NODE_ENV=${NODE_ENV:-production}
       - PORT=${PORT:-5992}
       - APP_URL=${APP_URL:-https://watch.pallabdev.in}
+      - ANNOUNCED_IP=${ANNOUNCED_IP:-222.167.207.36}
+      - MEDIASOUP_MIN_PORT=${MEDIASOUP_MIN_PORT:-40000}
+      - MEDIASOUP_MAX_PORT=${MEDIASOUP_MAX_PORT:-40100}

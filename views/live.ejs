@@ -9,6 +9,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <link rel="icon" type="image/png" href="/favicon.png">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
+    <script src="https://cdn.jsdelivr.net/npm/mediasoup-client@3/dist/mediasoup-client.min.js"></script>
     <link
         href="https://fonts.googleapis.com/css2?family=Google+Sans:wght@400;500;700&family=Roboto:wght@400;500;700&display=swap"
         rel="stylesheet">
@@ -920,9 +921,14 @@
             let myName = '';
             let myParticipantId = null;
             let statusWs = null;
-            let pc = null;
-            let viewerAudioSender = null;
-            let remoteStream = null;
+            let msDevice = null;
+            let recvTransport = null;
+            let sendTransport = null;
+            let micProducer = null;
+            let pendingProduceCallback = null;
+            let consumers = new Map();
+            let remoteStream = new MediaStream();
+
             let isLive = false;
             let isScreenSharing = false;
             let canTalk = false;
@@ -973,7 +979,7 @@
                 Object.values(screens).forEach(s => s.classList.remove('active'));
                 if (screens[name]) screens[name].classList.add('active');
                 if (name === 'main') {
-                    setTimeout(() => startWebRtcViewer(), 200);
+                    setTimeout(() => initMediasoupViewer(), 200);
                 }
             }
 
@@ -1050,10 +1056,11 @@
                     statusWs.send(JSON.stringify({ type: 'JOIN_REQUEST', name: myName }));
                 };
 
-                statusWs.onmessage = (event) => {
+                statusWs.onmessage = async (event) => {
                     try {
                         const data = JSON.parse(event.data);
-                        handleWsMessage(data);
+                        await handleWsMessage(data);
+                        await handleMediasoupViewerMessage(data);
                     } catch (e) { }
                 };
 
@@ -1064,7 +1071,7 @@
                 };
             }
 
-            function handleWsMessage(data) {
+            async function handleWsMessage(data) {
                 switch (data.type) {
                     case 'JOIN_PENDING':
                         showScreen('waiting');
@@ -1085,7 +1092,6 @@
                         showScreen('kicked');
                         $('kicked-reason').textContent = data.reason || 'Removed by host';
                         if (statusWs) statusWs.close();
-                        if (pc) { pc.close(); pc = null; }
                         break;
 
                     case 'STATUS':
@@ -1093,7 +1099,6 @@
                         isScreenSharing = !!data.isScreenSharing;
                         if (!isLive && screens.main.classList.contains('active')) {
                             showScreen('ended');
-                            if (pc) { pc.close(); pc = null; }
                         } else {
                             updateStageLayout();
                         }
@@ -1118,51 +1123,136 @@
                     case 'CHAT_MESSAGE':
                         addChatMessage(data.from, data.text);
                         break;
-
-                    case 'VIEWER_WEBRTC_ANSWER':
-                        if (pc && data.sdp) {
-                            pc.setRemoteDescription({ type: 'answer', sdp: data.sdp }).catch(() => { });
-                        }
-                        break;
-
-                    case 'VIEWER_ICE_CANDIDATE':
-                        if (pc && data.candidate) {
-                            pc.addIceCandidate(data.candidate).catch(() => { });
-                        }
-                        break;
                 }
             }
 
+            // ─── Mediasoup Viewer Client Logic ───
+            async function initMediasoupViewer() {
+                try {
+                    console.log('[Viewer Mediasoup] Initializing Mediasoup Device...');
+                    msDevice = new mediasoupClient.Device();
+                    if (statusWs && statusWs.readyState === WebSocket.OPEN) {
+                        statusWs.send(JSON.stringify({ type: 'GET_ROUTER_RTP_CAPABILITIES' }));
+                    }
+                } catch (e) {
+                    console.error('[Viewer Mediasoup] Device init error:', e);
+                }
+            }
+
+            async function handleMediasoupViewerMessage(data) {
+                switch (data.type) {
+                    case 'ROUTER_RTP_CAPABILITIES':
+                        await msDevice.load({ routerRtpCapabilities: data.rtpCapabilities });
+                        console.log('[Viewer Mediasoup] ✅ Device loaded with RTP capabilities');
+                        statusWs.send(JSON.stringify({ type: 'CREATE_WEBRTC_TRANSPORT', direction: 'recv' }));
+                        statusWs.send(JSON.stringify({ type: 'CREATE_WEBRTC_TRANSPORT', direction: 'send' }));
+                        break;
+
+                    case 'WEBRTC_TRANSPORT_CREATED':
+                        if (data.direction === 'recv') {
+                            recvTransport = msDevice.createRecvTransport(data.transportOptions);
+                            recvTransport.on('connect', async ({ dtlsParameters }, callback, errback) => {
+                                statusWs.send(JSON.stringify({ type: 'CONNECT_WEBRTC_TRANSPORT', transportId: recvTransport.id, dtlsParameters }));
+                                callback();
+                            });
+                            console.log('[Viewer Mediasoup] RecvTransport created successfully');
+                            statusWs.send(JSON.stringify({ type: 'GET_PRODUCERS' }));
+                        } else if (data.direction === 'send') {
+                            sendTransport = msDevice.createSendTransport(data.transportOptions);
+                            sendTransport.on('connect', async ({ dtlsParameters }, callback, errback) => {
+                                statusWs.send(JSON.stringify({ type: 'CONNECT_WEBRTC_TRANSPORT', transportId: sendTransport.id, dtlsParameters }));
+                                callback();
+                            });
+                            sendTransport.on('produce', async ({ kind, rtpParameters, appData }, callback, errback) => {
+                                statusWs.send(JSON.stringify({ type: 'PRODUCE', transportId: sendTransport.id, kind, rtpParameters, appData }));
+                                pendingProduceCallback = callback;
+                            });
+                            console.log('[Viewer Mediasoup] SendTransport created successfully');
+                        }
+                        break;
+
+                    case 'PRODUCED':
+                        if (pendingProduceCallback) {
+                            pendingProduceCallback({ id: data.id });
+                            pendingProduceCallback = null;
+                        }
+                        break;
+
+                    case 'WEBRTC_TRANSPORT_CONNECTED':
+                        toast('Connected to Live Stream SFU');
+                        break;
+
+                    case 'NEW_PRODUCER':
+                        consumeProducer(data.producerId);
+                        break;
+
+                    case 'PRODUCERS_LIST':
+                        (data.producers || []).forEach(p => {
+                            consumeProducer(p.id);
+                        });
+                        break;
+
+                    case 'CONSUMED': {
+                        const consumer = await recvTransport.consume(data.consumerOptions);
+                        consumers.set(consumer.producerId, consumer);
+                        remoteStream.addTrack(consumer.track);
+
+                        if (hostVideo && hostVideo.srcObject !== remoteStream) {
+                            hostVideo.srcObject = remoteStream;
+                        }
+                        if (hostAudio && hostAudio.srcObject !== remoteStream) {
+                            hostAudio.srcObject = remoteStream;
+                        }
+
+                        if (hostAudio && hostAudio.paused) hostAudio.play().catch(() => {});
+                        if (hostVideo && hostVideo.paused) hostVideo.play().catch(() => {});
+
+                        statusWs.send(JSON.stringify({ type: 'RESUME_CONSUMER', consumerId: consumer.id }));
+                        updateStageLayout();
+                        break;
+                    }
+
+                    case 'PRODUCER_CLOSED': {
+                        const consumer = consumers.get(data.producerId);
+                        if (consumer) {
+                            remoteStream.removeTrack(consumer.track);
+                            consumer.close();
+                            consumers.delete(data.producerId);
+                        }
+                        break;
+                    }
+                }
+            }
+
+            async function consumeProducer(producerId) {
+                if (!recvTransport || consumers.has(producerId)) return;
+                statusWs.send(JSON.stringify({
+                    type: 'CONSUME',
+                    transportId: recvTransport.id,
+                    producerId,
+                    rtpCapabilities: msDevice.rtpCapabilities
+                }));
+            }
+
             function updateStageLayout() {
-                console.log(`[Viewer Stage] updateStageLayout: isLive=${isLive}, isScreenSharing=${isScreenSharing}`);
                 if (isLive && isScreenSharing) {
                     meetVideoContainer.classList.add('active');
                     meetGrid.style.display = 'none';
                     modeText.textContent = 'Screen Shared';
                     if (hostVideo && hostVideo.srcObject !== remoteStream) {
-                        console.log('[Viewer Stage] Binding remoteStream to hostVideo element');
                         hostVideo.srcObject = remoteStream;
                     }
                     if (hostVideo && hostVideo.paused) {
-                        hostVideo.play().then(() => {
-                            console.log('[Viewer Stage] ✅ hostVideo play() succeeded');
-                            updateWebRtcStatusUI('connected', 'Screen Share Live');
-                        }).catch(e => {
-                            console.warn('[Viewer Stage] hostVideo play() blocked/failed:', e);
-                        });
+                        hostVideo.play().catch(() => {});
                     }
                 } else {
                     meetVideoContainer.classList.remove('active');
                     meetGrid.style.display = 'grid';
                     modeText.textContent = 'Voice Call';
-                    if (isLive) {
-                        updateWebRtcStatusUI('connected', 'Voice Call Live');
-                    }
                 }
             }
 
             function unlockViewerAudioVideo() {
-                console.log('[Viewer User Action] Unlocking Audio/Video play permissions');
                 if (hostAudio) hostAudio.play().catch(() => { });
                 if (hostVideo) hostVideo.play().catch(() => { });
                 if (audioCtx && audioCtx.state === 'suspended') {
@@ -1179,93 +1269,7 @@
                 hostVideo.onerror = (e) => console.error('[Viewer Video Element] ❌ Video error:', hostVideo.error);
             }
 
-            // ─── WebRTC Voice & Movie Stream ───
-            function startWebRtcViewer() {
-                if (pc) { pc.close(); pc = null; }
-                console.log('[Viewer WebRTC] Initializing RTCPeerConnection for viewer...');
-                remoteStream = new MediaStream();
-
-                pc = new RTCPeerConnection({
-                    iceServers: [
-                        { urls: 'stun:stun.l.google.com:19302' },
-                        { urls: 'stun:stun1.l.google.com:19302' },
-                        { urls: 'stun:stun2.l.google.com:19302' },
-                        { urls: 'stun:stun3.l.google.com:19302' },
-                        { urls: 'stun:stun4.l.google.com:19302' }
-                    ]
-                });
-
-                pc.oniceconnectionstatechange = () => {
-                    const state = pc.iceConnectionState;
-                    console.log(`[Viewer WebRTC] 🧊 ICE Connection State: ${state}`);
-                    if (state === 'connected' || state === 'completed') {
-                        toast('Connected to Live Stream (WebRTC OK)');
-                    } else if (state === 'failed' || state === 'disconnected') {
-                        toast(`Stream ICE State: ${state}`);
-                    }
-                };
-
-                pc.onicegatheringstatechange = () => {
-                    console.log(`[Viewer WebRTC] 📡 ICE Gathering State: ${pc.iceGatheringState}`);
-                };
-
-                pc.onsignalingstatechange = () => {
-                    console.log(`[Viewer WebRTC] 🚦 Signaling State: ${pc.signalingState}`);
-                };
-
-                pc.ontrack = (event) => {
-                    console.log(`[Viewer WebRTC] 🎵 Received remote track: kind=${event.track.kind} id=${event.track.id} state=${event.track.readyState}`);
-                    const stream = event.streams && event.streams[0] ? event.streams[0] : remoteStream;
-                    for (const track of stream.getTracks()) {
-                        if (!remoteStream.getTracks().some(t => t.id === track.id)) {
-                            console.log(`[Viewer WebRTC] Added track to remoteStream: kind=${track.kind} id=${track.id}`);
-                            remoteStream.addTrack(track);
-                        }
-                    }
-                    if (hostVideo && hostVideo.srcObject !== remoteStream) {
-                        console.log('[Viewer WebRTC] Binding remoteStream to hostVideo element (once)');
-                        hostVideo.srcObject = remoteStream;
-                    }
-                    if (hostAudio && hostAudio.srcObject !== remoteStream) {
-                        hostAudio.srcObject = remoteStream;
-                    }
-
-                    if (hostAudio && hostAudio.paused) {
-                        hostAudio.play().catch(e => console.warn('[Viewer Audio Play error]', e));
-                    }
-                    if (hostVideo && hostVideo.paused) {
-                        hostVideo.play().catch(e => console.warn('[Viewer Video Play error]', e));
-                    }
-                    updateStageLayout();
-                };
-
-                pc.onicecandidate = (event) => {
-                    if (event.candidate && statusWs && statusWs.readyState === WebSocket.OPEN) {
-                        console.log('[Viewer WebRTC] ❄️ Local ICE Candidate gathered:', event.candidate.candidate);
-                        statusWs.send(JSON.stringify({ type: 'VIEWER_ICE_CANDIDATE', candidate: event.candidate }));
-                    }
-                };
-
-                pc.addTransceiver('video', { direction: 'recvonly' });
-
-                // Sendrecv audio transceiver so viewer can stream mic audio seamlessly to host!
-                const audioTransceiver = pc.addTransceiver('audio', { direction: 'sendrecv' });
-                viewerAudioSender = audioTransceiver.sender;
-
-                console.log('[Viewer WebRTC] Creating viewer SDP offer...');
-                pc.createOffer().then(offer => {
-                    let sdp = offer.sdp;
-                    sdp = sdp.replace(/(a=fmtp:111 [^\r\n]+)/, "$1;stereo=1;sprop-stereo=1;maxaveragebitrate=510000;cbr=1;useinbandfec=1");
-                    return pc.setLocalDescription({ type: 'offer', sdp });
-                }).then(() => {
-                    if (statusWs && statusWs.readyState === WebSocket.OPEN) {
-                        console.log('[Viewer WebRTC] Sending VIEWER_WEBRTC_OFFER to server...');
-                        statusWs.send(JSON.stringify({ type: 'VIEWER_WEBRTC_OFFER', sdp: pc.localDescription.sdp }));
-                    }
-                }).catch(e => console.error('[Viewer WebRTC] ❌ Offer error:', e));
-            }
-
-            // ─── Microphone Controls (Track Replace for 100% Reliable Host Audio) ───
+            // ─── Microphone Controls ───
             dockMicBtn.onclick = () => {
                 if (!canTalk) return;
                 micEnabled ? disableMic() : enableMic();
@@ -1280,8 +1284,16 @@
                     const micTrack = micStream.getAudioTracks()[0];
                     micTrack.enabled = true;
 
-                    if (viewerAudioSender) {
-                        await viewerAudioSender.replaceTrack(micTrack);
+                    if (sendTransport) {
+                        if (!micProducer) {
+                            micProducer = await sendTransport.produce({
+                                track: micTrack,
+                                appData: { isViewerMic: true }
+                            });
+                        } else {
+                            await micProducer.replaceTrack({ track: micTrack });
+                            micProducer.resume();
+                        }
                     }
 
                     micEnabled = true;
@@ -1302,8 +1314,8 @@
                 if (micStream) {
                     micStream.getAudioTracks().forEach(t => t.enabled = false);
                 }
-                if (viewerAudioSender) {
-                    await viewerAudioSender.replaceTrack(null);
+                if (micProducer) {
+                    micProducer.pause();
                 }
                 micEnabled = false;
                 dockMicBtn.classList.add('off');

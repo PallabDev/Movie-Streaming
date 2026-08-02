@@ -18,6 +18,7 @@ import { initDb } from './db/migrate.js';
 import { eq, desc, sql } from 'drizzle-orm';
 import { WebRtcIngestSession } from './webrtcIngest.js';
 import { WebRtcViewerSession } from './webrtcViewerRelay.js';
+import { mediasoupManager } from './mediasoupManager.js';
 
 EventEmitter.defaultMaxListeners = 50;
 
@@ -407,12 +408,140 @@ function broadcastAdminTelemetry() {
     }
 }
 
-function tryHandleHostControlMessage(session, data, isBinary, ws) {
+async function handleMediasoupMessage(session, ws, parsed) {
+    if (!session || !parsed || !parsed.type) return false;
+    const key = session.streamKey;
+
+    try {
+        switch (parsed.type) {
+            case 'GET_ROUTER_RTP_CAPABILITIES': {
+                const router = await mediasoupManager.getOrCreateRouter(key);
+                ws.send(JSON.stringify({
+                    type: 'ROUTER_RTP_CAPABILITIES',
+                    rtpCapabilities: router.rtpCapabilities
+                }));
+                return true;
+            }
+
+            case 'CREATE_WEBRTC_TRANSPORT': {
+                const transportOptions = await mediasoupManager.createWebRtcTransport(key);
+                ws.send(JSON.stringify({
+                    type: 'WEBRTC_TRANSPORT_CREATED',
+                    direction: parsed.direction || 'send',
+                    transportOptions
+                }));
+                return true;
+            }
+
+            case 'CONNECT_WEBRTC_TRANSPORT': {
+                await mediasoupManager.connectWebRtcTransport(parsed.transportId, parsed.dtlsParameters);
+                ws.send(JSON.stringify({
+                    type: 'WEBRTC_TRANSPORT_CONNECTED',
+                    transportId: parsed.transportId
+                }));
+                return true;
+            }
+
+            case 'PRODUCE': {
+                const { transportId, kind, rtpParameters, appData } = parsed;
+                const producer = await mediasoupManager.produce(key, transportId, kind, rtpParameters, appData || {});
+                ws.send(JSON.stringify({
+                    type: 'PRODUCED',
+                    id: producer.id,
+                    kind: producer.kind,
+                    appData: appData || {}
+                }));
+
+                if (appData && appData.isScreenShare) {
+                    session.isScreenSharing = true;
+                }
+                session.isLive = true;
+                session.hostAlive = true;
+                broadcastStatus(session, true);
+                broadcastAdminTelemetry();
+
+                broadcastNewProducer(session, producer.id, producer.kind, appData || {});
+                return true;
+            }
+
+            case 'CONSUME': {
+                const { transportId, producerId, rtpCapabilities } = parsed;
+                const consumerOptions = await mediasoupManager.consume(key, transportId, producerId, rtpCapabilities);
+                ws.send(JSON.stringify({
+                    type: 'CONSUMED',
+                    consumerOptions
+                }));
+                return true;
+            }
+
+            case 'RESUME_CONSUMER': {
+                await mediasoupManager.resumeConsumer(parsed.consumerId);
+                ws.send(JSON.stringify({
+                    type: 'CONSUMER_RESUMED',
+                    consumerId: parsed.consumerId
+                }));
+                return true;
+            }
+
+            case 'GET_PRODUCERS': {
+                const producers = mediasoupManager.getProducersForSession(key);
+                ws.send(JSON.stringify({
+                    type: 'PRODUCERS_LIST',
+                    producers
+                }));
+                return true;
+            }
+
+            case 'CLOSE_PRODUCER': {
+                mediasoupManager.closeProducer(key, parsed.producerId);
+                broadcastClosedProducer(session, parsed.producerId);
+                return true;
+            }
+        }
+    } catch (err) {
+        logger.error(`[Mediasoup ${key}] Error handling ${parsed.type}: ${err.message}`);
+        ws.send(JSON.stringify({ type: 'MEDIASOUP_ERROR', error: err.message, action: parsed.type }));
+        return true;
+    }
+    return false;
+}
+
+function broadcastNewProducer(session, producerId, kind, appData) {
+    const msg = JSON.stringify({ type: 'NEW_PRODUCER', producerId, kind, appData });
+    for (const client of viewWss.clients) {
+        if (client.streamKey === session.streamKey && client.readyState === 1) {
+            client.send(msg);
+        }
+    }
+    for (const client of streamWss.clients) {
+        if (client.streamKey === session.streamKey && client.readyState === 1) {
+            client.send(msg);
+        }
+    }
+}
+
+function broadcastClosedProducer(session, producerId) {
+    const msg = JSON.stringify({ type: 'PRODUCER_CLOSED', producerId });
+    for (const client of viewWss.clients) {
+        if (client.streamKey === session.streamKey && client.readyState === 1) {
+            client.send(msg);
+        }
+    }
+    for (const client of streamWss.clients) {
+        if (client.streamKey === session.streamKey && client.readyState === 1) {
+            client.send(msg);
+        }
+    }
+}
+
+async function tryHandleHostControlMessage(session, data, isBinary, ws) {
     const key = session.streamKey;
     if (isBinary) return false;
     try {
         const raw = typeof data === 'string' ? data : data.toString();
         const parsed = JSON.parse(raw);
+
+        if (await handleMediasoupMessage(session, ws, parsed)) return true;
 
         if (parsed.type === 'WEBRTC_OFFER') {
             if (typeof parsed.isScreenSharing === 'boolean') {
@@ -599,6 +728,8 @@ async function handleViewerMessage(session, ws, data, isBinary) {
     const key = session.streamKey;
     try {
         const parsed = JSON.parse(typeof data === 'string' ? data : data.toString());
+
+        if (await handleMediasoupMessage(session, ws, parsed)) return;
 
         // ─── Join Flow ─────────────────────────────────
         if (parsed.type === 'JOIN_REQUEST') {
@@ -1431,6 +1562,12 @@ app.use((err, req, res, next) => {
     next(err);
 });
 
-server.listen(PORT, () => {
-    console.log(`Server is running on http://localhost:${PORT}`);
+server.listen(PORT, async () => {
+    logger.info(`Server is running on http://localhost:${PORT}`);
+    try {
+        await mediasoupManager.init();
+        logger.info(`[Mediasoup] Engine initialized successfully.`);
+    } catch (e) {
+        logger.error(`[Mediasoup] Engine init error: ${e.message}`);
+    }
 });

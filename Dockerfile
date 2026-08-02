@@ -1,7 +1,7 @@
 FROM node:20-slim
 
-# Install FFmpeg and clean up apt cache
-RUN apt-get update && apt-get install -y ffmpeg && rm -rf /var/lib/apt/lists/*
+# Install FFmpeg, Python3, and C++ build tools for Mediasoup compilation
+RUN apt-get update && apt-get install -y ffmpeg python3 build-essential make g++ && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 

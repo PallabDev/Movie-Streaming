@@ -13,6 +13,7 @@
         href="https://fonts.googleapis.com/css2?family=Google+Sans:wght@400;500;700&family=Roboto:wght@400;500;700&display=swap"
         rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
+    <script src="https://cdn.jsdelivr.net/npm/mediasoup-client@3/dist/mediasoup-client.min.js"></script>
     <style>
         :root {
             --meet-bg: #202124;
@@ -943,11 +944,16 @@
             const currentStreamKey = '<%= streamKey %>';
             const hostName = '<%= user ? user.name : "Host" %>';
 
-            // ─── Permanent WebRTC & Media State ───
+            // ─── Mediasoup & Media State ───
             let streamWs = null;
-            let peerConnection = null;
-            let hostAudioSender = null;
-            let hostVideoSender = null;
+            let msDevice = null;
+            let sendTransport = null;
+            let recvTransport = null;
+            let videoProducer = null;
+            let audioProducer = null;
+            let pendingProduceCallback = null;
+            let consumers = new Map();
+
             let hostMicStream = null;
             let hostAudioTrack = null;
             let mediaStream = null;
@@ -1027,8 +1033,6 @@
             };
 
             // ─── WebSocket Connection ───
-            let pendingIceCandidates = [];
-
             function connectStreamWebSocket() {
                 const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
                 console.log(`[Host WS] Connecting to ${protocol}//${location.host}/stream-ws?key=${currentStreamKey}...`);
@@ -1037,52 +1041,13 @@
                 streamWs.onopen = () => {
                     console.log('[Host WS] ✅ Connected to room server WebSocket');
                     toast('Server WebSocket Connected');
-                    initWebRtcSession();
+                    initMediasoupHost();
                 };
 
                 streamWs.onmessage = async (event) => {
                     try {
                         const msg = JSON.parse(event.data);
-
-                        if (msg.type === 'WEBRTC_ANSWER') {
-                            console.log('[Host WebRTC] Setting remote SDP answer...');
-                            if (peerConnection) {
-                                await peerConnection.setRemoteDescription(new RTCSessionDescription({ type: 'answer', sdp: msg.sdp }));
-                                console.log('[Host WebRTC] ✅ Remote description set successfully');
-
-                                // Flush queued ICE candidates
-                                for (const candidate of pendingIceCandidates) {
-                                    try {
-                                        await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
-                                        console.log('[Host WebRTC] Added queued ICE candidate');
-                                    } catch (err) {
-                                        console.warn('[Host WebRTC] Error adding queued ICE candidate:', err.message);
-                                    }
-                                }
-                                pendingIceCandidates = [];
-                            }
-                        } else if (msg.type === 'WEBRTC_ICE_CANDIDATE') {
-                            if (peerConnection && peerConnection.remoteDescription && peerConnection.remoteDescription.type) {
-                                console.log('[Host WebRTC] Adding remote ICE candidate:', msg.candidate?.candidate);
-                                await peerConnection.addIceCandidate(new RTCIceCandidate(msg.candidate)).catch(err => console.warn('[Host WebRTC] addIceCandidate error:', err.message));
-                            } else {
-                                console.log('[Host WebRTC] Queueing ICE candidate until remote description is set:', msg.candidate?.candidate);
-                                if (msg.candidate) pendingIceCandidates.push(msg.candidate);
-                            }
-                        } else if (msg.type === 'PARTICIPANT_LIST') {
-                            participants = msg.participants || [];
-                            const approvedIds = new Set(participants.map(p => p.id));
-                            pendingParticipants = pendingParticipants.filter(p => !approvedIds.has(p.id));
-                            renderLists();
-                        } else if (msg.type === 'JOIN_REQUEST') {
-                            pendingParticipants = pendingParticipants.filter(p => p.id !== msg.participantId);
-                            pendingParticipants.push({ id: msg.participantId, name: msg.name });
-                            renderLists();
-                            if (!sidebarOpen) toggleSidebar('people');
-                            toast(`${msg.name} requested to join`);
-                        } else if (msg.type === 'CHAT_MESSAGE') {
-                            addChatMessage(msg.from, msg.text);
-                        }
+                        await handleMediasoupWsMessage(msg);
                     } catch (e) {
                         console.error('[Host WS] Message parsing error:', e);
                     }
@@ -1116,6 +1081,153 @@
             document.addEventListener('click', unlockAudio, { once: true });
             document.addEventListener('keydown', unlockAudio, { once: true });
 
+            // ─── Mediasoup Host Client Logic ───
+            async function initMediasoupHost() {
+                try {
+                    console.log('[Host Mediasoup] Initializing Mediasoup Device...');
+                    msDevice = new mediasoupClient.Device();
+                    wsSend({ type: 'GET_ROUTER_RTP_CAPABILITIES' });
+                } catch (e) {
+                    console.error('[Host Mediasoup] Device init error:', e);
+                }
+            }
+
+            async function handleMediasoupWsMessage(msg) {
+                switch (msg.type) {
+                    case 'ROUTER_RTP_CAPABILITIES':
+                        await msDevice.load({ routerRtpCapabilities: msg.rtpCapabilities });
+                        console.log('[Host Mediasoup] ✅ Device loaded with RTP capabilities');
+                        wsSend({ type: 'CREATE_WEBRTC_TRANSPORT', direction: 'send' });
+                        wsSend({ type: 'CREATE_WEBRTC_TRANSPORT', direction: 'recv' });
+                        break;
+
+                    case 'WEBRTC_TRANSPORT_CREATED':
+                        if (msg.direction === 'send') {
+                            sendTransport = msDevice.createSendTransport(msg.transportOptions);
+                            sendTransport.on('connect', async ({ dtlsParameters }, callback, errback) => {
+                                wsSend({ type: 'CONNECT_WEBRTC_TRANSPORT', transportId: sendTransport.id, dtlsParameters });
+                                callback();
+                            });
+                            sendTransport.on('produce', async ({ kind, rtpParameters, appData }, callback, errback) => {
+                                wsSend({ type: 'PRODUCE', transportId: sendTransport.id, kind, rtpParameters, appData });
+                                pendingProduceCallback = callback;
+                            });
+                            console.log('[Host Mediasoup] SendTransport created successfully');
+                            startHostPublishing();
+                        } else if (msg.direction === 'recv') {
+                            recvTransport = msDevice.createRecvTransport(msg.transportOptions);
+                            recvTransport.on('connect', async ({ dtlsParameters }, callback, errback) => {
+                                wsSend({ type: 'CONNECT_WEBRTC_TRANSPORT', transportId: recvTransport.id, dtlsParameters });
+                                callback();
+                            });
+                            console.log('[Host Mediasoup] RecvTransport created successfully');
+                            wsSend({ type: 'GET_PRODUCERS' });
+                        }
+                        break;
+
+                    case 'PRODUCED':
+                        if (pendingProduceCallback) {
+                            pendingProduceCallback({ id: msg.id });
+                            pendingProduceCallback = null;
+                        }
+                        break;
+
+                    case 'WEBRTC_TRANSPORT_CONNECTED':
+                        toast('Connected to Mediasoup SFU');
+                        break;
+
+                    case 'NEW_PRODUCER':
+                        if (msg.appData && msg.appData.isViewerMic) {
+                            consumeProducer(msg.producerId);
+                        }
+                        break;
+
+                    case 'PRODUCERS_LIST':
+                        (msg.producers || []).forEach(p => {
+                            if (p.appData && p.appData.isViewerMic) {
+                                consumeProducer(p.id);
+                            }
+                        });
+                        break;
+
+                    case 'CONSUMED': {
+                        const consumer = await recvTransport.consume(msg.consumerOptions);
+                        consumers.set(consumer.producerId, consumer);
+                        const stream = new MediaStream([consumer.track]);
+                        if (viewerAudio) {
+                            viewerAudio.srcObject = stream;
+                            viewerAudio.play().catch(() => {});
+                        }
+                        wsSend({ type: 'RESUME_CONSUMER', consumerId: consumer.id });
+                        break;
+                    }
+
+                    case 'PRODUCER_CLOSED': {
+                        const consumer = consumers.get(msg.producerId);
+                        if (consumer) {
+                            consumer.close();
+                            consumers.delete(msg.producerId);
+                        }
+                        break;
+                    }
+
+                    case 'PARTICIPANT_LIST':
+                        participants = msg.participants || [];
+                        const approvedIds = new Set(participants.map(p => p.id));
+                        pendingParticipants = pendingParticipants.filter(p => !approvedIds.has(p.id));
+                        renderLists();
+                        break;
+
+                    case 'JOIN_REQUEST':
+                        pendingParticipants = pendingParticipants.filter(p => p.id !== msg.participantId);
+                        pendingParticipants.push({ id: msg.participantId, name: msg.name });
+                        renderLists();
+                        if (!sidebarOpen) toggleSidebar('people');
+                        toast(`${msg.name} requested to join`);
+                        break;
+
+                    case 'CHAT_MESSAGE':
+                        addChatMessage(msg.from, msg.text);
+                        break;
+                }
+            }
+
+            async function consumeProducer(producerId) {
+                if (!recvTransport || consumers.has(producerId)) return;
+                wsSend({
+                    type: 'CONSUME',
+                    transportId: recvTransport.id,
+                    producerId,
+                    rtpCapabilities: msDevice.rtpCapabilities
+                });
+            }
+
+            async function startHostPublishing() {
+                if (!sendTransport) return;
+                try {
+                    const initialVideoTrack = (isSharingScreen && mediaStream && mediaStream.getVideoTracks().length > 0)
+                        ? mediaStream.getVideoTracks()[0]
+                        : getDefaultCanvasVideoTrack();
+
+                    videoProducer = await sendTransport.produce({
+                        track: initialVideoTrack,
+                        appData: { isScreenShare: isSharingScreen, isHostVideo: true }
+                    });
+                    console.log('[Host Mediasoup] Video producer created id=', videoProducer.id);
+
+                    const mixedAudioTrack = getMixedAudioTrack();
+                    if (mixedAudioTrack) {
+                        audioProducer = await sendTransport.produce({
+                            track: mixedAudioTrack,
+                            appData: { isHostAudio: true }
+                        });
+                        console.log('[Host Mediasoup] Audio producer created id=', audioProducer.id);
+                    }
+                } catch (e) {
+                    console.error('[Host Mediasoup] Publish error:', e);
+                }
+            }
+
             // ─── Web Audio API Mixer for Host Microphone + Screen Share System Audio ───
             let audioMixerCtx = null;
             let mixerDestination = null;
@@ -1128,37 +1240,32 @@
                     audioMixerCtx = new (window.AudioContext || window.webkitAudioContext)();
                     mixerDestination = audioMixerCtx.createMediaStreamDestination();
 
-                    // Continuous silent keeper so AudioContext continuously emits audio RTP packets even when quiet
                     keeperOsc = audioMixerCtx.createOscillator();
                     const keeperGain = audioMixerCtx.createGain();
                     keeperGain.gain.value = 0.00001;
                     keeperOsc.connect(keeperGain);
                     keeperGain.connect(mixerDestination);
                     keeperOsc.start();
-                    console.log('[Host Audio Mixer] AudioContext initialized with silent keeper oscillator');
+                    console.log('[Host Audio Mixer] AudioContext initialized');
                 }
                 if (audioMixerCtx.state === 'suspended') {
                     audioMixerCtx.resume();
                 }
 
-                // Connect / Disconnect Mic Track
                 if (hostAudioTrack && hostMicEnabled) {
                     if (!micSourceNode) {
                         try {
                             micSourceNode = audioMixerCtx.createMediaStreamSource(new MediaStream([hostAudioTrack]));
                             micSourceNode.connect(mixerDestination);
-                            console.log('[Host Audio Mixer] Connected microphone track to mixer');
-                        } catch (e) { console.error('[Host Audio Mixer] Mic connect error:', e); }
+                        } catch (e) { }
                     }
                 } else {
                     if (micSourceNode) {
                         try { micSourceNode.disconnect(); } catch (e) { }
                         micSourceNode = null;
-                        console.log('[Host Audio Mixer] Disconnected microphone track from mixer');
                     }
                 }
 
-                // Connect / Disconnect Screen Share Audio Track
                 if (mediaStream && mediaStream.getAudioTracks().length > 0) {
                     const screenAudioTrack = mediaStream.getAudioTracks()[0];
                     if (screenAudioTrack && screenAudioTrack.readyState === 'live') {
@@ -1166,8 +1273,7 @@
                             try {
                                 screenSourceNode = audioMixerCtx.createMediaStreamSource(new MediaStream([screenAudioTrack]));
                                 screenSourceNode.connect(mixerDestination);
-                                console.log('[Host Audio Mixer] Connected screen share system audio track to mixer');
-                            } catch (e) { console.error('[Host Audio Mixer] Screen audio connect error:', e); }
+                            } catch (e) { }
                         }
                     }
                 } else {
@@ -1182,8 +1288,8 @@
 
             function updateMixedAudioTrack() {
                 const mixedTrack = getMixedAudioTrack();
-                if (hostAudioSender && mixedTrack) {
-                    hostAudioSender.replaceTrack(mixedTrack).catch(e => console.error('[Host Audio Sender] replaceTrack error:', e));
+                if (audioProducer && mixedTrack) {
+                    audioProducer.replaceTrack({ track: mixedTrack }).catch(e => console.error('[Host Audio Sender] replaceTrack error:', e));
                 }
             }
 
@@ -1203,7 +1309,6 @@
                         ctx.fillStyle = '#141517';
                         ctx.fillRect(0, 0, 640, 360);
                         
-                        // Subtle animated pulsing indicator so captureStream continuously encodes live VP8 frames
                         ctx.fillStyle = '#1a73e8';
                         ctx.beginPath();
                         ctx.arc(320, 180, 40 + Math.sin(frameCount * 0.1) * 5, 0, Math.PI * 2);
@@ -1217,83 +1322,8 @@
 
                     const canvasStream = canvas.captureStream(30);
                     defaultCanvasVideoTrack = canvasStream.getVideoTracks()[0];
-                    console.log('[Host WebRTC] Created animated canvas video track:', defaultCanvasVideoTrack.id);
                 }
                 return defaultCanvasVideoTrack;
-            }
-
-            // ─── Permanent WebRTC Session Initialization (ONCE) ───
-            async function initWebRtcSession() {
-                if (peerConnection) return;
-
-                console.log('[Host WebRTC] Initializing RTCPeerConnection...');
-                peerConnection = new RTCPeerConnection({
-                    iceServers: [
-                        { urls: 'stun:stun.l.google.com:19302' },
-                        { urls: 'stun:stun1.l.google.com:19302' },
-                        { urls: 'stun:stun2.l.google.com:19302' },
-                        { urls: 'stun:stun3.l.google.com:19302' },
-                        { urls: 'stun:stun4.l.google.com:19302' }
-                    ]
-                });
-
-                peerConnection.oniceconnectionstatechange = () => {
-                    const state = peerConnection.iceConnectionState;
-                    console.log(`[Host WebRTC] 🧊 ICE Connection State: ${state}`);
-                    if (state === 'connected' || state === 'completed') {
-                        toast('WebRTC Connected to Server SFU');
-                    } else if (state === 'failed' || state === 'disconnected') {
-                        toast(`WebRTC ICE State: ${state}`);
-                    }
-                };
-
-                peerConnection.onicegatheringstatechange = () => {
-                    console.log(`[Host WebRTC] 📡 ICE Gathering State: ${peerConnection.iceGatheringState}`);
-                };
-
-                peerConnection.onsignalingstatechange = () => {
-                    console.log(`[Host WebRTC] 🚦 Signaling State: ${peerConnection.signalingState}`);
-                };
-
-                peerConnection.ontrack = (event) => {
-                    console.log('[Host WebRTC] 🎵 Received remote viewer track:', event.track.kind, 'id:', event.track.id);
-                    const stream = event.streams && event.streams[0] ? event.streams[0] : new MediaStream([event.track]);
-                    if (viewerAudio) {
-                        viewerAudio.srcObject = stream;
-                        viewerAudio.play().catch(e => console.warn('[Host Audio Play error]', e));
-                    }
-                };
-
-                peerConnection.onicecandidate = (event) => {
-                    if (event.candidate) {
-                        console.log('[Host WebRTC] ❄️ Local ICE Candidate gathered:', event.candidate.candidate);
-                        wsSend({ type: 'WEBRTC_ICE_CANDIDATE', candidate: event.candidate });
-                    }
-                };
-
-                // 1. Attach Video Sender with default video track
-                const initialVideoTrack = (isSharingScreen && mediaStream && mediaStream.getVideoTracks().length > 0)
-                    ? mediaStream.getVideoTracks()[0]
-                    : getDefaultCanvasVideoTrack();
-
-                hostVideoSender = peerConnection.addTrack(initialVideoTrack, new MediaStream([initialVideoTrack]));
-                console.log('[Host WebRTC] Attached video track to PeerConnection:', initialVideoTrack.id);
-
-                // 2. Attach Mixed Audio Sender
-                const mixedAudioTrack = getMixedAudioTrack();
-                if (mixedAudioTrack) {
-                    hostAudioSender = peerConnection.addTrack(mixedAudioTrack, mixerDestination.stream);
-                    console.log('[Host WebRTC] Attached mixed audio track to PeerConnection:', mixedAudioTrack.id);
-                }
-
-                console.log('[Host WebRTC] Creating SDP offer...');
-                const offer = await peerConnection.createOffer({ offerToReceiveAudio: true, offerToReceiveVideo: false });
-                let sdp = offer.sdp;
-                sdp = sdp.replace(/(a=fmtp:111 [^\r\n]+)/, "$1;stereo=1;sprop-stereo=1;maxaveragebitrate=510000;cbr=1;useinbandfec=1");
-
-                await peerConnection.setLocalDescription({ type: 'offer', sdp });
-                console.log('[Host WebRTC] Sending SDP offer to server...');
-                wsSend({ type: 'WEBRTC_OFFER', sdp: peerConnection.localDescription.sdp, isScreenSharing: isSharingScreen });
             }
 
             // ─── Host Microphone Controls ───
@@ -1369,12 +1399,10 @@
                         stopScreenShare();
                     };
 
-                    if (hostVideoSender && videoTrack) {
-                        console.log('[Host ScreenShare] Replacing hostVideoSender track with screen video track:', videoTrack.id);
-                        await hostVideoSender.replaceTrack(videoTrack);
+                    if (videoProducer && videoTrack) {
+                        console.log('[Host ScreenShare] Replacing videoProducer track with screen video track:', videoTrack.id);
+                        await videoProducer.replaceTrack({ track: videoTrack });
                         console.log('[Host ScreenShare] ✅ replaceTrack completed successfully');
-                    } else {
-                        console.warn('[Host ScreenShare] hostVideoSender is null when starting screen share');
                     }
 
                     updateMixedAudioTrack();
@@ -1383,7 +1411,6 @@
                     presentBtnText.textContent = 'Stop sharing';
                     startBtn.classList.add('sharing');
 
-                    console.log('[Host ScreenShare] Sending SCREEN_SHARE_TOGGLE sharing=true to server...');
                     wsSend({ type: 'SCREEN_SHARE_TOGGLE', sharing: true });
                     updateStageLayout();
                     toast('Screen share started');
@@ -1397,16 +1424,15 @@
                 console.log('[Host ScreenShare] Stopping screen share...');
                 if (mediaStream) {
                     mediaStream.getTracks().forEach(t => {
-                        console.log('[Host ScreenShare] Stopping track:', t.kind, t.id);
                         t.stop();
                     });
                     mediaStream = null;
                 }
 
-                if (hostVideoSender) {
+                if (videoProducer) {
                     const defaultTrack = getDefaultCanvasVideoTrack();
-                    console.log('[Host ScreenShare] Reverting hostVideoSender track to default canvas track:', defaultTrack.id);
-                    await hostVideoSender.replaceTrack(defaultTrack);
+                    console.log('[Host ScreenShare] Reverting videoProducer track to default canvas track:', defaultTrack.id);
+                    await videoProducer.replaceTrack({ track: defaultTrack });
                 }
 
                 updateMixedAudioTrack();
