@@ -822,10 +822,10 @@
 </head>
 
 <body>
-    <!-- Real-time WebRTC Connection Status Diagnostic Badge -->
+    <!-- Real-time SFU Connection Status Diagnostic Badge -->
     <div id="webrtc-status-overlay" style="position: fixed; top: 12px; right: 16px; z-index: 9999; background: rgba(0,0,0,0.85); color: #fff; padding: 6px 14px; border-radius: 20px; font-size: 0.78rem; font-family: monospace; border: 1px solid rgba(255,255,255,0.2); display: flex; align-items: center; gap: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.5); pointer-events: none;">
         <span id="webrtc-dot" style="width: 8px; height: 8px; border-radius: 50%; background: #ff9800; display: inline-block;"></span>
-        <span id="webrtc-text">WebRTC Host: Initializing...</span>
+        <span id="webrtc-text">Mediasoup SFU: Initializing...</span>
     </div>
 
     <audio id="viewer-audio" autoplay></audio>
@@ -1065,6 +1065,17 @@
             }
             connectStreamWebSocket();
 
+            function setWebRtcStatus(state, text) {
+                const dot = document.getElementById('webrtc-dot');
+                const txt = document.getElementById('webrtc-text');
+                if (txt) txt.textContent = text;
+                if (dot) {
+                    if (state === 'connected') dot.style.background = '#34a853';
+                    else if (state === 'error') dot.style.background = '#ea4335';
+                    else dot.style.background = '#ff9800';
+                }
+            }
+
             function wsSend(obj) {
                 if (streamWs && streamWs.readyState === WebSocket.OPEN) {
                     streamWs.send(JSON.stringify(obj));
@@ -1085,10 +1096,12 @@
             async function initMediasoupHost() {
                 try {
                     console.log('[Host Mediasoup] Initializing Mediasoup Device...');
+                    setWebRtcStatus('connecting', 'Mediasoup SFU: Initializing...');
                     msDevice = new mediasoupClient.Device();
                     wsSend({ type: 'GET_ROUTER_RTP_CAPABILITIES' });
                 } catch (e) {
                     console.error('[Host Mediasoup] Device init error:', e);
+                    setWebRtcStatus('error', 'Mediasoup SFU Error');
                 }
             }
 
@@ -1130,9 +1143,11 @@
                             pendingProduceCallback({ id: msg.id });
                             pendingProduceCallback = null;
                         }
+                        setWebRtcStatus('connected', 'Mediasoup SFU Live');
                         break;
 
                     case 'WEBRTC_TRANSPORT_CONNECTED':
+                        setWebRtcStatus('connected', 'Mediasoup SFU Live');
                         toast('Connected to Mediasoup SFU');
                         break;
 

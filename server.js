@@ -973,6 +973,29 @@ function findParticipantByWs(session, ws) {
     return null;
 }
 
+function broadcastParticipantList(session) {
+    if (!session) return;
+    const list = Array.from(session.participants.values()).map(p => ({
+        id: p.id,
+        name: p.name,
+        role: p.role,
+        micEnabled: !!p.micEnabled,
+        canTalk: !!p.canTalk
+    }));
+    const msg = JSON.stringify({ type: 'PARTICIPANT_LIST', participants: list });
+
+    for (const client of streamWss.clients) {
+        if (client.streamKey === session.streamKey && client.readyState === 1) {
+            try { client.send(msg); } catch (e) {}
+        }
+    }
+    for (const client of viewWss.clients) {
+        if (client.streamKey === session.streamKey && client.readyState === 1) {
+            try { client.send(msg); } catch (e) {}
+        }
+    }
+}
+
 setInterval(() => {
     broadcastAdminTelemetry();
     broadcastHostHealth();
