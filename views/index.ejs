@@ -346,22 +346,28 @@
         // ─── WebSocket Connection ───
         function connectStreamWebSocket() {
             const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+            console.log(`[Host WS] Connecting to ${protocol}//${location.host}/stream-ws?key=${currentStreamKey}...`);
             streamWs = new WebSocket(`${protocol}//${location.host}/stream-ws?key=${encodeURIComponent(currentStreamKey)}`);
 
             streamWs.onopen = () => {
-                console.log('[Host WS] Connected to room server');
+                console.log('[Host WS] ✅ Connected to room server WebSocket');
+                toast('Server WebSocket Connected');
                 initWebRtcSession();
             };
 
             streamWs.onmessage = async (event) => {
                 try {
                     const msg = JSON.parse(event.data);
+                    console.log('[Host WS] Received message:', msg.type);
 
                     if (msg.type === 'WEBRTC_ANSWER') {
+                        console.log('[Host WebRTC] Setting remote SDP answer...');
                         if (peerConnection) {
                             await peerConnection.setRemoteDescription(new RTCSessionDescription({ type: 'answer', sdp: msg.sdp }));
+                            console.log('[Host WebRTC] ✅ Remote description set successfully');
                         }
                     } else if (msg.type === 'WEBRTC_ICE_CANDIDATE') {
+                        console.log('[Host WebRTC] Adding remote ICE candidate:', msg.candidate?.candidate);
                         if (peerConnection && msg.candidate) {
                             await peerConnection.addIceCandidate(new RTCIceCandidate(msg.candidate));
                         }
@@ -379,10 +385,18 @@
                     } else if (msg.type === 'CHAT_MESSAGE') {
                         addChatMessage(msg.from, msg.text);
                     }
-                } catch (e) {}
+                } catch (e) {
+                    console.error('[Host WS] Message parsing error:', e);
+                }
+            };
+
+            streamWs.onerror = (err) => {
+                console.error('[Host WS] ❌ WebSocket Error:', err);
+                toast('Server WebSocket Error');
             };
 
             streamWs.onclose = () => {
+                console.warn('[Host WS] ⚠️ WebSocket Closed. Reconnecting in 2s...');
                 setTimeout(connectStreamWebSocket, 2000);
             };
         }
@@ -391,6 +405,8 @@
         function wsSend(obj) {
             if (streamWs && streamWs.readyState === WebSocket.OPEN) {
                 streamWs.send(JSON.stringify(obj));
+            } else {
+                console.warn('[Host WS] Unable to send message, WS state:', streamWs ? streamWs.readyState : 'null');
             }
         }
 
@@ -421,6 +437,7 @@
                 keeperOsc.connect(keeperGain);
                 keeperGain.connect(mixerDestination);
                 keeperOsc.start();
+                console.log('[Host Audio Mixer] AudioContext initialized with silent keeper oscillator');
             }
             if (audioMixerCtx.state === 'suspended') {
                 audioMixerCtx.resume();
@@ -432,12 +449,14 @@
                     try {
                         micSourceNode = audioMixerCtx.createMediaStreamSource(new MediaStream([hostAudioTrack]));
                         micSourceNode.connect(mixerDestination);
-                    } catch (e) {}
+                        console.log('[Host Audio Mixer] Connected microphone track to mixer');
+                    } catch (e) { console.error('[Host Audio Mixer] Mic connect error:', e); }
                 }
             } else {
                 if (micSourceNode) {
                     try { micSourceNode.disconnect(); } catch (e) {}
                     micSourceNode = null;
+                    console.log('[Host Audio Mixer] Disconnected microphone track from mixer');
                 }
             }
 
@@ -449,7 +468,8 @@
                         try {
                             screenSourceNode = audioMixerCtx.createMediaStreamSource(new MediaStream([screenAudioTrack]));
                             screenSourceNode.connect(mixerDestination);
-                        } catch (e) {}
+                            console.log('[Host Audio Mixer] Connected screen share system audio track to mixer');
+                        } catch (e) { console.error('[Host Audio Mixer] Screen audio connect error:', e); }
                     }
                 }
             } else {
@@ -465,7 +485,7 @@
         function updateMixedAudioTrack() {
             const mixedTrack = getMixedAudioTrack();
             if (hostAudioSender && mixedTrack) {
-                hostAudioSender.replaceTrack(mixedTrack).catch(() => {});
+                hostAudioSender.replaceTrack(mixedTrack).catch(e => console.error('[Host Audio Sender] replaceTrack error:', e));
             }
         }
 
@@ -481,6 +501,7 @@
                 ctx.fillRect(0, 0, 640, 360);
                 const canvasStream = canvas.captureStream(5);
                 defaultCanvasVideoTrack = canvasStream.getVideoTracks()[0];
+                console.log('[Host WebRTC] Created default canvas video track:', defaultCanvasVideoTrack.id);
             }
             return defaultCanvasVideoTrack;
         }
@@ -489,6 +510,7 @@
         async function initWebRtcSession() {
             if (peerConnection) return;
 
+            console.log('[Host WebRTC] Initializing RTCPeerConnection...');
             peerConnection = new RTCPeerConnection({ iceServers: [
                 { urls: 'stun:stun.l.google.com:19302' },
                 { urls: 'stun:stun1.l.google.com:19302' },
@@ -497,8 +519,26 @@
                 { urls: 'stun:stun4.l.google.com:19302' }
             ] });
 
+            peerConnection.oniceconnectionstatechange = () => {
+                const state = peerConnection.iceConnectionState;
+                console.log(`[Host WebRTC] 🧊 ICE Connection State: ${state}`);
+                if (state === 'connected' || state === 'completed') {
+                    toast('WebRTC Connected to Server SFU');
+                } else if (state === 'failed' || state === 'disconnected') {
+                    toast(`WebRTC ICE State: ${state}`);
+                }
+            };
+
+            peerConnection.onicegatheringstatechange = () => {
+                console.log(`[Host WebRTC] 📡 ICE Gathering State: ${peerConnection.iceGatheringState}`);
+            };
+
+            peerConnection.onsignalingstatechange = () => {
+                console.log(`[Host WebRTC] 🚦 Signaling State: ${peerConnection.signalingState}`);
+            };
+
             peerConnection.ontrack = (event) => {
-                console.log('[Host WebRTC] Received remote track:', event.track.kind);
+                console.log('[Host WebRTC] 🎵 Received remote viewer track:', event.track.kind, 'id:', event.track.id);
                 const stream = event.streams && event.streams[0] ? event.streams[0] : new MediaStream([event.track]);
                 if (viewerAudio) {
                     viewerAudio.srcObject = stream;
@@ -508,6 +548,7 @@
 
             peerConnection.onicecandidate = (event) => {
                 if (event.candidate) {
+                    console.log('[Host WebRTC] ❄️ Local ICE Candidate gathered:', event.candidate.candidate);
                     wsSend({ type: 'WEBRTC_ICE_CANDIDATE', candidate: event.candidate });
                 }
             };
@@ -518,18 +559,22 @@
                 : getDefaultCanvasVideoTrack();
 
             hostVideoSender = peerConnection.addTrack(initialVideoTrack, new MediaStream([initialVideoTrack]));
+            console.log('[Host WebRTC] Attached video track to PeerConnection:', initialVideoTrack.id);
 
             // 2. Attach Mixed Audio Sender
             const mixedAudioTrack = getMixedAudioTrack();
             if (mixedAudioTrack) {
                 hostAudioSender = peerConnection.addTrack(mixedAudioTrack, mixerDestination.stream);
+                console.log('[Host WebRTC] Attached mixed audio track to PeerConnection:', mixedAudioTrack.id);
             }
 
+            console.log('[Host WebRTC] Creating SDP offer...');
             const offer = await peerConnection.createOffer({ offerToReceiveAudio: true, offerToReceiveVideo: false });
             let sdp = offer.sdp;
             sdp = sdp.replace(/(a=fmtp:111 [^\r\n]+)/, "$1;stereo=1;sprop-stereo=1;maxaveragebitrate=510000;cbr=1;useinbandfec=1");
 
             await peerConnection.setLocalDescription({ type: 'offer', sdp });
+            console.log('[Host WebRTC] Sending SDP offer to server...');
             wsSend({ type: 'WEBRTC_OFFER', sdp: peerConnection.localDescription.sdp, isScreenSharing: isSharingScreen });
         }
 
@@ -588,21 +633,30 @@
 
         async function startScreenShare() {
             try {
+                console.log('[Host ScreenShare] Requesting getDisplayMedia...');
                 mediaStream = await navigator.mediaDevices.getDisplayMedia({
                     video: { width: 1920, height: 1080, frameRate: 30 },
                     audio: { autoGainControl: false, echoCancellation: false, noiseSuppression: false, channelCount: 2 }
                 });
                 
+                console.log('[Host ScreenShare] Screen media stream acquired:', mediaStream.id, 'Video tracks:', mediaStream.getVideoTracks().length, 'Audio tracks:', mediaStream.getAudioTracks().length);
                 localPreview.srcObject = mediaStream;
                 localPreview.muted = true;
                 localPreview.volume = 0;
                 localPreview.play();
 
                 const videoTrack = mediaStream.getVideoTracks()[0];
-                videoTrack.onended = () => stopScreenShare();
+                videoTrack.onended = () => {
+                    console.log('[Host ScreenShare] Screen share video track ended by user');
+                    stopScreenShare();
+                };
 
                 if (hostVideoSender && videoTrack) {
+                    console.log('[Host ScreenShare] Replacing hostVideoSender track with screen video track:', videoTrack.id);
                     await hostVideoSender.replaceTrack(videoTrack);
+                    console.log('[Host ScreenShare] ✅ replaceTrack completed successfully');
+                } else {
+                    console.warn('[Host ScreenShare] hostVideoSender is null when starting screen share');
                 }
 
                 updateMixedAudioTrack();
@@ -611,22 +665,30 @@
                 presentBtnText.textContent = 'Stop sharing';
                 startBtn.classList.add('sharing');
                 
+                console.log('[Host ScreenShare] Sending SCREEN_SHARE_TOGGLE sharing=true to server...');
                 wsSend({ type: 'SCREEN_SHARE_TOGGLE', sharing: true });
                 updateStageLayout();
                 toast('Screen share started');
             } catch (e) {
-                toast('Screen share cancelled');
+                console.error('[Host ScreenShare] ❌ Screen share error:', e);
+                toast('Screen share cancelled or failed: ' + e.message);
             }
         }
 
         async function stopScreenShare() {
+            console.log('[Host ScreenShare] Stopping screen share...');
             if (mediaStream) {
-                mediaStream.getTracks().forEach(t => t.stop());
+                mediaStream.getTracks().forEach(t => {
+                    console.log('[Host ScreenShare] Stopping track:', t.kind, t.id);
+                    t.stop();
+                });
                 mediaStream = null;
             }
 
             if (hostVideoSender) {
-                await hostVideoSender.replaceTrack(getDefaultCanvasVideoTrack());
+                const defaultTrack = getDefaultCanvasVideoTrack();
+                console.log('[Host ScreenShare] Reverting hostVideoSender track to default canvas track:', defaultTrack.id);
+                await hostVideoSender.replaceTrack(defaultTrack);
             }
 
             updateMixedAudioTrack();
@@ -635,6 +697,7 @@
             presentBtnText.textContent = 'Present now';
             startBtn.classList.remove('sharing');
             
+            console.log('[Host ScreenShare] Sending SCREEN_SHARE_TOGGLE sharing=false to server...');
             wsSend({ type: 'SCREEN_SHARE_TOGGLE', sharing: false });
             updateStageLayout();
             toast('Screen share stopped');

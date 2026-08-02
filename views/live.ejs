@@ -491,14 +491,20 @@
 
         function updateStageLayout() {
             const hasVideoTrack = remoteStream && remoteStream.getVideoTracks().some(t => t.readyState === 'live' && t.enabled);
+            console.log(`[Viewer Stage] updateStageLayout: isLive=${isLive}, isScreenSharing=${isScreenSharing}, hasVideoTrack=${hasVideoTrack}`);
             if (isLive && (isScreenSharing || hasVideoTrack)) {
                 meetVideoContainer.classList.add('active');
                 meetGrid.style.display = 'none';
                 modeText.textContent = 'Screen Shared';
                 if (hostVideo.srcObject !== remoteStream) {
+                    console.log('[Viewer Stage] Binding remoteStream to hostVideo element');
                     hostVideo.srcObject = remoteStream;
                 }
-                hostVideo.play().catch(() => {});
+                hostVideo.play().then(() => {
+                    console.log('[Viewer Stage] ✅ hostVideo play() succeeded');
+                }).catch(e => {
+                    console.warn('[Viewer Stage] hostVideo play() blocked/failed:', e);
+                });
             } else {
                 meetVideoContainer.classList.remove('active');
                 meetGrid.style.display = 'grid';
@@ -507,6 +513,7 @@
         }
 
         function unlockViewerAudioVideo() {
+            console.log('[Viewer User Action] Unlocking Audio/Video play permissions');
             if (hostAudio) hostAudio.play().catch(() => {});
             if (hostVideo) hostVideo.play().catch(() => {});
             if (audioCtx && audioCtx.state === 'suspended') {
@@ -516,9 +523,17 @@
         document.addEventListener('click', unlockViewerAudioVideo);
         document.addEventListener('keydown', unlockViewerAudioVideo);
 
+        if (hostVideo) {
+            hostVideo.onplaying = () => console.log('[Viewer Video Element] 🎬 Playing live video stream');
+            hostVideo.onwaiting = () => console.warn('[Viewer Video Element] ⏳ Waiting for keyframe/video data...');
+            hostVideo.onstalled = () => console.warn('[Viewer Video Element] ⚠️ Playback stalled');
+            hostVideo.onerror = (e) => console.error('[Viewer Video Element] ❌ Video error:', hostVideo.error);
+        }
+
         // ─── WebRTC Voice & Movie Stream ───
         function startWebRtcViewer() {
             if (pc) { pc.close(); pc = null; }
+            console.log('[Viewer WebRTC] Initializing RTCPeerConnection for viewer...');
             remoteStream = new MediaStream();
 
             pc = new RTCPeerConnection({ iceServers: [
@@ -529,21 +544,44 @@
                 { urls: 'stun:stun4.l.google.com:19302' }
             ] });
 
+            pc.oniceconnectionstatechange = () => {
+                const state = pc.iceConnectionState;
+                console.log(`[Viewer WebRTC] 🧊 ICE Connection State: ${state}`);
+                if (state === 'connected' || state === 'completed') {
+                    toast('Connected to Live Stream (WebRTC OK)');
+                } else if (state === 'failed' || state === 'disconnected') {
+                    toast(`Stream ICE State: ${state}`);
+                }
+            };
+
+            pc.onicegatheringstatechange = () => {
+                console.log(`[Viewer WebRTC] 📡 ICE Gathering State: ${pc.iceGatheringState}`);
+            };
+
+            pc.onsignalingstatechange = () => {
+                console.log(`[Viewer WebRTC] 🚦 Signaling State: ${pc.signalingState}`);
+            };
+
             pc.ontrack = (event) => {
+                console.log(`[Viewer WebRTC] 🎵 Received remote track: kind=${event.track.kind} id=${event.track.id} state=${event.track.readyState}`);
                 const stream = event.streams && event.streams[0] ? event.streams[0] : remoteStream;
                 for (const track of stream.getTracks()) {
-                    if (!remoteStream.getTracks().some(t => t.id === track.id)) remoteStream.addTrack(track);
+                    if (!remoteStream.getTracks().some(t => t.id === track.id)) {
+                        console.log(`[Viewer WebRTC] Added track to remoteStream: kind=${track.kind} id=${track.id}`);
+                        remoteStream.addTrack(track);
+                    }
                 }
                 hostVideo.srcObject = remoteStream;
                 hostAudio.srcObject = remoteStream;
                 
-                hostAudio.play().catch(() => {});
-                hostVideo.play().catch(() => {});
+                hostAudio.play().catch(e => console.warn('[Viewer Audio Play error]', e));
+                hostVideo.play().catch(e => console.warn('[Viewer Video Play error]', e));
                 updateStageLayout();
             };
 
             pc.onicecandidate = (event) => {
                 if (event.candidate && statusWs && statusWs.readyState === WebSocket.OPEN) {
+                    console.log('[Viewer WebRTC] ❄️ Local ICE Candidate gathered:', event.candidate.candidate);
                     statusWs.send(JSON.stringify({ type: 'VIEWER_ICE_CANDIDATE', candidate: event.candidate }));
                 }
             };
@@ -554,15 +592,17 @@
             const audioTransceiver = pc.addTransceiver('audio', { direction: 'sendrecv' });
             viewerAudioSender = audioTransceiver.sender;
 
+            console.log('[Viewer WebRTC] Creating viewer SDP offer...');
             pc.createOffer().then(offer => {
                 let sdp = offer.sdp;
                 sdp = sdp.replace(/(a=fmtp:111 [^\r\n]+)/, "$1;stereo=1;sprop-stereo=1;maxaveragebitrate=510000;cbr=1;useinbandfec=1");
                 return pc.setLocalDescription({ type: 'offer', sdp });
             }).then(() => {
                 if (statusWs && statusWs.readyState === WebSocket.OPEN) {
+                    console.log('[Viewer WebRTC] Sending VIEWER_WEBRTC_OFFER to server...');
                     statusWs.send(JSON.stringify({ type: 'VIEWER_WEBRTC_OFFER', sdp: pc.localDescription.sdp }));
                 }
-            }).catch(() => {});
+            }).catch(e => console.error('[Viewer WebRTC] ❌ Offer error:', e));
         }
 
         // ─── Microphone Controls (Track Replace for 100% Reliable Host Audio) ───
