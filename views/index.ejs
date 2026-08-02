@@ -469,12 +469,25 @@
             }
         }
 
-        // ─── Permanent WebRTC Session Initialization ───
-        async function initWebRtcSession(isScreenShare = false) {
-            if (peerConnection) {
-                try { peerConnection.close(); } catch(e) {}
-                peerConnection = null;
+        let defaultCanvasVideoTrack = null;
+
+        function getDefaultCanvasVideoTrack() {
+            if (!defaultCanvasVideoTrack) {
+                const canvas = document.createElement('canvas');
+                canvas.width = 640;
+                canvas.height = 360;
+                const ctx = canvas.getContext('2d');
+                ctx.fillStyle = '#141517';
+                ctx.fillRect(0, 0, 640, 360);
+                const canvasStream = canvas.captureStream(5);
+                defaultCanvasVideoTrack = canvasStream.getVideoTracks()[0];
             }
+            return defaultCanvasVideoTrack;
+        }
+
+        // ─── Permanent WebRTC Session Initialization (ONCE) ───
+        async function initWebRtcSession() {
+            if (peerConnection) return;
 
             peerConnection = new RTCPeerConnection({ iceServers: [
                 { urls: 'stun:stun.l.google.com:19302' },
@@ -499,30 +512,14 @@
                 }
             };
 
-            // 1. Attach Video Track
-            let activeVideoTrack = null;
-            let videoStreamForTrack = null;
+            // 1. Attach Video Sender with default video track
+            const initialVideoTrack = (isSharingScreen && mediaStream && mediaStream.getVideoTracks().length > 0)
+                ? mediaStream.getVideoTracks()[0]
+                : getDefaultCanvasVideoTrack();
 
-            if (isScreenShare && mediaStream && mediaStream.getVideoTracks().length > 0) {
-                activeVideoTrack = mediaStream.getVideoTracks()[0];
-                videoStreamForTrack = mediaStream;
-            } else {
-                // Create a dummy black canvas stream track so WebRTC negotiates live video stream from second 1!
-                const canvas = document.createElement('canvas');
-                canvas.width = 640;
-                canvas.height = 360;
-                const ctx = canvas.getContext('2d');
-                ctx.fillStyle = '#141517';
-                ctx.fillRect(0, 0, 640, 360);
-                videoStreamForTrack = canvas.captureStream(5);
-                activeVideoTrack = videoStreamForTrack.getVideoTracks()[0];
-            }
+            hostVideoSender = peerConnection.addTrack(initialVideoTrack, new MediaStream([initialVideoTrack]));
 
-            if (activeVideoTrack) {
-                hostVideoSender = peerConnection.addTrack(activeVideoTrack, videoStreamForTrack);
-            }
-
-            // 2. Attach Mixed Audio Track
+            // 2. Attach Mixed Audio Sender
             const mixedAudioTrack = getMixedAudioTrack();
             if (mixedAudioTrack) {
                 hostAudioSender = peerConnection.addTrack(mixedAudioTrack, mixerDestination.stream);
@@ -533,7 +530,7 @@
             sdp = sdp.replace(/(a=fmtp:111 [^\r\n]+)/, "$1;stereo=1;sprop-stereo=1;maxaveragebitrate=510000;cbr=1;useinbandfec=1");
 
             await peerConnection.setLocalDescription({ type: 'offer', sdp });
-            wsSend({ type: 'WEBRTC_OFFER', sdp: peerConnection.localDescription.sdp, isScreenSharing: isScreenShare });
+            wsSend({ type: 'WEBRTC_OFFER', sdp: peerConnection.localDescription.sdp, isScreenSharing: isSharingScreen });
         }
 
         // ─── Host Microphone Controls ───
@@ -604,13 +601,17 @@
                 const videoTrack = mediaStream.getVideoTracks()[0];
                 videoTrack.onended = () => stopScreenShare();
 
+                if (hostVideoSender && videoTrack) {
+                    await hostVideoSender.replaceTrack(videoTrack);
+                }
+
                 updateMixedAudioTrack();
 
                 isSharingScreen = true;
                 presentBtnText.textContent = 'Stop sharing';
                 startBtn.classList.add('sharing');
                 
-                await initWebRtcSession(true);
+                wsSend({ type: 'SCREEN_SHARE_TOGGLE', sharing: true });
                 updateStageLayout();
                 toast('Screen share started');
             } catch (e) {
@@ -623,13 +624,18 @@
                 mediaStream.getTracks().forEach(t => t.stop());
                 mediaStream = null;
             }
+
+            if (hostVideoSender) {
+                await hostVideoSender.replaceTrack(getDefaultCanvasVideoTrack());
+            }
+
             updateMixedAudioTrack();
 
             isSharingScreen = false;
             presentBtnText.textContent = 'Present now';
             startBtn.classList.remove('sharing');
             
-            await initWebRtcSession(false);
+            wsSend({ type: 'SCREEN_SHARE_TOGGLE', sharing: false });
             updateStageLayout();
             toast('Screen share stopped');
         }
