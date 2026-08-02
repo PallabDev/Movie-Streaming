@@ -3,7 +3,7 @@ import os from 'os';
 import logger from './logger.js';
 
 // Configuration
-const ANNOUNCED_IP = process.env.ANNOUNCED_IP || '222.167.207.36';
+const ANNOUNCED_IP = process.env.ANNOUNCED_IP || (process.env.NODE_ENV === 'production' ? '222.167.207.36' : '127.0.0.1');
 const MIN_PORT = parseInt(process.env.MEDIASOUP_MIN_PORT || '40000', 10);
 const MAX_PORT = parseInt(process.env.MEDIASOUP_MAX_PORT || '40100', 10);
 

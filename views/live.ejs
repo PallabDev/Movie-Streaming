@@ -1197,17 +1197,24 @@
                     case 'CONSUMED': {
                         const consumer = await recvTransport.consume(data.consumerOptions);
                         consumers.set(consumer.producerId, consumer);
-                        remoteStream.addTrack(consumer.track);
 
-                        if (hostVideo && hostVideo.srcObject !== remoteStream) {
-                            hostVideo.srcObject = remoteStream;
+                        if (consumer.kind === 'video') {
+                            const stream = new MediaStream([consumer.track]);
+                            if (hostVideo) {
+                                hostVideo.srcObject = stream;
+                                hostVideo.play().catch(() => {});
+                            }
+                        } else if (consumer.kind === 'audio') {
+                            let audioEl = document.getElementById(`audio-producer-${data.consumerOptions.producerId}`);
+                            if (!audioEl) {
+                                audioEl = document.createElement('audio');
+                                audioEl.id = `audio-producer-${data.consumerOptions.producerId}`;
+                                audioEl.autoplay = true;
+                                document.body.appendChild(audioEl);
+                            }
+                            audioEl.srcObject = new MediaStream([consumer.track]);
+                            audioEl.play().catch(() => {});
                         }
-                        if (hostAudio && hostAudio.srcObject !== remoteStream) {
-                            hostAudio.srcObject = remoteStream;
-                        }
-
-                        if (hostAudio && hostAudio.paused) hostAudio.play().catch(() => {});
-                        if (hostVideo && hostVideo.paused) hostVideo.play().catch(() => {});
 
                         statusWs.send(JSON.stringify({ type: 'RESUME_CONSUMER', consumerId: consumer.id }));
                         updateStageLayout();
@@ -1217,10 +1224,11 @@
                     case 'PRODUCER_CLOSED': {
                         const consumer = consumers.get(data.producerId);
                         if (consumer) {
-                            remoteStream.removeTrack(consumer.track);
                             consumer.close();
                             consumers.delete(data.producerId);
                         }
+                        const audioEl = document.getElementById(`audio-producer-${data.producerId}`);
+                        if (audioEl) audioEl.remove();
                         break;
                     }
                 }
@@ -1228,6 +1236,7 @@
 
             async function consumeProducer(producerId) {
                 if (!recvTransport || consumers.has(producerId)) return;
+                if (micProducer && micProducer.id === producerId) return;
                 statusWs.send(JSON.stringify({
                     type: 'CONSUME',
                     transportId: recvTransport.id,

@@ -1,16 +1,15 @@
 FROM node:20-slim
 
-# Install FFmpeg, Python3, and C++ build tools for Mediasoup compilation
-RUN apt-get update && apt-get install -y ffmpeg python3 build-essential make g++ && rm -rf /var/lib/apt/lists/*
+# Install FFmpeg, Python3 (with pip), and C++ build tools for Mediasoup compilation
+RUN apt-get update && apt-get install -y ffmpeg python3 python3-pip build-essential make g++ && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
 # Copy dependency definition
 COPY package*.json ./
 
-# Install dependencies and build client bundle
-RUN npm install
-RUN npm run build:client
+# Install production dependencies
+RUN npm install --production
 
 # Copy application files
 COPY . .

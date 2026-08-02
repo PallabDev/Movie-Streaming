@@ -1171,10 +1171,17 @@
                         const consumer = await recvTransport.consume(msg.consumerOptions);
                         consumers.set(consumer.producerId, consumer);
                         const stream = new MediaStream([consumer.track]);
-                        if (viewerAudio) {
-                            viewerAudio.srcObject = stream;
-                            viewerAudio.play().catch(() => {});
+                        
+                        let audioEl = document.getElementById(`audio-producer-${msg.consumerOptions.producerId}`);
+                        if (!audioEl) {
+                            audioEl = document.createElement('audio');
+                            audioEl.id = `audio-producer-${msg.consumerOptions.producerId}`;
+                            audioEl.autoplay = true;
+                            document.body.appendChild(audioEl);
                         }
+                        audioEl.srcObject = stream;
+                        audioEl.play().catch(() => {});
+                        
                         wsSend({ type: 'RESUME_CONSUMER', consumerId: consumer.id });
                         break;
                     }
@@ -1185,6 +1192,8 @@
                             consumer.close();
                             consumers.delete(msg.producerId);
                         }
+                        const audioEl = document.getElementById(`audio-producer-${msg.producerId}`);
+                        if (audioEl) audioEl.remove();
                         break;
                     }
 
