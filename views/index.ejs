@@ -1097,11 +1097,13 @@
                 try {
                     console.log('[Host Mediasoup] Initializing Mediasoup Device...');
                     setWebRtcStatus('connecting', 'Mediasoup SFU: Initializing...');
-                    msDevice = new mediasoupClient.Device();
+                    const msClient = window.mediasoupClient || (typeof mediasoupClient !== 'undefined' ? mediasoupClient : null);
+                    if (!msClient) throw new ReferenceError('mediasoupClient library not loaded');
+                    msDevice = new msClient.Device();
                     wsSend({ type: 'GET_ROUTER_RTP_CAPABILITIES' });
                 } catch (e) {
                     console.error('[Host Mediasoup] Device init error:', e);
-                    setWebRtcStatus('error', 'Mediasoup SFU Error');
+                    setWebRtcStatus('error', 'Mediasoup SFU Error: ' + e.message);
                 }
             }
 

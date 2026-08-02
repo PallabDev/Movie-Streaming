@@ -1130,7 +1130,9 @@
             async function initMediasoupViewer() {
                 try {
                     console.log('[Viewer Mediasoup] Initializing Mediasoup Device...');
-                    msDevice = new mediasoupClient.Device();
+                    const msClient = window.mediasoupClient || (typeof mediasoupClient !== 'undefined' ? mediasoupClient : null);
+                    if (!msClient) throw new ReferenceError('mediasoupClient library not loaded');
+                    msDevice = new msClient.Device();
                     if (statusWs && statusWs.readyState === WebSocket.OPEN) {
                         statusWs.send(JSON.stringify({ type: 'GET_ROUTER_RTP_CAPABILITIES' }));
                     }
