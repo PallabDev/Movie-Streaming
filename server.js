@@ -361,6 +361,42 @@ streamWss.on('connection', (ws) => {
     });
 });
 
+viewWss.on('connection', (ws) => {
+    const key = ws.streamKey || 'default';
+    logger.info(`Viewer connected to WebSocket Ingest for [${key}]`);
+
+    const session = activeStreams.get(key);
+    if (session) {
+        session.viewers.add(ws);
+        broadcastStatus(session, session.isLive);
+    }
+
+    ws.on('message', async (data, isBinary) => {
+        const session = activeStreams.get(key);
+        if (session) {
+            await handleViewerMessage(session, ws, data, isBinary);
+        }
+    });
+
+    ws.on('close', () => {
+        logger.info(`Viewer WebSocket disconnected from [${key}]`);
+        const session = activeStreams.get(key);
+        if (session) {
+            session.viewers.delete(ws);
+            for (const [id, p] of session.participants) {
+                if (p.ws === ws) {
+                    session.participants.delete(id);
+                    break;
+                }
+            }
+            broadcastParticipantList(session);
+            broadcastStatus(session, session.isLive);
+        }
+    });
+
+    ws.on('error', (err) => logger.warn(`[View WS Error ${key}]: ${err.message}`));
+});
+
 function broadcastStatus(session, liveState) {
     if (!session) return;
     session.isLive = liveState;
