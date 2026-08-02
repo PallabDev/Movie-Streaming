@@ -5,16 +5,14 @@ RUN apt-get update && apt-get install -y ffmpeg python3 python3-pip build-essent
 
 WORKDIR /app
 
-# Copy dependency definition
+# Copy source code and files
 COPY package*.json ./
-
-# Install production dependencies
-RUN npm install --production
-
-# Copy application files
 COPY . .
 
-# Expose port
+# Install dependencies and build browser client bundle
+RUN npm install
+RUN npm run build:client
+
 EXPOSE 5992
 
 ENV PORT=5992
