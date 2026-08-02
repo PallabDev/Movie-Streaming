@@ -1204,6 +1204,8 @@
                                 hostVideo.srcObject = stream;
                                 hostVideo.play().catch(() => {});
                             }
+                            if (meetVideoContainer) meetVideoContainer.style.display = 'block';
+                            if (meetGrid) meetGrid.style.display = 'none';
                         } else if (consumer.kind === 'audio') {
                             let audioEl = document.getElementById(`audio-producer-${data.consumerOptions.producerId}`);
                             if (!audioEl) {
@@ -1217,7 +1219,6 @@
                         }
 
                         statusWs.send(JSON.stringify({ type: 'RESUME_CONSUMER', consumerId: consumer.id }));
-                        updateStageLayout();
                         break;
                     }
 
