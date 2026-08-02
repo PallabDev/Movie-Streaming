@@ -1203,14 +1203,18 @@
                         renderLists();
                         break;
 
-                    case 'JOIN_REQUEST':
-                        if (!pendingParticipants.some(p => p.id === msg.participantId) && !participants.some(p => p.id === msg.participantId)) {
+                    case 'JOIN_REQUEST': {
+                        const existingIndex = pendingParticipants.findIndex(p => p.id === msg.participantId || p.name.toLowerCase() === msg.name.toLowerCase());
+                        if (existingIndex !== -1) {
+                            pendingParticipants[existingIndex] = { id: msg.participantId, name: msg.name };
+                        } else if (!participants.some(p => p.id === msg.participantId || p.name.toLowerCase() === msg.name.toLowerCase())) {
                             pendingParticipants.push({ id: msg.participantId, name: msg.name });
-                            renderLists();
                             if (!sidebarOpen) toggleSidebar('people');
                             toast(`${msg.name} requested to join`);
                         }
+                        renderLists();
                         break;
+                    }
 
                     case 'CHAT_MESSAGE':
                         addChatMessage(msg.from, msg.text);
@@ -1525,6 +1529,18 @@
             };
 
             function renderLists() {
+                // Deduplicate pending participants by name
+                const uniquePending = [];
+                const seenNames = new Set();
+                for (const p of pendingParticipants) {
+                    const lower = (p.name || '').toLowerCase();
+                    if (lower && !seenNames.has(lower)) {
+                        seenNames.add(lower);
+                        uniquePending.push(p);
+                    }
+                }
+                pendingParticipants = uniquePending;
+
                 // Pending Requests
                 const pendingLen = pendingParticipants.length;
                 pendingCountNum.textContent = pendingLen;
