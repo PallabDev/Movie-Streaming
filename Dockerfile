@@ -9,9 +9,10 @@ WORKDIR /app
 COPY package*.json ./
 COPY . .
 
-# Install dependencies and build browser client bundle
+# Create public/js and build browser client bundle
+RUN mkdir -p public/js
 RUN npm install
-RUN npm run build:client
+RUN npx esbuild node_modules/mediasoup-client/lib/index.js --bundle --minify --format=iife --global-name=mediasoupClient "--footer:js=if(typeof window !== 'undefined') window.mediasoupClient = mediasoupClient; if(typeof globalThis !== 'undefined') globalThis.mediasoupClient = mediasoupClient;" --outfile=public/js/mediasoup-client.min.js
 
 EXPOSE 5992
 
