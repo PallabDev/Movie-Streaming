@@ -203,15 +203,16 @@ function getParticipantList(session) {
 }
 
 function broadcastParticipantList(session) {
+    if (!session) return;
     const msg = JSON.stringify({ type: 'PARTICIPANT_LIST', participants: getParticipantList(session) });
     for (const client of streamWss.clients) {
         if (client.streamKey === session.streamKey && client.readyState === 1) {
-            client.send(msg);
+            try { client.send(msg); } catch (e) {}
         }
     }
-    for (const [id, p] of session.participants) {
-        if (p.ws && p.ws.readyState === 1) {
-            p.ws.send(msg);
+    for (const client of viewWss.clients) {
+        if (client.streamKey === session.streamKey && client.readyState === 1) {
+            try { client.send(msg); } catch (e) {}
         }
     }
 }
@@ -971,29 +972,6 @@ function findParticipantByWs(session, ws) {
         if (p.ws === ws) return p;
     }
     return null;
-}
-
-function broadcastParticipantList(session) {
-    if (!session) return;
-    const list = Array.from(session.participants.values()).map(p => ({
-        id: p.id,
-        name: p.name,
-        role: p.role,
-        micEnabled: !!p.micEnabled,
-        canTalk: !!p.canTalk
-    }));
-    const msg = JSON.stringify({ type: 'PARTICIPANT_LIST', participants: list });
-
-    for (const client of streamWss.clients) {
-        if (client.streamKey === session.streamKey && client.readyState === 1) {
-            try { client.send(msg); } catch (e) {}
-        }
-    }
-    for (const client of viewWss.clients) {
-        if (client.streamKey === session.streamKey && client.readyState === 1) {
-            try { client.send(msg); } catch (e) {}
-        }
-    }
 }
 
 setInterval(() => {
