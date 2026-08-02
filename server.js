@@ -482,6 +482,8 @@ async function handleMediasoupMessage(session, ws, parsed) {
             case 'PRODUCE': {
                 const { transportId, kind, rtpParameters, appData } = parsed;
                 const producer = await mediasoupManager.produce(key, transportId, kind, rtpParameters, appData || {});
+                logger.info(`[Mediasoup ${key}] 🚀 PRODUCER ACTIVE | Kind=${kind} | ProducerId=${producer.id} | AppData=${JSON.stringify(appData || {})}`);
+                
                 ws.send(JSON.stringify({
                     type: 'PRODUCED',
                     id: producer.id,
@@ -504,6 +506,7 @@ async function handleMediasoupMessage(session, ws, parsed) {
             case 'CONSUME': {
                 const { transportId, producerId, rtpCapabilities } = parsed;
                 const consumerOptions = await mediasoupManager.consume(key, transportId, producerId, rtpCapabilities);
+                logger.info(`[Mediasoup ${key}] 📥 CONSUMER CREATED | Kind=${consumerOptions.kind} | ConsumerId=${consumerOptions.id} | ProducerId=${producerId}`);
                 ws.send(JSON.stringify({
                     type: 'CONSUMED',
                     consumerOptions
@@ -513,6 +516,7 @@ async function handleMediasoupMessage(session, ws, parsed) {
 
             case 'RESUME_CONSUMER': {
                 await mediasoupManager.resumeConsumer(parsed.consumerId);
+                logger.info(`[Mediasoup ${key}] 🔊 CONSUMER RESUMED & STREAMING PACKETS | ConsumerId=${parsed.consumerId}`);
                 ws.send(JSON.stringify({
                     type: 'CONSUMER_RESUMED',
                     consumerId: parsed.consumerId
@@ -701,6 +705,7 @@ async function tryHandleHostControlMessage(session, data, isBinary, ws) {
 
         if (parsed.type === 'HOST_MIC_TOGGLE') {
             session.hostMicEnabled = !!parsed.enabled;
+            logger.info(`[Session ${key}] 🎙️ HOST MIC TOGGLE | Enabled=${session.hostMicEnabled}`);
             broadcastParticipantList(session);
             return true;
         }
@@ -833,6 +838,7 @@ async function handleViewerMessage(session, ws, data, isBinary) {
             const participant = findParticipantByWs(session, ws);
             if (!participant) return;
             participant.micEnabled = !!parsed.enabled;
+            logger.info(`[Session ${key}] 🎙️ VIEWER MIC TOGGLE | User="${participant.name}" (${participant.id}) | Enabled=${participant.micEnabled}`);
             broadcastParticipantList(session);
             // Notify host
             for (const client of streamWss.clients) {
