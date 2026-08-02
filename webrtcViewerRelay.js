@@ -140,16 +140,25 @@ export class WebRtcViewerSession {
         if (!this.alive || !this.videoSender) return;
         try {
             const dtlsState = this.videoSender.dtlsTransport?.state;
-            if (dtlsState !== 'connected') {
+            if (dtlsState === 'failed' || dtlsState === 'closed') {
                 this.stats.droppedPackets++;
-                if (!this._loggedSilent) {
-                    this._loggedSilent = true;
-                    logger.warn(`[Viewer Relay ${this.streamKey}] sendRtp blocked: dtls=${dtlsState} codec=${!!this.videoSender.codec}`);
-                }
                 return;
             }
 
-            const cloned = { header: { ...rtp.header, ssrc: this.videoSsrc, payloadType: this.videoPt }, payload: rtp.payload };
+            const cloned = {
+                header: {
+                    version: 2,
+                    padding: false,
+                    extension: false,
+                    marker: rtp.header.marker || false,
+                    payloadType: this.videoPt,
+                    sequenceNumber: rtp.header.sequenceNumber,
+                    timestamp: rtp.header.timestamp,
+                    ssrc: this.videoSsrc,
+                    extensions: {}
+                },
+                payload: rtp.payload
+            };
 
             this.videoSender.sendRtp(cloned).then(sent => {
                 if (this.stats.videoPackets < 5) {
@@ -181,20 +190,19 @@ export class WebRtcViewerSession {
         if (!this.alive || !this.audioSender) return;
         try {
             const dtlsState = this.audioSender.dtlsTransport?.state;
-            if (dtlsState !== 'connected') {
-                this.stats.droppedPackets++;
-                return;
-            }
+            if (dtlsState === 'failed' || dtlsState === 'closed') return;
 
             const cloned = {
                 header: {
+                    version: 2,
+                    padding: false,
+                    extension: false,
+                    marker: rtp.header.marker || false,
                     payloadType: this.audioPt,
                     sequenceNumber: rtp.header.sequenceNumber,
                     timestamp: rtp.header.timestamp,
                     ssrc: this.audioSsrc,
-                    marker: rtp.header.marker || false,
-                    padding: false,
-                    extension: false
+                    extensions: {}
                 },
                 payload: rtp.payload
             };

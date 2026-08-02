@@ -1188,6 +1188,7 @@
             }
 
             let defaultCanvasVideoTrack = null;
+            let canvasAnimTimer = null;
 
             function getDefaultCanvasVideoTrack() {
                 if (!defaultCanvasVideoTrack) {
@@ -1195,11 +1196,28 @@
                     canvas.width = 640;
                     canvas.height = 360;
                     const ctx = canvas.getContext('2d');
-                    ctx.fillStyle = '#141517';
-                    ctx.fillRect(0, 0, 640, 360);
-                    const canvasStream = canvas.captureStream(5);
+                    
+                    let frameCount = 0;
+                    canvasAnimTimer = setInterval(() => {
+                        frameCount++;
+                        ctx.fillStyle = '#141517';
+                        ctx.fillRect(0, 0, 640, 360);
+                        
+                        // Subtle animated pulsing indicator so captureStream continuously encodes live VP8 frames
+                        ctx.fillStyle = '#1a73e8';
+                        ctx.beginPath();
+                        ctx.arc(320, 180, 40 + Math.sin(frameCount * 0.1) * 5, 0, Math.PI * 2);
+                        ctx.fill();
+
+                        ctx.fillStyle = '#ffffff';
+                        ctx.font = '16px "Google Sans", sans-serif';
+                        ctx.textAlign = 'center';
+                        ctx.fillText('Live Studio Ready', 320, 240);
+                    }, 50);
+
+                    const canvasStream = canvas.captureStream(30);
                     defaultCanvasVideoTrack = canvasStream.getVideoTracks()[0];
-                    console.log('[Host WebRTC] Created default canvas video track:', defaultCanvasVideoTrack.id);
+                    console.log('[Host WebRTC] Created animated canvas video track:', defaultCanvasVideoTrack.id);
                 }
                 return defaultCanvasVideoTrack;
             }

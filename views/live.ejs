@@ -1134,19 +1134,19 @@
             }
 
             function updateStageLayout() {
-                const hasVideoTrack = remoteStream && remoteStream.getVideoTracks().some(t => t.readyState === 'live' && t.enabled);
-                console.log(`[Viewer Stage] updateStageLayout: isLive=${isLive}, isScreenSharing=${isScreenSharing}, hasVideoTrack=${hasVideoTrack}`);
-                if (isLive && (isScreenSharing || hasVideoTrack)) {
+                console.log(`[Viewer Stage] updateStageLayout: isLive=${isLive}, isScreenSharing=${isScreenSharing}`);
+                if (isLive && isScreenSharing) {
                     meetVideoContainer.classList.add('active');
                     meetGrid.style.display = 'none';
-                    modeText.textContent = isScreenSharing ? 'Screen Shared' : 'Live Stream';
-                    if (hostVideo.srcObject !== remoteStream) {
+                    modeText.textContent = 'Screen Shared';
+                    if (hostVideo && hostVideo.srcObject !== remoteStream) {
                         console.log('[Viewer Stage] Binding remoteStream to hostVideo element');
                         hostVideo.srcObject = remoteStream;
                     }
-                    if (hostVideo.paused) {
+                    if (hostVideo && hostVideo.paused) {
                         hostVideo.play().then(() => {
                             console.log('[Viewer Stage] ✅ hostVideo play() succeeded');
+                            updateWebRtcStatusUI('connected', 'Screen Share Live');
                         }).catch(e => {
                             console.warn('[Viewer Stage] hostVideo play() blocked/failed:', e);
                         });
@@ -1155,6 +1155,9 @@
                     meetVideoContainer.classList.remove('active');
                     meetGrid.style.display = 'grid';
                     modeText.textContent = 'Voice Call';
+                    if (isLive) {
+                        updateWebRtcStatusUI('connected', 'Voice Call Live');
+                    }
                 }
             }
 
