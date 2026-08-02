@@ -495,12 +495,26 @@
                 meetVideoContainer.classList.add('active');
                 meetGrid.style.display = 'none';
                 modeText.textContent = 'Screen Shared';
+                if (hostVideo.srcObject !== remoteStream) {
+                    hostVideo.srcObject = remoteStream;
+                }
+                hostVideo.play().catch(() => {});
             } else {
                 meetVideoContainer.classList.remove('active');
                 meetGrid.style.display = 'grid';
                 modeText.textContent = 'Voice Call';
             }
         }
+
+        function unlockViewerAudioVideo() {
+            if (hostAudio) hostAudio.play().catch(() => {});
+            if (hostVideo) hostVideo.play().catch(() => {});
+            if (audioCtx && audioCtx.state === 'suspended') {
+                audioCtx.resume();
+            }
+        }
+        document.addEventListener('click', unlockViewerAudioVideo);
+        document.addEventListener('keydown', unlockViewerAudioVideo);
 
         // ─── WebRTC Voice & Movie Stream ───
         function startWebRtcViewer() {
@@ -510,10 +524,10 @@
             pc = new RTCPeerConnection({ iceServers: [
                 { urls: 'stun:stun.l.google.com:19302' },
                 { urls: 'stun:stun1.l.google.com:19302' },
-                { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' },
-                { urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' },
-                { urls: 'turn:openrelay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' }
-            ], iceTransportPolicy: 'relay' });
+                { urls: 'stun:stun2.l.google.com:19302' },
+                { urls: 'stun:stun3.l.google.com:19302' },
+                { urls: 'stun:stun4.l.google.com:19302' }
+            ] });
 
             pc.ontrack = (event) => {
                 const stream = event.streams && event.streams[0] ? event.streams[0] : remoteStream;
@@ -525,6 +539,7 @@
                 
                 hostAudio.play().catch(() => {});
                 hostVideo.play().catch(() => {});
+                updateStageLayout();
             };
 
             pc.onicecandidate = (event) => {

@@ -7,9 +7,9 @@ import logger from './logger.js';
 const WEBRTC_ICE_SERVERS = [
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' },
-    { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' },
-    { urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' },
-    { urls: 'turn:openrelay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' }
+    { urls: 'stun:stun2.l.google.com:19302' },
+    { urls: 'stun:stun3.l.google.com:19302' },
+    { urls: 'stun:stun4.l.google.com:19302' }
 ];
 const WEBRTC_CODECS = {
     audio: [useOPUS()],
@@ -40,6 +40,7 @@ export class WebRtcIngestSession {
         this.stats = { bytes: 0, packets: 0 };
         this.onVideoRtp = null;
         this.onAudioRtp = null;
+        this.incomingVideoSsrc = null;
     }
 
     async initialize() {
@@ -53,8 +54,7 @@ export class WebRtcIngestSession {
 
         this.pc = new RTCPeerConnection({
             iceServers: WEBRTC_ICE_SERVERS,
-            codecs: WEBRTC_CODECS,
-            iceTransportPolicy: 'relay'
+            codecs: WEBRTC_CODECS
         });
 
         this.pc.onIceCandidate.subscribe(candidate => {
@@ -74,6 +74,9 @@ export class WebRtcIngestSession {
             if (track.kind === 'video') {
                 let videoPacketCount = 0;
                 track.onReceiveRtp.subscribe(rtp => {
+                    if (rtp.header && rtp.header.ssrc) {
+                        this.incomingVideoSsrc = rtp.header.ssrc;
+                    }
                     const buf = rtp.serialize();
                     this.stats.bytes += buf.length;
                     this.stats.packets++;
@@ -172,14 +175,17 @@ export class WebRtcIngestSession {
         }
     }
 
-    requestVideoKeyframe() {
+    requestVideoKeyframe(reason = '') {
         try {
-            const receiver = this.pc?.getReceivers?.().find(r => r.kind === 'video' || r.track?.kind === 'video');
-            const mediaSsrc = receiver?.track?.ssrc || Object.keys(receiver?.remoteStreams || {})[0];
-            if (!receiver || !mediaSsrc || typeof receiver.sendRtcpPLI !== 'function') return false;
-            receiver.sendRtcpPLI(Number(mediaSsrc)).catch(() => { });
-            logger.info(`[WebRTC ${this.session.streamKey}] Requested video keyframe from host`);
-            return true;
+            const receivers = this.pc?.getReceivers?.() || [];
+            const videoReceiver = receivers.find(r => r.kind === 'video' || r.track?.kind === 'video');
+            const targetSsrc = this.incomingVideoSsrc || videoReceiver?.track?.ssrc;
+            if (videoReceiver && targetSsrc && typeof videoReceiver.sendRtcpPLI === 'function') {
+                videoReceiver.sendRtcpPLI(Number(targetSsrc)).catch(() => { });
+                logger.info(`[WebRTC ${this.session.streamKey}] Requested video keyframe from host (${reason || 'PLI'}) SSRC=${targetSsrc}`);
+                return true;
+            }
+            return false;
         } catch (e) {
             logger.warn(`[WebRTC ${this.session.streamKey}] Failed to request keyframe: ${e.message}`);
             return false;
@@ -191,7 +197,18 @@ export class WebRtcIngestSession {
         try {
             if (this.audioSender.dtlsTransport?.state !== 'connected') return;
 
-            const cloned = { header: { ...rtp.header, ssrc: this.audioSsrc, payloadType: this.audioPt }, payload: rtp.payload };
+            const cloned = {
+                header: {
+                    payloadType: this.audioPt,
+                    sequenceNumber: rtp.header.sequenceNumber,
+                    timestamp: rtp.header.timestamp,
+                    ssrc: this.audioSsrc,
+                    marker: rtp.header.marker || false,
+                    padding: false,
+                    extension: false
+                },
+                payload: rtp.payload
+            };
 
             this.audioSender.sendRtp(cloned).then(() => {
                 if (!this._audioLogged) {

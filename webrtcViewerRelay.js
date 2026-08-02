@@ -4,16 +4,15 @@ import logger from './logger.js';
 const WEBRTC_ICE_SERVERS = [
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' },
-    { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' },
-    { urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' },
-    { urls: 'turn:openrelay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' }
+    { urls: 'stun:stun2.l.google.com:19302' },
+    { urls: 'stun:stun3.l.google.com:19302' },
+    { urls: 'stun:stun4.l.google.com:19302' }
 ];
 
 function createRelayPeerConnection(videoCodec = 'vp8') {
     const preferH264 = videoCodec === 'h264';
     return new RTCPeerConnection({
         iceServers: WEBRTC_ICE_SERVERS,
-        iceTransportPolicy: 'relay',
         codecs: {
             audio: [useOPUS()],
             video: preferH264 ? [useH264(), useVP8()] : [useVP8(), useH264()]
@@ -182,7 +181,18 @@ export class WebRtcViewerSession {
                 return;
             }
 
-            const cloned = { header: { ...rtp.header, ssrc: this.audioSsrc, payloadType: this.audioPt }, payload: rtp.payload };
+            const cloned = {
+                header: {
+                    payloadType: this.audioPt,
+                    sequenceNumber: rtp.header.sequenceNumber,
+                    timestamp: rtp.header.timestamp,
+                    ssrc: this.audioSsrc,
+                    marker: rtp.header.marker || false,
+                    padding: false,
+                    extension: false
+                },
+                payload: rtp.payload
+            };
 
             this.audioSender.sendRtp(cloned).catch(() => {
                 this.stats.droppedPackets++;

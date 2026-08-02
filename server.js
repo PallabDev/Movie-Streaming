@@ -21,6 +21,13 @@ import { WebRtcViewerSession } from './webrtcViewerRelay.js';
 
 EventEmitter.defaultMaxListeners = 50;
 
+process.on('uncaughtException', (err) => {
+    logger.error(`[Uncaught Exception] ${err.stack || err.message}`);
+});
+process.on('unhandledRejection', (reason) => {
+    logger.error(`[Unhandled Rejection] ${reason?.stack || reason}`);
+});
+
 const STREAM_QUALITY = Object.freeze({
     height: 720,
     fps: 30,
@@ -521,6 +528,10 @@ function tryHandleHostControlMessage(session, data, isBinary, ws) {
 
         if (parsed.type === 'SCREEN_SHARE_TOGGLE') {
             session.isScreenSharing = !!parsed.sharing;
+            if (session.isScreenSharing && session.webrtcIngest) {
+                setTimeout(() => session.webrtcIngest.requestVideoKeyframe('screen share start'), 100);
+                setTimeout(() => session.webrtcIngest.requestVideoKeyframe('screen share warmup'), 600);
+            }
             broadcastStatus(session, session.isLive);
             return true;
         }
