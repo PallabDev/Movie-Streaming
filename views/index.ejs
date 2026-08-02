@@ -1279,11 +1279,15 @@
                 }
 
                 if (hostAudioTrack && hostMicEnabled) {
+                    hostAudioTrack.enabled = true;
                     if (!micSourceNode) {
                         try {
                             micSourceNode = audioMixerCtx.createMediaStreamSource(new MediaStream([hostAudioTrack]));
                             micSourceNode.connect(mixerDestination);
-                        } catch (e) { }
+                            console.log('[Host Audio Mixer] ✅ Connected host mic to mixer destination');
+                        } catch (e) {
+                            console.error('[Host Audio Mixer] Error connecting mic:', e);
+                        }
                     }
                 } else {
                     if (micSourceNode) {
@@ -1299,6 +1303,7 @@
                             try {
                                 screenSourceNode = audioMixerCtx.createMediaStreamSource(new MediaStream([screenAudioTrack]));
                                 screenSourceNode.connect(mixerDestination);
+                                console.log('[Host Audio Mixer] ✅ Connected screen audio to mixer destination');
                             } catch (e) { }
                         }
                     }
