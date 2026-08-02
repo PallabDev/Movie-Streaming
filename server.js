@@ -568,11 +568,15 @@ function tryHandleHostControlMessage(session, data, isBinary, ws) {
                     viewerSession: null
                 };
                 session.participants.set(pending.id, participant);
-    session.pendingParticipants.clear();
-    broadcastParticipantList(session);
-    broadcastStatus(session, session.isLive);
-    return true;
-}
+                if (pending.ws && pending.ws.readyState === 1) {
+                    pending.ws.send(JSON.stringify({ type: 'JOIN_APPROVED', participantId: pending.id, hostName: session.hostName }));
+                }
+            }
+            session.pendingParticipants.clear();
+            broadcastParticipantList(session);
+            broadcastStatus(session, session.isLive);
+            return true;
+        }
 
         return false;
     } catch (e) {
@@ -765,16 +769,7 @@ viewWss.on('connection', (ws) => {
     broadcastStatus(session, session.isLive);
 
     ws.on('message', async (data, isBinary) => {
-
-            if (parsed.type === 'VIEWER_ICE_CANDIDATE') {
-                for (const vs of session.viewerSessions) {
-                    if (vs.ws === ws && parsed.candidate) {
-                        vs.handleIceCandidate(parsed.candidate);
-                    }
-                }
-                return;
-            }
-        } catch (e) { }
+        await handleViewerMessage(session, ws, data, isBinary);
     });
 
     ws.on('close', () => {
